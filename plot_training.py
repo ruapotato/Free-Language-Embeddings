@@ -57,6 +57,7 @@ V4_STAGES = [
     ("chat_pretrain",   "#4CAF50", V4_CHAT_PRETRAIN_METRICS),    # green
     ("sft",             "#FF9800", V4_SFT_METRICS),              # orange
     ("dpo",             "#9C27B0", V4_DPO_METRICS),              # purple
+    ("worm_sidecar",    "#E91E63", "logs/worm_sidecar_metrics.csv"),  # pink
 ]
 V4_STAGE_COLORS = {s[0]: s[1] for s in V4_STAGES}
 
@@ -1421,6 +1422,448 @@ def plot_v4_dashboard(save_dir=None):
     plt.close()
 
 
+WORM_METRICS = "logs/worm_sidecar_metrics.csv"
+WORM_DIAGNOSTICS = "logs/worm_sidecar_diagnostics.jsonl"
+
+
+def plot_worm_comparison(save_dir=None):
+    """Side-by-side comparison of OG pretrain vs worm sidecar training curves."""
+    og_metrics = clean_metrics(load_metrics(V4_PRETRAIN_BASE_METRICS))
+    worm_metrics = clean_metrics(load_metrics(WORM_METRICS))
+
+    if not og_metrics and not worm_metrics:
+        print("No metrics for worm comparison plot.")
+        return
+
+    fig = plt.figure(figsize=(18, 12))
+
+    # ── 1. Loss vs Tokens ──
+    ax1 = fig.add_subplot(2, 3, 1)
+    if og_metrics:
+        tb = [m["tokens_billions"] for m in og_metrics]
+        lo = [m["loss"] for m in og_metrics]
+        ax1.plot(tb, lo, color="#2196F3", linewidth=0.5, alpha=0.3)
+        if len(lo) > 20:
+            ax1.plot(tb, smooth(lo), color="#2196F3", linewidth=2.5, label="OG Pretrain")
+    if worm_metrics:
+        tb = [m["tokens_billions"] for m in worm_metrics]
+        lo = [m["loss"] for m in worm_metrics]
+        ax1.plot(tb, lo, color="#E91E63", linewidth=0.5, alpha=0.3)
+        if len(lo) > 20:
+            ax1.plot(tb, smooth(lo), color="#E91E63", linewidth=2.5, label="Worm Sidecar")
+    ax1.set_xlabel("Tokens (Billions)")
+    ax1.set_ylabel("Loss")
+    ax1.set_title("Training Loss Comparison")
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+
+    # ── 2. Perplexity vs Tokens ──
+    ax2 = fig.add_subplot(2, 3, 2)
+    if og_metrics:
+        tb = [m["tokens_billions"] for m in og_metrics]
+        pp = [m["perplexity"] for m in og_metrics]
+        ax2.plot(tb, pp, color="#2196F3", linewidth=0.5, alpha=0.3)
+        if len(pp) > 20:
+            ax2.plot(tb, smooth(pp), color="#2196F3", linewidth=2.5, label="OG Pretrain")
+    if worm_metrics:
+        tb = [m["tokens_billions"] for m in worm_metrics]
+        pp = [m["perplexity"] for m in worm_metrics]
+        ax2.plot(tb, pp, color="#E91E63", linewidth=0.5, alpha=0.3)
+        if len(pp) > 20:
+            ax2.plot(tb, smooth(pp), color="#E91E63", linewidth=2.5, label="Worm Sidecar")
+    ax2.set_xlabel("Tokens (Billions)")
+    ax2.set_ylabel("Perplexity")
+    ax2.set_title("Perplexity Comparison")
+    ax2.set_yscale("log")
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    # ── 3. Loss vs Steps ──
+    ax3 = fig.add_subplot(2, 3, 3)
+    if og_metrics:
+        st = [m["step"] for m in og_metrics]
+        lo = [m["loss"] for m in og_metrics]
+        ax3.plot(st, lo, color="#2196F3", linewidth=0.5, alpha=0.3)
+        if len(lo) > 20:
+            ax3.plot(st, smooth(lo), color="#2196F3", linewidth=2.5, label="OG Pretrain")
+    if worm_metrics:
+        st = [m["step"] for m in worm_metrics]
+        lo = [m["loss"] for m in worm_metrics]
+        ax3.plot(st, lo, color="#E91E63", linewidth=0.5, alpha=0.3)
+        if len(lo) > 20:
+            ax3.plot(st, smooth(lo), color="#E91E63", linewidth=2.5, label="Worm Sidecar")
+    ax3.set_xlabel("Step")
+    ax3.set_ylabel("Loss")
+    ax3.set_title("Loss vs Steps")
+    ax3.legend(fontsize=10)
+    ax3.grid(True, alpha=0.3)
+    ax3.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+
+    # ── 4. Throughput Comparison ──
+    ax4 = fig.add_subplot(2, 3, 4)
+    if og_metrics:
+        st = [m["step"] for m in og_metrics]
+        tp = [m["tokens_per_sec"] for m in og_metrics]
+        if any(t > 0 for t in tp):
+            if len(tp) > 20:
+                ax4.plot(st, smooth(tp), color="#2196F3", linewidth=2, label="OG Pretrain")
+            ax4.axhline(y=sum(tp)/len(tp), color="#2196F3", linestyle="--", alpha=0.4)
+    if worm_metrics:
+        st = [m["step"] for m in worm_metrics]
+        tp = [m["tokens_per_sec"] for m in worm_metrics]
+        if any(t > 0 for t in tp):
+            if len(tp) > 20:
+                ax4.plot(st, smooth(tp), color="#E91E63", linewidth=2, label="Worm Sidecar")
+            ax4.axhline(y=sum(tp)/len(tp), color="#E91E63", linestyle="--", alpha=0.4)
+    ax4.set_xlabel("Step")
+    ax4.set_ylabel("Tokens/sec")
+    ax4.set_title("Throughput Comparison")
+    ax4.legend(fontsize=10)
+    ax4.grid(True, alpha=0.3)
+    ax4.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+
+    # ── 5. Val Loss (if available) ──
+    ax5 = fig.add_subplot(2, 3, 5)
+    has_val = False
+    for metrics, color, label in [
+        (og_metrics, "#2196F3", "OG Pretrain"),
+        (worm_metrics, "#E91E63", "Worm Sidecar"),
+    ]:
+        if not metrics:
+            continue
+        val_points = [(m["step"], float(m["val_loss"]))
+                      for m in metrics
+                      if m.get("val_loss") and m["val_loss"] != ""]
+        if val_points:
+            has_val = True
+            vs, vl = zip(*val_points)
+            ax5.plot(vs, vl, color=color, linewidth=2, marker="o",
+                     markersize=3, label=label)
+    if has_val:
+        ax5.set_xlabel("Step")
+        ax5.set_ylabel("Validation Loss")
+        ax5.set_title("Validation Loss")
+        ax5.legend(fontsize=10)
+        ax5.grid(True, alpha=0.3)
+        ax5.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
+    else:
+        ax5.text(0.5, 0.5, "No validation data yet", ha="center", va="center",
+                 transform=ax5.transAxes, fontsize=12, color="gray")
+        ax5.set_title("Validation Loss")
+
+    # ── 6. Stats Panel ──
+    ax6 = fig.add_subplot(2, 3, 6)
+    ax6.axis("off")
+
+    stats = "OG Pretrain vs Worm Sidecar\n"
+    stats += "=" * 44 + "\n"
+    stats += f"{'':2s}{'Metric':<20s} {'OG':>10s} {'Worm':>10s}\n"
+    stats += "-" * 44 + "\n"
+
+    if og_metrics:
+        og_cur = og_metrics[-1]
+        og_loss = f"{og_cur['loss']:.4f}"
+        og_ppl = f"{og_cur['perplexity']:.1f}"
+        og_step = f"{og_cur['step']:,}"
+        og_tok = f"{og_cur['tokens_billions']:.2f}B"
+        og_tps = f"{og_cur['tokens_per_sec']:.0f}"
+    else:
+        og_loss = og_ppl = og_step = og_tok = og_tps = "—"
+
+    if worm_metrics:
+        wm_cur = worm_metrics[-1]
+        wm_loss = f"{wm_cur['loss']:.4f}"
+        wm_ppl = f"{wm_cur['perplexity']:.1f}"
+        wm_step = f"{wm_cur['step']:,}"
+        wm_tok = f"{wm_cur['tokens_billions']:.2f}B"
+        wm_tps = f"{wm_cur['tokens_per_sec']:.0f}"
+    else:
+        wm_loss = wm_ppl = wm_step = wm_tok = wm_tps = "—"
+
+    stats += f"  {'Loss':<20s} {og_loss:>10s} {wm_loss:>10s}\n"
+    stats += f"  {'Perplexity':<20s} {og_ppl:>10s} {wm_ppl:>10s}\n"
+    stats += f"  {'Step':<20s} {og_step:>10s} {wm_step:>10s}\n"
+    stats += f"  {'Tokens':<20s} {og_tok:>10s} {wm_tok:>10s}\n"
+    stats += f"  {'Throughput':<20s} {og_tps:>10s} {wm_tps:>10s}\n"
+
+    if og_metrics and worm_metrics:
+        og_avg_tps = sum(m["tokens_per_sec"] for m in og_metrics) / len(og_metrics)
+        wm_avg_tps = sum(m["tokens_per_sec"] for m in worm_metrics) / len(worm_metrics)
+        if og_avg_tps > 0:
+            overhead = (1 - wm_avg_tps / og_avg_tps) * 100
+            stats += f"\n  Worm overhead: {overhead:.1f}%\n"
+
+    ax6.text(0.02, 0.98, stats, transform=ax6.transAxes,
+             fontsize=10, verticalalignment="top", fontfamily="monospace",
+             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5",
+                       edgecolor="#BDBDBD"))
+
+    plt.suptitle("Hamner — OG Pretrain vs Worm Brain Sidecar",
+                 fontsize=16, fontweight="bold", y=1.02)
+    plt.tight_layout()
+
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, "worm_comparison.png"), dpi=150,
+                    bbox_inches="tight")
+        print(f"Saved: {save_dir}/worm_comparison.png")
+    else:
+        plt.show()
+    plt.close()
+
+
+def plot_worm_dashboard(save_dir=None):
+    """Worm Brain Sidecar dashboard — shows whether the worm is alive and useful.
+
+    Layout (4x2 grid):
+      Row 1: Loss comparison | Val loss comparison | Loss delta (OG - Worm)  | Stats
+      Row 2: Dopamine std    | Temperature output  | Feedback scale          | Synaptic weights
+    """
+    # Load data
+    og_metrics = clean_metrics(load_metrics(V4_PRETRAIN_BASE_METRICS))
+    worm_metrics = clean_metrics(load_metrics(WORM_METRICS))
+
+    worm_diag = []
+    if os.path.exists(WORM_DIAGNOSTICS):
+        with open(WORM_DIAGNOSTICS) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    worm_diag.append(json.loads(line))
+
+    if not worm_diag and not worm_metrics:
+        print("No worm data for dashboard.")
+        return
+
+    fig, axes = plt.subplots(2, 4, figsize=(22, 10))
+    step_fmt = ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k")
+
+    # ═══════════ Row 1: Training comparison ═══════════
+
+    # ── 1. Loss vs Steps (OG vs Worm) ──
+    ax = axes[0, 0]
+    if og_metrics:
+        st = [m["step"] for m in og_metrics]
+        lo = [m["loss"] for m in og_metrics]
+        ax.plot(st, lo, color="#2196F3", linewidth=0.4, alpha=0.2)
+        if len(lo) > 20:
+            ax.plot(st, smooth(lo), color="#2196F3", linewidth=2.5, label="OG Pretrain")
+    if worm_metrics:
+        st = [m["step"] for m in worm_metrics]
+        lo = [m["loss"] for m in worm_metrics]
+        ax.plot(st, lo, color="#E91E63", linewidth=0.4, alpha=0.2)
+        if len(lo) > 20:
+            ax.plot(st, smooth(lo), color="#E91E63", linewidth=2.5, label="Worm Sidecar")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Loss")
+    ax.set_title("Training Loss", fontweight="bold")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_formatter(step_fmt)
+
+    # ── 2. Val Loss (OG vs Worm) ──
+    ax = axes[0, 1]
+    has_val = False
+    for metrics, color, label in [
+        (og_metrics, "#2196F3", "OG Pretrain"),
+        (worm_metrics, "#E91E63", "Worm Sidecar"),
+    ]:
+        if not metrics:
+            continue
+        val_points = [(m["step"], float(m["val_loss"]))
+                      for m in metrics
+                      if m.get("val_loss") and m["val_loss"] != ""]
+        if val_points:
+            has_val = True
+            vs, vl = zip(*val_points)
+            ax.plot(vs, vl, color=color, linewidth=2, marker="o",
+                     markersize=3, label=label)
+    if has_val:
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Val Loss")
+        ax.set_title("Validation Loss", fontweight="bold")
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(step_fmt)
+    else:
+        ax.text(0.5, 0.5, "No validation data yet", ha="center", va="center",
+                transform=ax.transAxes, fontsize=12, color="gray")
+        ax.set_title("Validation Loss", fontweight="bold")
+
+    # ── 3. Loss Delta (Worm - OG, interpolated to common steps) ──
+    ax = axes[0, 2]
+    if og_metrics and worm_metrics:
+        og_by_step = {m["step"]: m["loss"] for m in og_metrics}
+        wm_by_step = {m["step"]: m["loss"] for m in worm_metrics}
+        common_steps = sorted(set(og_by_step.keys()) & set(wm_by_step.keys()))
+        if common_steps:
+            deltas = [wm_by_step[s] - og_by_step[s] for s in common_steps]
+            ax.axhline(y=0, color="gray", linestyle="--", linewidth=1, alpha=0.5)
+            ax.fill_between(common_steps, 0, deltas,
+                           where=[d > 0 for d in deltas],
+                           color="#E91E63", alpha=0.3, label="Worm behind")
+            ax.fill_between(common_steps, 0, deltas,
+                           where=[d <= 0 for d in deltas],
+                           color="#4CAF50", alpha=0.3, label="Worm ahead")
+            ax.plot(common_steps, deltas, color="#333333", linewidth=1.5)
+            if len(deltas) > 20:
+                ax.plot(common_steps, smooth(deltas, window=10),
+                       color="#333333", linewidth=2.5)
+            ax.set_xlabel("Step")
+            ax.set_ylabel("Loss Delta")
+            ax.set_title("Loss Gap (Worm - OG)", fontweight="bold")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.xaxis.set_major_formatter(step_fmt)
+        else:
+            ax.text(0.5, 0.5, "No overlapping steps yet", ha="center",
+                    va="center", transform=ax.transAxes, fontsize=12, color="gray")
+            ax.set_title("Loss Gap (Worm - OG)", fontweight="bold")
+    else:
+        ax.text(0.5, 0.5, "Need both OG and Worm data", ha="center",
+                va="center", transform=ax.transAxes, fontsize=12, color="gray")
+        ax.set_title("Loss Gap (Worm - OG)", fontweight="bold")
+
+    # ── 4. Stats Panel ──
+    ax = axes[0, 3]
+    ax.axis("off")
+    stats = "WORM BRAIN SIDECAR\n"
+    stats += "=" * 42 + "\n"
+    if worm_metrics:
+        cur = worm_metrics[-1]
+        stats += f"Step:         {cur['step']:>10,}\n"
+        stats += f"Loss:         {cur['loss']:>10.4f}\n"
+        stats += f"PPL:          {cur['perplexity']:>10.1f}\n"
+        stats += f"Tokens:       {cur['tokens_billions']:>10.3f}B\n"
+        stats += f"Tok/s:        {cur['tokens_per_sec']:>10.0f}\n"
+    if og_metrics and worm_metrics:
+        wm = worm_metrics[-1]
+        # Find OG at nearest step
+        og_at_step = min(og_metrics, key=lambda m: abs(m["step"] - wm["step"]))
+        delta = wm["loss"] - og_at_step["loss"]
+        stats += f"\n  vs OG @ step {og_at_step['step']:,}:\n"
+        stats += f"  OG loss:    {og_at_step['loss']:>10.4f}\n"
+        stats += f"  Delta:      {delta:>+10.4f}\n"
+    if worm_diag:
+        latest = worm_diag[-1]
+        stats += "-" * 42 + "\n"
+        stats += "WORM STATE\n"
+        stats += f"DA mean:      {latest.get('mean_dopamine', 0):>10.6f}\n"
+        stats += f"DA std:       {latest.get('dopamine_std', 0):>10.6f}\n"
+        stats += f"Temperature:  {latest.get('temperature_mean', 1.0):>10.4f}\n"
+        stats += f"Temp std:     {latest.get('temperature_std', 0):>10.6f}\n"
+        stats += f"FB scale:     {latest.get('feedback_scale', 0):>10.6f}\n"
+        stats += f"Mean V:       {latest.get('mean_membrane_potential', 0):>10.2f} mV\n"
+        stats += f"W mean:       {latest.get('worm_synaptic_weight_mean', 0):>10.4f}\n"
+        stats += f"W std:        {latest.get('worm_synaptic_weight_std', 0):>10.4f}\n"
+
+    ax.text(0.02, 0.98, stats, transform=ax.transAxes,
+             fontsize=9, verticalalignment="top", fontfamily="monospace",
+             bbox=dict(boxstyle="round,pad=0.5", facecolor="#1a1a2e",
+                       edgecolor="#E91E63", alpha=0.9),
+             color="#e0e0e0")
+
+    # ═══════════ Row 2: Worm biological signals ═══════════
+
+    if worm_diag:
+        diag_steps = [d["step"] for d in worm_diag]
+
+        # ── 5. Dopamine Std (THE key "is the worm alive" metric) ──
+        ax = axes[1, 0]
+        dopa_std = [d.get("dopamine_std", 0) for d in worm_diag]
+        ax.plot(diag_steps, dopa_std, color="#9C27B0", linewidth=1, alpha=0.4)
+        if len(dopa_std) > 10:
+            ax.plot(diag_steps, smooth(dopa_std, window=10),
+                   color="#9C27B0", linewidth=2.5)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("DA Std (across batch)")
+        ax.set_title("Dopamine Variance", fontweight="bold",
+                     color="#9C27B0")
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(step_fmt)
+        # Use scientific notation if values are very small
+        ax.ticklabel_format(axis='y', style='scientific', scilimits=(-3, 3))
+        # Add annotation about what growth means
+        ax.annotate("Growth = worm differentiating inputs",
+                   xy=(0.5, 0.02), xycoords="axes fraction",
+                   fontsize=8, color="gray", ha="center", style="italic")
+
+        # ── 6. Temperature Output ──
+        ax = axes[1, 1]
+        temp_mean = [d.get("temperature_mean", 1.0) for d in worm_diag]
+        temp_std = [d.get("temperature_std", 0) for d in worm_diag]
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.5,
+                  label="Neutral (T=1.0)")
+        ax.plot(diag_steps, temp_mean, color="#FF5722", linewidth=1.5,
+               label="Mean temp")
+        if len(temp_mean) > 10 and any(s > 0 for s in temp_std):
+            sm_mean = smooth(temp_mean, window=10)
+            sm_std = smooth(temp_std, window=10)
+            ax.fill_between(diag_steps,
+                           [m - s for m, s in zip(sm_mean, sm_std)],
+                           [m + s for m, s in zip(sm_mean, sm_std)],
+                           color="#FF5722", alpha=0.2, label="Std band")
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Temperature")
+        ax.set_title("Logit Temperature", fontweight="bold",
+                     color="#FF5722")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(step_fmt)
+        ax.annotate("<1 = sharper (more confident)",
+                   xy=(0.5, 0.02), xycoords="axes fraction",
+                   fontsize=8, color="gray", ha="center", style="italic")
+
+        # ── 7. Feedback Scale (worm→transformer coupling) ──
+        ax = axes[1, 2]
+        fb_scale = [d.get("feedback_scale", 0) for d in worm_diag]
+        ax.plot(diag_steps, fb_scale, color="#4CAF50", linewidth=2.5)
+        ax.axhline(y=0, color="gray", linestyle="--", linewidth=1, alpha=0.5)
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Feedback Scale")
+        ax.set_title("Worm \u2192 Transformer Feedback", fontweight="bold",
+                     color="#4CAF50")
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(step_fmt)
+        ax.annotate("Non-zero = feedback loop engaged",
+                   xy=(0.5, 0.02), xycoords="axes fraction",
+                   fontsize=8, color="gray", ha="center", style="italic")
+
+        # ── 8. Hebbian Synaptic Weight Dynamics ──
+        ax = axes[1, 3]
+        w_mean = [d.get("worm_synaptic_weight_mean", 0) for d in worm_diag]
+        w_std = [d.get("worm_synaptic_weight_std", 0) for d in worm_diag]
+        ax.plot(diag_steps, w_mean, color="#00BCD4", linewidth=2, label="Mean")
+        ax.plot(diag_steps, w_std, color="#FF9800", linewidth=2, label="Std")
+        ax.set_xlabel("Step")
+        ax.set_ylabel("Weight Value")
+        ax.set_title("Hebbian Synaptic Weights", fontweight="bold")
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(step_fmt)
+        ax.annotate("Change = Hebbian learning active",
+                   xy=(0.5, 0.02), xycoords="axes fraction",
+                   fontsize=8, color="gray", ha="center", style="italic")
+    else:
+        for j in range(4):
+            ax = axes[1, j]
+            ax.text(0.5, 0.5, "No worm diagnostics yet", ha="center",
+                    va="center", transform=ax.transAxes, fontsize=12, color="gray")
+
+    plt.suptitle("Worm Brain Sidecar \u2014 C. elegans Connectome + 164M Transformer",
+                 fontsize=16, fontweight="bold", y=1.02)
+    plt.tight_layout()
+
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, "worm_dashboard.png"), dpi=150,
+                    bbox_inches="tight")
+        print(f"Saved: {save_dir}/worm_dashboard.png")
+    else:
+        plt.show()
+    plt.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot Hamner training metrics")
     parser.add_argument("--save", action="store_true", help="Save plots to logs/plots/")
@@ -1430,9 +1873,25 @@ def main():
     parser.add_argument("--v4", action="store_true", help="Force V4 metrics")
     parser.add_argument("--v3", action="store_true", help="Force V3 metrics")
     parser.add_argument("--v2", action="store_true", help="Force V2 metrics")
+    parser.add_argument("--worm", action="store_true",
+                        help="Plot OG vs worm sidecar comparison")
+    parser.add_argument("--worm-dashboard", action="store_true",
+                        help="Worm-specific dashboard (dopamine, membrane, etc.)")
     args = parser.parse_args()
 
     save_dir = PLOT_DIR if args.save or args.dashboard else None
+
+    # --- Worm comparison mode ---
+    if args.worm:
+        print("Plotting OG vs Worm Sidecar comparison...")
+        plot_worm_comparison(save_dir or PLOT_DIR)
+        if not args.live:
+            return
+    if args.worm_dashboard:
+        print("Plotting Worm Sidecar dashboard...")
+        plot_worm_dashboard(save_dir or PLOT_DIR)
+        if not args.live:
+            return
 
     # Auto-detect which run to plot (prefer newest)
     if args.v4:
