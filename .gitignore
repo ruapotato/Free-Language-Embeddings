@@ -18,6 +18,9 @@ data/sft_smoltalk.jsonl
 data/sft_combined.jsonl
 data/debian_code.jsonl
 data/debian_code_work/
+data/debian_docs.jsonl
+data/ubuntu_dialogue.jsonl
+data/ubuntu_work/
 data/dpo_helpsteer2.jsonl
 
 # Checkpoints (too large for git)

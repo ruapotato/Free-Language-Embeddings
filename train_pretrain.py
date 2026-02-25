@@ -5,14 +5,16 @@ SmolLM2-inspired massive pretraining with data diversity.
 
 Two stages:
   base:   FineWeb-Edu 60% + DCLM 40%  → 10B tokens
-  anneal: FineWeb 40% + DCLM 20% + Code 25% + Math 15%  → 3B tokens (linear LR decay)
+  anneal: 8-source curated mix → 3B tokens (linear LR decay)
+          FineWeb-Edu 20% + Cosmopedia 10% + Wikipedia 10% + FineMath 10% +
+          Ubuntu Dialogue 10% + Debian Docs 20% + Debian Code 10% + DCLM 10%
 
 Supports both fresh training and resuming from checkpoint.
 
 Usage:
     python train_pretrain.py                           # fresh base training
     python train_pretrain.py --resume                  # resume from latest checkpoint
-    python train_pretrain.py --stage anneal             # code+math annealing
+    python train_pretrain.py --stage anneal             # 8-source annealing
     python train_pretrain.py --stage anneal --resume    # resume annealing
     python train_pretrain.py --checkpoint path/to/ckpt  # resume from specific checkpoint
 """
@@ -39,8 +41,10 @@ CHECKPOINT_DIR_BASE = "checkpoints/pretrain_v4"
 CHECKPOINT_DIR_ANNEAL = "checkpoints/pretrain_v4_anneal"
 LOG_DIR = "logs"
 
-# Local code corpus (Debian source packages, DFSG-free)
+# Local data corpora (all DFSG-free)
 DEBIAN_CODE_PATH = "data/debian_code.jsonl"
+DEBIAN_DOCS_PATH = "data/debian_docs.jsonl"
+UBUNTU_DIALOGUE_PATH = "data/ubuntu_dialogue.jsonl"
 
 MODEL_CONFIG = dict(
     hidden_size=768,
@@ -75,10 +79,14 @@ ANNEAL_MAX_STEPS = 122_000  # ~3B tokens
 # LR starts from checkpoint's current LR and decays linearly to 0
 
 ANNEAL_DATA_RATIOS = {
-    "fineweb": 0.40,
-    "dclm": 0.20,
-    "code": 0.25,
-    "math": 0.15,
+    "fineweb": 0.20,          # FineWeb-Edu (HF streaming)
+    "cosmopedia": 0.10,       # Cosmopedia v2 (HF streaming)
+    "wikipedia": 0.10,        # Wikipedia EN (HF streaming)
+    "math": 0.10,             # FineMath (HF streaming)
+    "ubuntu_dialogue": 0.10,  # Ubuntu IRC dialogues (local JSONL)
+    "debian_docs": 0.20,      # Debian docs, man pages, pkg metadata (local JSONL)
+    "debian_code": 0.10,      # Debian source packages — Shell/Python/C/Make (local JSONL)
+    "dclm": 0.10,             # DCLM general web (HF streaming)
 }
 
 # --- Common ---
@@ -203,52 +211,105 @@ class MultiSourceStreamer:
                         yield json.loads(line)
             log(f"Local file {path} exhausted, restarting...")
 
+    # HuggingFace streaming dataset configs
+    HF_SOURCES = {
+        "fineweb": ("HuggingFaceFW/fineweb-edu", "sample-10BT", "train"),
+        "dclm": ("mlfoundations/dclm-baseline-1.0", None, "train"),
+        "math": ("HuggingFaceTB/finemath", "finemath-4plus", "train"),
+        "cosmopedia": ("HuggingFaceTB/cosmopedia-v2", "cosmopedia-v2", "train"),
+        "wikipedia": ("wikimedia/wikipedia", "20231101.en", "train"),
+    }
+
+    # Local JSONL file sources
+    LOCAL_SOURCES = {
+        "debian_code": DEBIAN_CODE_PATH,
+        "debian_docs": DEBIAN_DOCS_PATH,
+        "ubuntu_dialogue": UBUNTU_DIALOGUE_PATH,
+    }
+
+    def _adjust_ratios_for_missing_local(self):
+        """Remove missing local sources and redistribute their share."""
+        missing = []
+        for name in list(self.ratios):
+            if name in self.LOCAL_SOURCES:
+                path = self.LOCAL_SOURCES[name]
+                if not os.path.exists(path):
+                    missing.append((name, self.ratios[name]))
+
+        if not missing:
+            return
+
+        # Redistribute missing share proportionally
+        removed_share = sum(share for _, share in missing)
+        remaining = {k: v for k, v in self.ratios.items()
+                     if k not in {n for n, _ in missing}}
+        remaining_total = sum(remaining.values())
+
+        for name, _ in missing:
+            del self.ratios[name]
+            if name in self.token_buffers:
+                del self.token_buffers[name]
+            log(f"WARNING: Local data not found: {self.LOCAL_SOURCES[name]}")
+
+        # Scale up remaining ratios
+        if remaining_total > 0:
+            scale = 1.0 / remaining_total
+            for name in self.ratios:
+                self.ratios[name] *= scale
+
+        log(f"Adjusted ratios (redistributed {removed_share:.0%} from "
+            f"{len(missing)} missing source(s)):")
+        for name, ratio in sorted(self.ratios.items(), key=lambda x: -x[1]):
+            log(f"  {name:20s}: {ratio:.1%}")
+
     def _init_streams(self):
         from datasets import load_dataset
-        source_configs = {
-            "fineweb": ("HuggingFaceFW/fineweb-edu", "sample-10BT", "train"),
-            "dclm": ("mlfoundations/dclm-baseline-1.0", None, "train"),
-            "math": ("HuggingFaceTB/finemath", "finemath-4plus", "train"),
-        }
+
+        # Handle missing local files
+        self._adjust_ratios_for_missing_local()
 
         for name in self.ratios:
-            if name == "code":
-                # Load from local Debian code corpus (DFSG-free)
-                if not os.path.exists(DEBIAN_CODE_PATH):
-                    log(f"ERROR: Code corpus not found at {DEBIAN_CODE_PATH}")
-                    log("Run: python prepare_debian_code.py")
-                    sys.exit(1)
-                self.streams["code"] = self._local_jsonl_stream(DEBIAN_CODE_PATH)
-                log(f"Initialized code stream from local file: {DEBIAN_CODE_PATH}")
+            # Local JSONL sources
+            if name in self.LOCAL_SOURCES:
+                path = self.LOCAL_SOURCES[name]
+                self.streams[name] = self._local_jsonl_stream(path)
+                log(f"Initialized {name} from local file: {path}")
                 continue
-            if name not in source_configs:
+
+            # Standard HF streaming datasets
+            if name in self.HF_SOURCES:
+                dataset_name, config_name, split = self.HF_SOURCES[name]
+                log(f"Initializing {name} stream: {dataset_name}"
+                    f"{f'/{config_name}' if config_name else ''}...")
+                kwargs = {"split": split, "streaming": True}
+                if config_name:
+                    kwargs["name"] = config_name
+                self.streams[name] = iter(load_dataset(dataset_name, **kwargs))
                 continue
-            dataset_name, config_name, split = source_configs[name]
-            log(f"Initializing {name} stream: {dataset_name}"
-                f"{f'/{config_name}' if config_name else ''}...")
+
+            log(f"WARNING: Unknown source '{name}', skipping")
+
+        log("All data streams ready")
+
+    def _restart_stream(self, name):
+        log(f"{name} stream exhausted, restarting...")
+
+        # Local JSONL sources
+        if name in self.LOCAL_SOURCES:
+            self.streams[name] = self._local_jsonl_stream(self.LOCAL_SOURCES[name])
+            return
+
+        # Standard HF streaming datasets
+        if name in self.HF_SOURCES:
+            from datasets import load_dataset
+            dataset_name, config_name, split = self.HF_SOURCES[name]
             kwargs = {"split": split, "streaming": True}
             if config_name:
                 kwargs["name"] = config_name
             self.streams[name] = iter(load_dataset(dataset_name, **kwargs))
-        log("All data streams ready")
-
-    def _restart_stream(self, name):
-        if name == "code":
-            log("code stream restarted from local file")
-            self.streams["code"] = self._local_jsonl_stream(DEBIAN_CODE_PATH)
             return
-        from datasets import load_dataset
-        source_configs = {
-            "fineweb": ("HuggingFaceFW/fineweb-edu", "sample-10BT", "train"),
-            "dclm": ("mlfoundations/dclm-baseline-1.0", None, "train"),
-            "math": ("HuggingFaceTB/finemath", "finemath-4plus", "train"),
-        }
-        log(f"{name} stream exhausted, restarting...")
-        dataset_name, config_name, split = source_configs[name]
-        kwargs = {"split": split, "streaming": True}
-        if config_name:
-            kwargs["name"] = config_name
-        self.streams[name] = iter(load_dataset(dataset_name, **kwargs))
+
+        log(f"WARNING: Cannot restart unknown source '{name}'")
 
     def _get_text(self, source):
         # Small chance of personal data injection regardless of source
