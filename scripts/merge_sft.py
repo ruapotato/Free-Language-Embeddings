@@ -55,6 +55,20 @@ SOURCE_FILES = [
     "flm_git.jsonl",
     "flm_users.jsonl",
     "flm_databases.jsonl",
+    # V3 additions — deeper coverage and new topics
+    "flm_cron_v3.jsonl",
+    "flm_dns_email.jsonl",
+    "flm_raid_encryption.jsonl",
+    "flm_kernel_boot.jsonl",
+    "flm_locale_time.jsonl",
+    "flm_virtualization.jsonl",
+    "flm_python_env.jsonl",
+    "flm_debugging_v3.jsonl",
+    "flm_apt_deep.jsonl",
+    "flm_multiturn_v3.jsonl",
+    "flm_os_aware_v2.jsonl",
+    "flm_identity_v3.jsonl",
+    "flm_practical.jsonl",
 ]
 
 OUTPUT_FILE = SFT_DIR / "flm_combined.jsonl"
