@@ -116,13 +116,33 @@ def annotate_events(ax, metrics, x_key="step"):
                 color="#E65100", ha="left", va="top")
 
 
+METRICS_HEADER = ["timestamp", "step", "loss", "perplexity", "learning_rate",
+                   "tokens_per_sec", "tokens_total", "tokens_billions",
+                   "elapsed_hours", "val_loss"]
+
+
 def load_metrics(path):
-    """Load metrics CSV into list of dicts."""
+    """Load metrics CSV into list of dicts.
+
+    Handles CSVs with or without a header row.  If the first field of the
+    first line looks like a timestamp (starts with a digit), the standard
+    METRICS_HEADER is assumed.
+    """
     rows = []
     if not os.path.exists(path):
         return rows
     with open(path) as f:
-        reader = csv.DictReader(f)
+        first_line = f.readline()
+        if not first_line.strip():
+            return rows
+        # Detect whether the file has a header row
+        first_field = first_line.strip().split(",")[0]
+        has_header = not first_field[:1].isdigit()
+        f.seek(0)
+        if has_header:
+            reader = csv.DictReader(f)
+        else:
+            reader = csv.DictReader(f, fieldnames=METRICS_HEADER)
         for row in reader:
             for key in ["step", "tokens_total"]:
                 if key in row:
@@ -275,8 +295,12 @@ def fit_projection(clean, target_tokens_b=None):
         return None
 
 
-def plot_training_loss(metrics, save_dir=None, projection=None):
-    """Plot loss over training steps and tokens, with optional projection."""
+def plot_training_loss(metrics, save_dir=None, projection=None, anneal_metrics=None):
+    """Plot loss over training steps and tokens, with optional projection.
+
+    If *anneal_metrics* is provided it is drawn as a second colored segment
+    after the base data, with a vertical transition line.
+    """
     if not metrics:
         print("No training metrics to plot.")
         return
@@ -292,22 +316,54 @@ def plot_training_loss(metrics, save_dir=None, projection=None):
         return [sum(data[max(0,i-window):i+1]) / len(data[max(0,i-window):i+1])
                 for i in range(len(data))]
 
-    # Loss vs steps
-    ax1.plot(steps, losses, color="#2196F3", linewidth=0.8, alpha=0.4, label="Raw")
+    # --- helpers to draw anneal overlay on an axis ---
+    def _anneal_overlay_steps(ax, anneal, step_offset):
+        """Plot anneal data on a step-based axis, offset by step_offset."""
+        a_steps = [m["step"] + step_offset for m in anneal]
+        a_losses = [m["loss"] for m in anneal]
+        ax.plot(a_steps, a_losses, color="#00BCD4", linewidth=0.8, alpha=0.4)
+        if len(a_losses) > 20:
+            ax.plot(a_steps, smooth(a_losses), color="#00BCD4", linewidth=2, label="Anneal (smooth)")
+        else:
+            ax.plot(a_steps, a_losses, color="#00BCD4", linewidth=2, label="Anneal")
+        ax.axvline(x=step_offset, color="#FF9800", linestyle="--", linewidth=1.5, alpha=0.7)
+        ax.text(step_offset, ax.get_ylim()[1], " Anneal", rotation=45, fontsize=8,
+                color="#FF9800", ha="left", va="top", fontweight="bold")
+
+    def _anneal_overlay_tokens(ax, anneal):
+        """Plot anneal data on a tokens-based axis (tokens_billions is already cumulative)."""
+        a_tb = [m["tokens_billions"] for m in anneal]
+        a_losses = [m["loss"] for m in anneal]
+        ax.plot(a_tb, a_losses, color="#00BCD4", linewidth=0.8, alpha=0.4)
+        if len(a_losses) > 20:
+            ax.plot(a_tb, smooth(a_losses), color="#00BCD4", linewidth=2, label="Anneal (smooth)")
+        else:
+            ax.plot(a_tb, a_losses, color="#00BCD4", linewidth=2, label="Anneal")
+        # Transition line at start of anneal tokens
+        if a_tb:
+            ax.axvline(x=a_tb[0], color="#FF9800", linestyle="--", linewidth=1.5, alpha=0.7)
+            ax.text(a_tb[0], ax.get_ylim()[1], " Anneal", rotation=45, fontsize=8,
+                    color="#FF9800", ha="left", va="top", fontweight="bold")
+
+    # Loss vs steps — base in blue
+    ax1.plot(steps, losses, color="#2196F3", linewidth=0.8, alpha=0.4, label="Base (raw)")
     if len(losses) > 20:
-        ax1.plot(steps, smooth(losses), color="#F44336", linewidth=2, label="Smoothed")
+        ax1.plot(steps, smooth(losses), color="#F44336", linewidth=2, label="Base (smooth)")
     ax1.set_xlabel("Training Step")
     ax1.set_ylabel("Loss")
     ax1.set_title("Training Loss vs Steps")
-    ax1.legend()
     ax1.grid(True, alpha=0.3)
     ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
     annotate_events(ax1, metrics, x_key="step")
+    if anneal_metrics:
+        base_max_step = max(steps)
+        _anneal_overlay_steps(ax1, anneal_metrics, base_max_step)
+    ax1.legend(fontsize=8)
 
-    # Loss vs tokens + projection
-    ax2.plot(tokens_b, losses, color="#2196F3", linewidth=0.8, alpha=0.4, label="Raw")
+    # Loss vs tokens + projection — base in blue
+    ax2.plot(tokens_b, losses, color="#2196F3", linewidth=0.8, alpha=0.4, label="Base (raw)")
     if len(losses) > 20:
-        ax2.plot(tokens_b, smooth(losses), color="#F44336", linewidth=2, label="Smoothed")
+        ax2.plot(tokens_b, smooth(losses), color="#F44336", linewidth=2, label="Base (smooth)")
     if projection:
         ax2.plot(projection["tokens"], projection["loss"], color="#F44336",
                  linewidth=2, linestyle="--", alpha=0.7, label=f"Projected (final {projection['final_loss']:.2f})")
@@ -315,9 +371,11 @@ def plot_training_loss(metrics, save_dir=None, projection=None):
     ax2.set_xlabel("Tokens (Billions)")
     ax2.set_ylabel("Loss")
     ax2.set_title("Training Loss vs Tokens Processed")
-    ax2.legend()
     ax2.grid(True, alpha=0.3)
     annotate_events(ax2, metrics, x_key="tokens_billions")
+    if anneal_metrics:
+        _anneal_overlay_tokens(ax2, anneal_metrics)
+    ax2.legend(fontsize=8)
 
     plt.suptitle("Hamner Training Progress", fontsize=14, fontweight="bold")
     plt.tight_layout()
@@ -331,32 +389,51 @@ def plot_training_loss(metrics, save_dir=None, projection=None):
     plt.close()
 
 
-def plot_perplexity(metrics, save_dir=None, projection=None):
-    """Plot perplexity over training with optional projection."""
+def plot_perplexity(metrics, save_dir=None, projection=None, anneal_metrics=None):
+    """Plot perplexity over training with optional projection.
+
+    If *anneal_metrics* is provided it is drawn as a teal segment after
+    the base data, with a vertical transition line.
+    """
     if not metrics:
         return
 
     tokens_b = [m["tokens_billions"] for m in metrics]
     ppls = [m["perplexity"] for m in metrics]
 
+    def _smooth(data, window=20):
+        return [sum(data[max(0,i-window):i+1]) / len(data[max(0,i-window):i+1])
+                for i in range(len(data))]
+
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    ax.plot(tokens_b, ppls, color="#4CAF50", linewidth=0.8, alpha=0.4, label="Raw")
+    ax.plot(tokens_b, ppls, color="#4CAF50", linewidth=0.8, alpha=0.4, label="Base (raw)")
     if len(ppls) > 20:
-        window = 20
-        smoothed = [sum(ppls[max(0,i-window):i+1]) / len(ppls[max(0,i-window):i+1])
-                     for i in range(len(ppls))]
-        ax.plot(tokens_b, smoothed, color="#FF9800", linewidth=2, label="Smoothed")
+        ax.plot(tokens_b, _smooth(ppls), color="#FF9800", linewidth=2, label="Base (smooth)")
     if projection:
         ax.plot(projection["tokens"], projection["ppl"], color="#FF9800",
                 linewidth=2, linestyle="--", alpha=0.7, label=f"Projected (final {projection['final_ppl']:.0f})")
         ax.axhline(y=projection["final_ppl"], color="gray", linestyle=":", alpha=0.3)
 
+    # Anneal overlay
+    if anneal_metrics:
+        a_tb = [m["tokens_billions"] for m in anneal_metrics]
+        a_ppls = [m["perplexity"] for m in anneal_metrics]
+        ax.plot(a_tb, a_ppls, color="#00BCD4", linewidth=0.8, alpha=0.4)
+        if len(a_ppls) > 20:
+            ax.plot(a_tb, _smooth(a_ppls), color="#00BCD4", linewidth=2, label="Anneal (smooth)")
+        else:
+            ax.plot(a_tb, a_ppls, color="#00BCD4", linewidth=2, label="Anneal")
+        if a_tb:
+            ax.axvline(x=a_tb[0], color="#FF9800", linestyle="--", linewidth=1.5, alpha=0.7)
+            ax.text(a_tb[0], ax.get_ylim()[1], " Anneal", rotation=45, fontsize=8,
+                    color="#FF9800", ha="left", va="top", fontweight="bold")
+
     ax.set_xlabel("Tokens (Billions)")
     ax.set_ylabel("Perplexity")
     ax.set_title("Perplexity Over Training")
     ax.set_yscale("log")
-    ax.legend()
+    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     annotate_events(ax, metrics, x_key="tokens_billions")
 
@@ -655,7 +732,7 @@ def plot_all_dashboard(metrics, tournament_data, samples_data, save_dir=None, pr
         f"Tokens Processed: {current['tokens_billions']:.2f}B\n"
         f"Avg Throughput:   {avg_tps:.0f} tok/s\n"
         f"─────────────────────────────────\n"
-        f"Target: {TARGET_STEPS/1000:.0f}K steps / {TARGET_TOKENS_B:.1f}B tokens\n"
+        f"Target: {V2_TARGET_STEPS/1000:.0f}K steps / {TARGET_TOKENS_B:.1f}B tokens\n"
         f"Progress: {pct:.1f}%\n"
     )
 
@@ -1250,6 +1327,20 @@ def load_v4_metrics():
     return all_metrics
 
 
+def _v4_step_offset(stage_name, stage_data):
+    """Return the step offset for a stage so anneal steps continue from base.
+
+    pretrain_anneal steps are shifted by the max base step so the
+    dashboard x-axes show a continuous timeline.  All other stages use 0.
+    """
+    if stage_name != "pretrain_anneal":
+        return 0
+    base = stage_data.get("pretrain_base", [])
+    if not base:
+        return 0
+    return max(m["step"] for m in base)
+
+
 def plot_v4_dashboard(save_dir=None):
     """V4 dashboard: all 5 training stages on one figure."""
     stage_data = load_v4_metrics()
@@ -1259,13 +1350,15 @@ def plot_v4_dashboard(save_dir=None):
 
     fig = plt.figure(figsize=(18, 12))
 
-    # ── 1. Loss vs Steps (all stages) ──
+    # ── 1. Loss vs Steps (all stages, anneal offset by base max step) ──
     ax1 = fig.add_subplot(2, 3, 1)
+    anneal_transition_step = None
     for stage_name, color, _ in V4_STAGES:
         metrics = stage_data.get(stage_name, [])
         if not metrics:
             continue
-        steps = [m["step"] for m in metrics]
+        offset = _v4_step_offset(stage_name, stage_data)
+        steps = [m["step"] + offset for m in metrics]
         losses = [m["loss"] for m in metrics]
         ax1.plot(steps, losses, color=color, linewidth=0.5, alpha=0.3)
         if len(losses) > 15:
@@ -1273,6 +1366,14 @@ def plot_v4_dashboard(save_dir=None):
                      color=color, linewidth=2.5, label=stage_name)
         else:
             ax1.plot(steps, losses, color=color, linewidth=2, label=stage_name)
+        if stage_name == "pretrain_anneal" and offset > 0:
+            anneal_transition_step = offset
+    if anneal_transition_step is not None:
+        ax1.axvline(x=anneal_transition_step, color="#FF9800", linestyle="--",
+                    linewidth=1.5, alpha=0.7)
+        ax1.text(anneal_transition_step, ax1.get_ylim()[1], " Anneal",
+                 rotation=45, fontsize=7, color="#FF9800", ha="left",
+                 va="top", fontweight="bold")
     ax1.set_xlabel("Step")
     ax1.set_ylabel("Loss")
     ax1.set_title("Training Loss — All Stages")
@@ -1282,6 +1383,7 @@ def plot_v4_dashboard(save_dir=None):
 
     # ── 2. Loss vs Tokens (pretrain stages concatenated) ──
     ax2 = fig.add_subplot(2, 3, 2)
+    anneal_token_start = None
     for stage_name, color, _ in V4_STAGES[:2]:  # pretrain_base + anneal
         metrics = stage_data.get(stage_name, [])
         if not metrics:
@@ -1296,18 +1398,27 @@ def plot_v4_dashboard(save_dir=None):
                      color=color, linewidth=2.5, label=stage_name)
         else:
             ax2.plot(tokens_b, losses, color=color, linewidth=2, label=stage_name)
+        if stage_name == "pretrain_anneal" and tokens_b:
+            anneal_token_start = tokens_b[0]
+    if anneal_token_start is not None:
+        ax2.axvline(x=anneal_token_start, color="#FF9800", linestyle="--",
+                    linewidth=1.5, alpha=0.7)
+        ax2.text(anneal_token_start, ax2.get_ylim()[1], " Anneal",
+                 rotation=45, fontsize=7, color="#FF9800", ha="left",
+                 va="top", fontweight="bold")
     ax2.set_xlabel("Tokens (Billions)")
     ax2.set_ylabel("Loss")
     ax2.set_title("Pretrain Loss vs Tokens")
     ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
 
-    # ── 3. Val Loss (if available) ──
+    # ── 3. Val Loss (if available, anneal steps offset) ──
     ax3 = fig.add_subplot(2, 3, 3)
     has_val = False
     for stage_name, color, _ in V4_STAGES:
         metrics = stage_data.get(stage_name, [])
-        val_points = [(m["step"], float(m["val_loss"]))
+        offset = _v4_step_offset(stage_name, stage_data)
+        val_points = [(m["step"] + offset, float(m["val_loss"]))
                       for m in metrics
                       if m.get("val_loss") and m["val_loss"] != ""]
         if val_points:
@@ -1327,13 +1438,14 @@ def plot_v4_dashboard(save_dir=None):
                  transform=ax3.transAxes, fontsize=12, color="gray")
         ax3.set_title("Validation Loss")
 
-    # ── 4. Learning Rate ──
+    # ── 4. Learning Rate (anneal steps offset) ──
     ax4 = fig.add_subplot(2, 3, 4)
     for stage_name, color, _ in V4_STAGES:
         metrics = stage_data.get(stage_name, [])
         if not metrics:
             continue
-        steps = [m["step"] for m in metrics]
+        offset = _v4_step_offset(stage_name, stage_data)
+        steps = [m["step"] + offset for m in metrics]
         lrs = [m.get("learning_rate", 0) for m in metrics]
         if any(lr > 0 for lr in lrs):
             ax4.plot(steps, lrs, color=color, linewidth=2, label=stage_name)
@@ -1344,13 +1456,14 @@ def plot_v4_dashboard(save_dir=None):
     ax4.grid(True, alpha=0.3)
     ax4.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
 
-    # ── 5. Throughput ──
+    # ── 5. Throughput (anneal steps offset) ──
     ax5 = fig.add_subplot(2, 3, 5)
     for stage_name, color, _ in V4_STAGES:
         metrics = stage_data.get(stage_name, [])
         if not metrics:
             continue
-        steps = [m["step"] for m in metrics]
+        offset = _v4_step_offset(stage_name, stage_data)
+        steps = [m["step"] + offset for m in metrics]
         tps = [m.get("tokens_per_sec", 0) for m in metrics]
         if any(t > 0 for t in tps):
             ax5.plot(steps, tps, color=color, linewidth=0.5, alpha=0.3)
@@ -1463,10 +1576,15 @@ def main():
 
             # Also plot individual pretrain curves if data exists
             base_metrics = stage_data.get("pretrain_base", [])
+            anneal_metrics = stage_data.get("pretrain_anneal", [])
             if base_metrics and not args.dashboard:
-                projection = fit_projection(clean_metrics(base_metrics))
-                plot_training_loss(clean_metrics(base_metrics), save_dir, projection)
-                plot_perplexity(clean_metrics(base_metrics), save_dir, projection)
+                clean_base = clean_metrics(base_metrics)
+                projection = fit_projection(clean_base)
+                # Pass anneal data so it appears as a separate segment
+                plot_training_loss(clean_base, save_dir, projection,
+                                   anneal_metrics=anneal_metrics or None)
+                plot_perplexity(clean_base, save_dir, projection,
+                                anneal_metrics=anneal_metrics or None)
 
         elif mode == "v3":
             # ── V3 plotting ──

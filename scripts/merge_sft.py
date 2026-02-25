@@ -69,6 +69,8 @@ SOURCE_FILES = [
     "flm_os_aware_v2.jsonl",
     "flm_identity_v3.jsonl",
     "flm_practical.jsonl",
+    # V4 additions — hand-written, OS-diverse examples
+    "flm_v4_massive.jsonl",
 ]
 
 OUTPUT_FILE = SFT_DIR / "flm_combined.jsonl"
