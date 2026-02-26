@@ -192,6 +192,57 @@ labels = tokens[:seq_len]  # same tensor, no pre-shifting
 4. **Math requires exhaustive examples** — The model memorizes number pairs, not arithmetic. ALL multiplication tables 2-12 were necessary.
 5. **Documentation > source code** — For an OS assistant, man pages and packaging metadata are far more valuable per token than bulk source code.
 
+## Evaluation
+
+Multi-model benchmark comparison across 6 benchmarks — 1 domain-specific (LinuxBench) and 5 general (ARC-Easy, HellaSwag, PIQA, WinoGrande, BoolQ). The hypothesis: flm is comparable to similarly-sized models on general tasks but significantly stronger on Linux.
+
+### Benchmarks
+
+| Benchmark | Source | Size | Scoring | Baseline |
+|-----------|--------|------|---------|----------|
+| LinuxBench | Custom (315 MCQ) | 315 | Token MCQ | 25% |
+| ARC-Easy | `allenai/ai2_arc` | 2,376 | Token MCQ | 25% |
+| HellaSwag | `Rowan/hellaswag` | 10,042 | Completion MCQ | 25% |
+| PIQA | `lighteval/piqa` | 1,838 | Completion MCQ | 50% |
+| WinoGrande | `allenai/winogrande` | 1,267 | Completion MCQ | 50% |
+| BoolQ | `google/boolq` | 3,270 | Token MCQ | 50% |
+
+**Token MCQ**: Log-probability of the answer token (A/B/C/D or Yes/No) at the last position.
+**Completion MCQ**: Mean log-probability of each completion's tokens given the prompt; highest wins.
+
+### Comparison Models
+
+| Model | Params | Description |
+|-------|--------|-------------|
+| flm | 164M | This project (Linux-focused) |
+| GPT-2 | 124M | OpenAI's classic baseline |
+| SmolLM-135M | 135M | HuggingFace's efficient small LM |
+| Pythia-160M | 160M | EleutherAI's research model |
+
+### Running Evaluations
+
+```bash
+# Single model, single benchmark
+python eval/run_eval.py --hf gpt2 --bench linux_bench
+
+# Single model, all benchmarks (with question cap for large benchmarks)
+python eval/run_eval.py --hf gpt2 --bench all --limit 200
+
+# flm checkpoint
+python eval/run_eval.py --model checkpoints/sft/best.pt --bench all
+
+# All comparison models at once
+bash eval/run_all_models.sh
+
+# Print comparison table from saved results
+python eval/run_eval.py --compare
+
+# Generate comparison plots
+python eval/plot_results.py --save
+```
+
+Results are saved to `eval/results/` and plots to `eval/results/plots/`.
+
 ## Tournament Architecture Search
 
 We trained **10 different architectures** in a 3-round elimination tournament to pick the best design:
@@ -225,6 +276,13 @@ flm/
 ├── generate_sft_data.py      # Generate flm identity + OS Q&A SFT data
 ├── synthetic_tasks.py        # Synthetic task generators
 ├── plot_training.py          # Training metrics visualization
+├── eval/
+│   ├── run_eval.py           # Multi-benchmark evaluation harness
+│   ├── benchmarks.py         # Benchmark registry + loaders (6 benchmarks)
+│   ├── plot_results.py       # Comparison plots (bar, radar, delta charts)
+│   ├── run_all_models.sh     # Run all comparison models
+│   ├── linux_bench.json      # LinuxBench: 315 Linux MCQ questions
+│   └── results/              # Evaluation results + plots
 ├── data/
 │   ├── os_specific/          # Debian docs, man pages, packaging metadata
 │   ├── ubuntu_dialogue.jsonl # Ubuntu IRC troubleshooting conversations
