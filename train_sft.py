@@ -40,7 +40,7 @@ BASE_CHECKPOINT_FALLBACKS = [
     "checkpoints/pretrain_v2/latest.pt",
 ]
 SFT_CHECKPOINT_DIR = "checkpoints/sft"
-SFT_DATA = "data/sft/flm_combined_v6_clean.jsonl"
+SFT_DATA = "data/sft/flm_combined_v7_clean.jsonl"
 SFT_DATA_FALLBACK = "data/sft/flm_combined.jsonl"
 VOICE_SAMPLES_FILE = None  # Use SYSTEM_PROMPT for sample generation
 LOG_FILE = "logs/sft_v6.log"

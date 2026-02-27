@@ -42,7 +42,7 @@ METRICS_FILE = "logs/dpo_metrics.csv"
 SAMPLES_FILE = "logs/dpo_samples.jsonl"
 
 # DPO hyperparameters
-BETA = 0.1           # KL penalty coefficient
+BETA = 0.5           # KL penalty coefficient (SmolLM2 uses 0.5)
 LR = 5e-7            # very low LR — smaller dataset needs gentler updates
 NUM_EPOCHS = 2       # 1 epoch is usually enough; 2 for safety with early stop
 BATCH_SIZE = 4        # smaller batch — need 2x memory (model + ref_model)
