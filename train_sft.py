@@ -359,18 +359,8 @@ def load_sft_checkpoint(path, device="cuda"):
 # ---------------------------------------------------------------------------
 
 def load_voice_prompts(voice_file):
-    """Build generation prompts from voice_sample.txt system prompt."""
+    """Build generation prompts using the flm system prompt."""
     system_prompt = SYSTEM_PROMPT
-
-    if os.path.exists(voice_file):
-        with open(voice_file) as f:
-            text = f.read()
-        turns = parse_conversation(text)
-        for tag, content in turns:
-            if tag == "<|system|>":
-                system_prompt = content.strip()
-                break
-        log(f"Loaded system prompt from {voice_file}")
 
     prompts = []
     for msg in SAMPLE_USER_MESSAGES:

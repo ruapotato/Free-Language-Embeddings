@@ -34,7 +34,7 @@ from model import HamnerModel, HamnerConfig
 # Config
 # ---------------------------------------------------------------------------
 
-SFT_CHECKPOINT = "checkpoints/sft/latest.pt"
+SFT_CHECKPOINT = "checkpoints/sft/best.pt"
 DPO_CHECKPOINT_DIR = "checkpoints/dpo"
 DPO_DATA_PATH = "data/dpo_helpsteer2.jsonl"
 LOG_FILE = "logs/dpo.log"
@@ -44,12 +44,17 @@ SAMPLES_FILE = "logs/dpo_samples.jsonl"
 # DPO hyperparameters
 BETA = 0.1           # KL penalty coefficient
 LR = 5e-7            # very low LR — smaller dataset needs gentler updates
-NUM_EPOCHS = 3       # more epochs to compensate for ~7-10k pairs (vs 60k)
+NUM_EPOCHS = 2       # 1 epoch is usually enough; 2 for safety with early stop
 BATCH_SIZE = 4        # smaller batch — need 2x memory (model + ref_model)
 SEQ_LEN = 1024
 WARMUP_STEPS = 100
 WEIGHT_DECAY = 0.1
 GRAD_CLIP = 1.0
+
+# Early stopping — DPO overfits fast on small datasets
+EARLY_STOP_LOSS = 0.35       # stop if avg loss drops below this
+EARLY_STOP_ACC_WINDOW = 100  # check accuracy over this many steps
+EARLY_STOP_ACC = 0.95        # stop if rolling accuracy exceeds this
 
 # Logging
 CHECKPOINT_EVERY = 500
@@ -259,12 +264,11 @@ def compute_log_probs(model, input_ids, labels, attention_mask):
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
 
-    # Per-token log probs
+    # Per-token log probs — clamp labels for gather (masked out below)
     log_probs = F.log_softmax(shift_logits.float(), dim=-1)
-    token_log_probs = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)
-
-    # Mask: only count labeled (assistant) tokens
     mask = (shift_labels != -100).float()
+    gather_labels = shift_labels.clamp(min=0)
+    token_log_probs = log_probs.gather(-1, gather_labels.unsqueeze(-1)).squeeze(-1)
     sum_log_probs = (token_log_probs * mask).sum(dim=-1)
 
     return sum_log_probs
@@ -305,7 +309,7 @@ def dpo_loss(policy_model, ref_model, batch, device, beta=BETA):
 # ---------------------------------------------------------------------------
 
 def save_checkpoint(model, optimizer, scaler, config, step, epoch, loss,
-                    checkpoint_dir):
+                    checkpoint_dir, best_loss=None):
     os.makedirs(checkpoint_dir, exist_ok=True)
     raw_state = model.state_dict()
     clean_state = {k.replace("_orig_mod.", ""): v for k, v in raw_state.items()}
@@ -328,11 +332,14 @@ def save_checkpoint(model, optimizer, scaler, config, step, epoch, loss,
     latest_path = os.path.join(checkpoint_dir, "latest.pt")
     torch.save(ckpt_data, latest_path)
 
-    # Also save as best.pt (DPO is short, latest is usually best)
-    best_path = os.path.join(checkpoint_dir, "best.pt")
-    torch.save(ckpt_data, best_path)
+    # Save best.pt only if this is actually an improvement
+    best_tag = ""
+    if best_loss is None or loss < best_loss:
+        best_path = os.path.join(checkpoint_dir, "best.pt")
+        torch.save(ckpt_data, best_path)
+        best_tag = " *BEST*"
 
-    log(f"  Checkpoint saved: {ckpt_path}")
+    log(f"  Checkpoint saved: {ckpt_path}{best_tag}")
 
     # Keep last 5
     all_ckpts = sorted(Path(checkpoint_dir).glob("step_*.pt"))
@@ -396,7 +403,7 @@ def train(sft_checkpoint=None, resume=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     log("=" * 70)
-    log("HAMNER DPO (Direct Preference Optimization)")
+    log("flm DPO (Direct Preference Optimization)")
     log("=" * 70)
 
     # Load tokenizer
@@ -492,6 +499,8 @@ def train(sft_checkpoint=None, resume=False):
     # Training
     policy_model.train()
     losses = []
+    accuracies = []
+    best_loss = float("inf")
     start_time = time.time()
     global_step = start_step
 
@@ -536,7 +545,22 @@ def train(sft_checkpoint=None, resume=False):
 
             loss_val = loss.item()
             losses.append(loss_val)
+            accuracies.append(accuracy)
             global_step += 1
+
+            # Early stopping check
+            if global_step > WARMUP_STEPS and len(losses) >= 50:
+                avg_loss = sum(losses[-50:]) / len(losses[-50:])
+                if avg_loss < EARLY_STOP_LOSS:
+                    log(f"Early stop: avg loss {avg_loss:.4f} < {EARLY_STOP_LOSS}")
+                    shutdown_requested = True
+                    break
+            if len(accuracies) >= EARLY_STOP_ACC_WINDOW:
+                rolling_acc = sum(accuracies[-EARLY_STOP_ACC_WINDOW:]) / EARLY_STOP_ACC_WINDOW
+                if rolling_acc >= EARLY_STOP_ACC and global_step > WARMUP_STEPS:
+                    log(f"Early stop: rolling accuracy {rolling_acc:.2f} >= {EARLY_STOP_ACC}")
+                    shutdown_requested = True
+                    break
 
             # Log
             if global_step % LOG_EVERY == 0:
@@ -557,7 +581,7 @@ def train(sft_checkpoint=None, resume=False):
                 samples = generate_samples(policy_model, tokenizer, device)
                 for user_msg, response in samples.items():
                     log(f"  User: {user_msg}")
-                    log(f"  Al:   {response[:300]}")
+                    log(f"  flm:  {response[:300]}")
                     log("")
                 log("-" * 40)
 
@@ -567,7 +591,10 @@ def train(sft_checkpoint=None, resume=False):
                 save_checkpoint(
                     policy_model, optimizer, scaler, config,
                     global_step, epoch + 1, avg_loss, DPO_CHECKPOINT_DIR,
+                    best_loss=best_loss,
                 )
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
 
     # Final save
     elapsed = time.time() - start_time
@@ -576,6 +603,7 @@ def train(sft_checkpoint=None, resume=False):
         save_checkpoint(
             policy_model, optimizer, scaler, config,
             global_step, NUM_EPOCHS, final_loss, DPO_CHECKPOINT_DIR,
+            best_loss=best_loss,
         )
 
     log("=" * 70)
@@ -589,7 +617,7 @@ def train(sft_checkpoint=None, resume=False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Hamner DPO Training")
+    parser = argparse.ArgumentParser(description="flm DPO Training")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to SFT checkpoint")
     parser.add_argument("--resume", action="store_true",
