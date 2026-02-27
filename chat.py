@@ -18,12 +18,12 @@ from model import HamnerModel, HamnerConfig
 # Defaults — V4 checkpoint fallback chain: dpo → sft → chat_pretrain → pretrain
 CHECKPOINT_CHAIN = [
     "checkpoints/dpo/best.pt",
+    "checkpoints/dpo/latest.pt",
     "checkpoints/sft/best.pt",
     "checkpoints/sft/latest.pt",
     "checkpoints/chat_pretrain/latest.pt",
     "checkpoints/pretrain_v4_anneal/latest.pt",
     "checkpoints/pretrain_v4/latest.pt",
-    "checkpoints/pretrain_v2/latest.pt",
 ]
 DEFAULT_CHECKPOINT = CHECKPOINT_CHAIN[0]
 FALLBACK_CHECKPOINT = CHECKPOINT_CHAIN[1]

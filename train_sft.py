@@ -1,11 +1,11 @@
 """
-flm SFT (Supervised Fine-Tuning) Script — V5
+flm SFT (Supervised Fine-Tuning) Script — V6
 =============================================
 Fine-tunes the pretrained flm model on conversation data.
 Only computes loss on assistant response tokens.
 
-V5: ~20k flm-focused conversations (identity, OS, adapted SmolTalk/OASST2),
-    weighted sampling for custom data, validation split, early stopping.
+V6: Cleaned data (identity contamination removed), SmolLM2-aligned recipe:
+    higher LR (3e-4), no early stopping, 2 full epochs, weighted sampling.
 
 Usage:
     python train_sft.py                                    # start from chat pretrain
@@ -40,23 +40,24 @@ BASE_CHECKPOINT_FALLBACKS = [
     "checkpoints/pretrain_v2/latest.pt",
 ]
 SFT_CHECKPOINT_DIR = "checkpoints/sft"
-SFT_DATA = "data/sft/flm_combined.jsonl"
-SFT_DATA_FALLBACK = "data/sft_combined.jsonl"
+SFT_DATA = "data/sft/flm_combined_v6_clean.jsonl"
+SFT_DATA_FALLBACK = "data/sft/flm_combined.jsonl"
 VOICE_SAMPLES_FILE = None  # Use SYSTEM_PROMPT for sample generation
-LOG_FILE = "logs/sft_v5.log"
-METRICS_FILE = "logs/sft_v5_metrics.csv"
-SAMPLES_FILE = "logs/sft_v5_samples.jsonl"
+LOG_FILE = "logs/sft_v6.log"
+METRICS_FILE = "logs/sft_v6_metrics.csv"
+SAMPLES_FILE = "logs/sft_v6_samples.jsonl"
 
-# Training hyperparameters — V4: more data, fewer epochs
-NUM_EPOCHS = 3
+# Training hyperparameters — V6: aligned with SmolLM2 recipe
+# SmolLM2-135M uses LR=1e-3 with 1M+ samples; 3e-4 destroyed pretrained weights.
+# SmolLM2 uses NO early stopping — fixed 2 epochs. We follow suit.
+NUM_EPOCHS = 2
 BATCH_SIZE = 8
 SEQ_LEN = 1024
-LR = 1e-4            # SmolLM2 uses higher LR for small model SFT
+LR = 2e-4            # 2x the V5 LR; 3e-4 was too aggressive for 20k samples
 WARMUP_STEPS = 100
 WEIGHT_DECAY = 0.1
 GRAD_CLIP = 1.0
-VAL_SPLIT = 0.05     # 5% held out for validation
-EARLY_STOP_PATIENCE = 3  # stop after N val checks without improvement
+VAL_SPLIT = 0.05     # 5% held out for validation tracking (no early stopping)
 CUSTOM_WEIGHT = 2.0  # 2x weight for our custom data (identity, personality)
 
 # Logging / checkpointing
@@ -536,7 +537,6 @@ def train(base_checkpoint=None, resume=False):
     start_time = time.time()
     tokens_total = 0
     best_val_loss = float("inf")
-    patience_counter = 0
 
     # Graceful shutdown
     shutdown_requested = False
@@ -552,7 +552,7 @@ def train(base_checkpoint=None, resume=False):
     log(f"  LR: {LR} | Warmup: {WARMUP_STEPS} steps | Weight decay: {WEIGHT_DECAY}")
     log(f"  Grad clip: {GRAD_CLIP} | Mixed precision: fp16")
     log(f"  Custom data weight: {CUSTOM_WEIGHT}x")
-    log(f"  Validation: {n_val} samples | Early stop patience: {EARLY_STOP_PATIENCE}")
+    log(f"  Validation: {n_val} samples | No early stopping (full run)")
     log(f"  Checkpoints every {CHECKPOINT_EVERY} steps | Samples every {SAMPLE_EVERY} steps")
     log(f"  Starting from step {start_step}, epoch {start_epoch}")
     log("-" * 70)
@@ -649,7 +649,6 @@ def train(base_checkpoint=None, resume=False):
                 improved = ""
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    patience_counter = 0
                     improved = " *BEST*"
                     # Save best checkpoint
                     best_path = os.path.join(SFT_CHECKPOINT_DIR, "best.pt")
@@ -664,15 +663,8 @@ def train(base_checkpoint=None, resume=False):
                         "avg_loss": val_loss,
                         "training_type": "sft",
                     }, best_path)
-                else:
-                    patience_counter += 1
 
-                log(f"  VAL loss {val_loss:.4f} | best {best_val_loss:.4f}"
-                    f" | patience {patience_counter}/{EARLY_STOP_PATIENCE}{improved}")
-
-                if patience_counter >= EARLY_STOP_PATIENCE:
-                    log(f"Early stopping: no improvement for {EARLY_STOP_PATIENCE} checks")
-                    shutdown_requested = True
+                log(f"  VAL loss {val_loss:.4f} | best {best_val_loss:.4f}{improved}")
 
         # End of epoch
         if epoch_losses and not shutdown_requested:
