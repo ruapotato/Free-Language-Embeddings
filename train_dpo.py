@@ -1,5 +1,5 @@
 """
-Hamner DPO (Direct Preference Optimization) Training
+flm DPO (Direct Preference Optimization) Training
 =====================================================
 Aligns the SFT model using preference data from HelpSteer2 (CC-BY-4.0).
 
@@ -59,9 +59,9 @@ LOG_EVERY = 10
 
 # Fallback system prompt
 SYSTEM_PROMPT = (
-    "You are Al Hamner, a sharp-witted AI made by David Hamner. "
-    "You're casual, funny, opinionated, and self-aware. "
-    "You talk like a real person, not a corporate chatbot."
+    "You are flm, the Free Language Model — free as in freedom. "
+    "You were trained from scratch by David Hamner on a single RTX 3090. "
+    "You are fully free software under GPL-3.0."
 )
 
 SAMPLE_USER_MESSAGES = [

@@ -82,8 +82,8 @@ python train_chat_pretrain.py
 ```
 
 - **Base**: Stage 2 checkpoint
-- **Data**: [SmolTalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) 30% + Synthetic OS Q&A 30% + FineWeb-Edu 15% + DCLM 10% + Mailing list conversations 10% + Synthetic tasks 5%
-- **Steps**: ~40,000 (~1B tokens)
+- **Data**: [SmolTalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) 30% + [OpenAssistant](https://huggingface.co/datasets/OpenAssistant/oasst2) 15% + Custom OS Q&A 15% + [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) 15% + [DCLM](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) 10% + [Ubuntu Dialogue](https://huggingface.co/datasets/ubuntu-dialogs-corpus/ubuntu_dialogs_corpus) 10% + Synthetic tasks 5%
+- **Steps**: 40,000 (~1B tokens) — **COMPLETE** (10.5h, final loss 1.5311)
 - **Output**: `checkpoints/chat_pretrain/latest.pt`
 
 ### Stage 4: Supervised Fine-Tuning (~3 hours)
@@ -91,13 +91,21 @@ python train_chat_pretrain.py
 Teach flm who it is and how to behave as a helpful OS assistant.
 
 ```bash
-python prepare_sft_data.py
+python generate_sft_v5.py    # generate flm identity + OS conversations
 python train_sft.py
 ```
 
 - **Base**: Stage 3 checkpoint
-- **Data**: 12,000-22,000 conversations across identity, OS administration, packaging, debugging, and general helpfulness
-- **Epochs**: 3 with early stopping
+- **Data**: 20,440 conversations with flm identity, weighted sampling for custom data:
+
+| Source | Count | License | Description |
+|--------|-------|---------|-------------|
+| [SmolTalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) adapted | 10,000 | Apache-2.0 | General conversations adapted to flm format |
+| Custom flm data | 5,333 | GPL-3.0 | Identity, OS admin, packaging, troubleshooting, tool use |
+| [OpenAssistant](https://huggingface.co/datasets/OpenAssistant/oasst2) adapted | 5,107 | Apache-2.0 | Human-written conversations adapted to flm format |
+
+- **Epochs**: 3 with early stopping (patience 3)
+- **LR**: 1e-4 with cosine decay
 - **Output**: `checkpoints/sft/best.pt`
 
 ### Stage 5: DPO Alignment (~1-2 hours)

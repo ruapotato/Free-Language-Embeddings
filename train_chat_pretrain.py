@@ -40,13 +40,15 @@ LOG_FILE = "logs/chat_pretrain_v4.log"
 METRICS_FILE = "logs/chat_pretrain_v4_metrics.csv"
 SAMPLES_FILE = "logs/chat_pretrain_v4_samples.jsonl"
 
-# V4 Data mix — SmolTalk-heavy with diverse knowledge sources
+# V4 Data mix — dialogue-heavy with OS knowledge (matches README)
 DATA_RATIOS = {
-    "smoltalk": 0.40,     # high-quality dialogue (SmolTalk as raw text, no masking)
-    "fineweb": 0.25,      # maintain general knowledge
-    "dclm": 0.15,         # general web text diversity
-    "personal": 0.10,     # learn personal voice
-    "synthetic": 0.10,    # reasoning tasks
+    "smoltalk": 0.30,         # high-quality dialogue (SmolTalk as raw text)
+    "oasst": 0.15,            # OpenAssistant human-written conversations
+    "os_qa": 0.15,            # OS Q&A from SFT data (flm identity, sysadmin, packaging)
+    "fineweb": 0.15,          # maintain general knowledge
+    "dclm": 0.10,             # general web text diversity
+    "ubuntu_dialogue": 0.10,  # Ubuntu IRC troubleshooting conversations
+    "synthetic": 0.05,        # reasoning tasks
 }
 
 # Training hyperparameters
@@ -67,8 +69,8 @@ VAL_EVERY = 500
 
 SAMPLE_PROMPTS = [
     # Chat format
-    "<|system|>\nYou are Al Hamner.\n<|user|>\nHello!\n<|assistant|>\n",
-    "<|system|>\nYou are Al Hamner.\n<|user|>\nWhat do you think about programming?\n<|assistant|>\n",
+    "<|system|>\nYou are flm, the Free Language Model.\n<|user|>\nHello!\n<|assistant|>\n",
+    "<|system|>\nYou are flm, the Free Language Model.\n<|user|>\nWhat do you think about programming?\n<|assistant|>\n",
     "<|user|>\nTell me about yourself\n<|assistant|>\n",
     "<|user|>\nWhat do you think about AI?\n<|assistant|>\n",
     # Plain text
@@ -109,8 +111,10 @@ class DataMixer:
     """Mixes data from multiple sources with fixed ratios."""
 
     def __init__(self, tokenizer, seq_len=1024,
-                 personal_data_path="data/personal/training_samples.jsonl",
-                 smoltalk_path="data/sft_smoltalk.jsonl"):
+                 smoltalk_path="data/sft_smoltalk.jsonl",
+                 oasst_path="data/oasst2_conversations.jsonl",
+                 os_qa_path="data/sft/flm_combined.jsonl",
+                 ubuntu_dialogue_path="data/ubuntu_dialogue.jsonl"):
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         self.synthetic_gen = SyntheticTaskGenerator(seed=42)
@@ -119,8 +123,10 @@ class DataMixer:
         self.token_buffers = {name: [] for name in DATA_RATIOS}
         self.ratios = DATA_RATIOS
 
-        self._load_local_data(personal_data_path, "personal")
         self._load_local_data(smoltalk_path, "smoltalk")
+        self._load_local_data(oasst_path, "oasst")
+        self._load_local_data(os_qa_path, "os_qa")
+        self._load_local_data(ubuntu_dialogue_path, "ubuntu_dialogue")
         self._init_streams()
 
     def _load_local_data(self, path, name):
@@ -184,13 +190,21 @@ class DataMixer:
                         return text
                 except StopIteration:
                     self._restart_stream("dclm")
-        elif source == "personal":
-            if self.personal_samples:
-                return random.choice(self.personal_samples)
-            return self._get_text("fineweb")
         elif source == "smoltalk":
             if self.smoltalk_samples:
                 return random.choice(self.smoltalk_samples)
+            return self._get_text("fineweb")
+        elif source == "oasst":
+            if self.oasst_samples:
+                return random.choice(self.oasst_samples)
+            return self._get_text("fineweb")
+        elif source == "os_qa":
+            if self.os_qa_samples:
+                return random.choice(self.os_qa_samples)
+            return self._get_text("fineweb")
+        elif source == "ubuntu_dialogue":
+            if self.ubuntu_dialogue_samples:
+                return random.choice(self.ubuntu_dialogue_samples)
             return self._get_text("fineweb")
         return ""
 
@@ -385,8 +399,7 @@ def train(base_checkpoint=None, resume=False):
         model = torch.compile(model)
 
     # Data mixer
-    mixer = DataMixer(tokenizer, seq_len=SEQ_LEN,
-                      smoltalk_path="data/sft_smoltalk.jsonl")
+    mixer = DataMixer(tokenizer, seq_len=SEQ_LEN)
 
     log(f"\nData ratios: {DATA_RATIOS}")
     log(f"Training: {MAX_STEPS} steps | Batch {BATCH_SIZE} | Seq {SEQ_LEN}")

@@ -1,0 +1,4097 @@
+[
+  {
+    "id": 1,
+    "question": "A user runs `ls -la /tmp` and sees a file with permissions `-rwSr--r--`. What does the uppercase S indicate?",
+    "choices": {
+      "A": "The file has the setuid bit set and the owner execute bit is also set",
+      "B": "The file has the setuid bit set but the owner execute bit is NOT set",
+      "C": "The file has the sticky bit set but the owner execute bit is NOT set",
+      "D": "The file is a socket"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 2,
+    "question": "After running `export VAR=hello` in a bash shell, a user launches a new subshell with `bash`. What is the value of `$VAR` in the subshell?",
+    "choices": {
+      "A": "Empty string, because export only affects the current shell",
+      "B": "hello, because exported variables are inherited by child processes",
+      "C": "Undefined, because subshells reset all variables",
+      "D": "hello, but only if the subshell is a login shell"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 3,
+    "question": "A script contains the line `find /var/log -name '*.log' -mtime +30 -delete`. What will this command do?",
+    "choices": {
+      "A": "Delete all .log files in /var/log modified in the last 30 days",
+      "B": "Delete all .log files in /var/log modified more than 30 days ago",
+      "C": "List all .log files in /var/log older than 30 days without deleting",
+      "D": "Delete all files in /var/log that are exactly 30 days old"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 4,
+    "question": "Running `grep -r 'error' /var/log/ 2>/dev/null | wc -l` returns `47`. What does the `2>/dev/null` portion accomplish?",
+    "choices": {
+      "A": "Redirects grep's standard output to /dev/null so only the count is shown",
+      "B": "Suppresses permission denied and other error messages from grep",
+      "C": "Sends the output of wc to /dev/null",
+      "D": "Filters out lines containing the word 'null' from the output"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 5,
+    "question": "A user types `cat file.txt | grep 'pattern'`. A colleague suggests a more efficient alternative. Which is the most efficient replacement?",
+    "choices": {
+      "A": "grep 'pattern' < file.txt",
+      "B": "grep 'pattern' file.txt",
+      "C": "file.txt | grep 'pattern'",
+      "D": "Both A and B are equally efficient and both avoid the useless use of cat"
+    },
+    "answer": "D",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 6,
+    "question": "A developer runs `echo $((2#1010))` in bash. What is the output?",
+    "choices": {
+      "A": "1010",
+      "B": "2",
+      "C": "10",
+      "D": "42"
+    },
+    "answer": "C",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 7,
+    "question": "The command `ls /etc/*.conf | xargs grep -l 'timeout'` produces an error because one filename contains a space. Which modification fixes this?",
+    "choices": {
+      "A": "ls /etc/*.conf | xargs -d '\\n' grep -l 'timeout'",
+      "B": "ls /etc/*.conf | xargs -0 grep -l 'timeout'",
+      "C": "ls /etc/*.conf | xargs --no-run-if-empty grep -l 'timeout'",
+      "D": "ls /etc/*.conf | xargs -p grep -l 'timeout'"
+    },
+    "answer": "A",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 8,
+    "question": "A user runs `history | tail -5` and sees commands numbered 1001-1005. They then type `!1003`. What happens?",
+    "choices": {
+      "A": "The string '1003' is printed to standard output",
+      "B": "Command number 1003 from the history is re-executed",
+      "C": "The shell displays command 1003 but prompts for confirmation before executing",
+      "D": "An error occurs because history expansion requires `!!` syntax"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 9,
+    "question": "Running `diff <(sort file1.txt) <(sort file2.txt)` uses which bash feature?",
+    "choices": {
+      "A": "Here documents",
+      "B": "Command grouping with subshells",
+      "C": "Process substitution",
+      "D": "Named pipe redirection"
+    },
+    "answer": "C",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 10,
+    "question": "A script runs `exec 3>&1 1>/tmp/out.log`. After this line, where does output from `echo hello` go?",
+    "choices": {
+      "A": "To both the terminal and /tmp/out.log simultaneously",
+      "B": "To /tmp/out.log only, but fd 3 still points to the original stdout",
+      "C": "To the terminal only, because exec cannot redirect stdout",
+      "D": "To file descriptor 3, which is /tmp/out.log"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 11,
+    "question": "An engineer runs `tee /tmp/debug.log` in the middle of a pipeline: `command1 | tee /tmp/debug.log | command2`. What does tee do here?",
+    "choices": {
+      "A": "Writes the output of command1 to /tmp/debug.log and also passes it to command2",
+      "B": "Splits the pipeline so command2 receives empty input",
+      "C": "Writes the combined output of command1 and command2 to /tmp/debug.log",
+      "D": "Buffers all of command1's output before passing it to command2"
+    },
+    "answer": "A",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 12,
+    "question": "A user runs `cp -a /source/dir /dest/`. What does the `-a` flag ensure compared to `cp -r`?",
+    "choices": {
+      "A": "It copies only files that have been accessed in the last 24 hours",
+      "B": "It preserves ownership, permissions, timestamps, and copies symlinks as symlinks",
+      "C": "It appends to existing files instead of overwriting them",
+      "D": "It performs an atomic copy using temporary files"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 13,
+    "question": "The command `find / -type f -perm -4000 2>/dev/null` lists files with which characteristic?",
+    "choices": {
+      "A": "Files larger than 4000 bytes",
+      "B": "Files with the setuid bit set",
+      "C": "Files with exactly permission mode 4000",
+      "D": "Files modified in the last 4000 minutes"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 14,
+    "question": "A user runs `rm -rf /important/data /` (with an accidental space before the slash). On a modern Linux system with `--preserve-root` default, what happens?",
+    "choices": {
+      "A": "/important/data is deleted, then rm refuses to recursively delete / due to --preserve-root",
+      "B": "rm deletes everything because --preserve-root only applies to non-root users",
+      "C": "rm detects the error and refuses to delete anything",
+      "D": "Both /important/data and / are deleted because -f overrides --preserve-root"
+    },
+    "answer": "A",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 15,
+    "question": "The output of `echo {a,b}{1,2}` in bash is:",
+    "choices": {
+      "A": "a1 a2 b1 b2",
+      "B": "{a,b}{1,2}",
+      "C": "a1 b2",
+      "D": "a b 1 2"
+    },
+    "answer": "A",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 16,
+    "question": "A user runs `set -e` at the top of a bash script. What behavior does this enable?",
+    "choices": {
+      "A": "The script echoes every command before executing it",
+      "B": "The script exits immediately if any command returns a non-zero exit status",
+      "C": "The script treats unset variables as errors",
+      "D": "The script enables extended globbing patterns"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 17,
+    "question": "Running `command1 && command2 || command3` -- if command1 succeeds and command2 fails, what happens?",
+    "choices": {
+      "A": "Only command1 and command2 run; command3 is skipped",
+      "B": "command3 runs because the overall expression evaluated to failure",
+      "C": "command3 runs only if command1 also failed",
+      "D": "A syntax error occurs due to mixing && and ||"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 18,
+    "question": "A user wants to count unique IP addresses in an access log. They run `awk '{print $1}' access.log | sort | uniq | wc -l`. A colleague says the `sort` step is essential. Why?",
+    "choices": {
+      "A": "uniq only removes adjacent duplicate lines, so the input must be sorted first",
+      "B": "sort converts IP addresses to a canonical format for comparison",
+      "C": "Without sort, uniq would consume excessive memory",
+      "D": "wc -l requires sorted input to count lines correctly"
+    },
+    "answer": "A",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 19,
+    "question": "A script contains `VAR=$(cat /etc/hostname)`. What is this syntax called, and what does it do?",
+    "choices": {
+      "A": "Variable interpolation; it reads the variable /etc/hostname",
+      "B": "Command substitution; it runs `cat /etc/hostname` and assigns the output to VAR",
+      "C": "Process substitution; it creates a virtual file from the command",
+      "D": "Here-string; it feeds /etc/hostname as input to VAR"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 20,
+    "question": "Running `grep -P '(?<=port=)\\d+' config.txt` uses which grep feature?",
+    "choices": {
+      "A": "POSIX basic regular expressions",
+      "B": "Extended regular expressions (-E flag equivalent)",
+      "C": "Perl-compatible regular expressions with a lookbehind assertion",
+      "D": "Fixed string matching with numeric filtering"
+    },
+    "answer": "C",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 21,
+    "question": "An admin runs `env -i bash -c 'echo $PATH'` and gets an empty line or minimal output. What does `env -i` do?",
+    "choices": {
+      "A": "Runs the command in interactive mode",
+      "B": "Starts the command with a completely empty environment",
+      "C": "Initializes the environment from /etc/environment only",
+      "D": "Ignores the user's .bashrc and .profile"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 22,
+    "question": "The glob pattern `ls /etc/[!a-c]*` matches files in /etc whose names start with:",
+    "choices": {
+      "A": "Any character that is a, b, or c",
+      "B": "Any character that is NOT a, b, or c",
+      "C": "An exclamation mark followed by a through c",
+      "D": "Any character, because [!...] is not valid glob syntax"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 23,
+    "question": "A user runs `tar cz /home/user/docs 2>&1 | tee /tmp/tar.log > backup.tar.gz` and later finds the archive is corrupt. What likely went wrong?",
+    "choices": {
+      "A": "The tee command split the data stream, sending only half the bytes to the file",
+      "B": "The 2>&1 merged stderr messages into the tar data stream, corrupting the archive",
+      "C": "The > redirect truncated the file before tee could finish writing",
+      "D": "The gz compression is incompatible with piped output from tar"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 24,
+    "question": "What does the bash special variable `$?` contain after a command finishes?",
+    "choices": {
+      "A": "The PID of the last background process",
+      "B": "The exit status of the most recently executed foreground command",
+      "C": "The number of arguments passed to the current script",
+      "D": "The name of the current shell"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 25,
+    "question": "Running `mkfifo /tmp/mypipe` creates what type of file?",
+    "choices": {
+      "A": "A regular empty file",
+      "B": "A Unix domain socket",
+      "C": "A named pipe (FIFO)",
+      "D": "A block device file"
+    },
+    "answer": "C",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 26,
+    "question": "A script runs `trap 'rm -f /tmp/lockfile' EXIT`. When does the rm command execute?",
+    "choices": {
+      "A": "Only when the script receives SIGTERM",
+      "B": "Only when the script exits with a non-zero status",
+      "C": "Whenever the script exits for any reason (normal exit, error, or signal)",
+      "D": "Immediately when the trap line is parsed"
+    },
+    "answer": "C",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 27,
+    "question": "A developer runs `strace -e trace=open,read ls /tmp` and sees system call output. What is strace doing?",
+    "choices": {
+      "A": "Profiling CPU usage of the ls command",
+      "B": "Tracing only the open and read system calls made by ls",
+      "C": "Checking for memory leaks in ls",
+      "D": "Running ls inside a sandbox that restricts it to open and read calls"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 28,
+    "question": "The command `cut -d: -f1,7 /etc/passwd` outputs which fields from each line?",
+    "choices": {
+      "A": "The first 7 characters of each line",
+      "B": "Fields 1 through 7 using colon as delimiter",
+      "C": "Field 1 (username) and field 7 (login shell) using colon as delimiter",
+      "D": "Every field except 1 and 7"
+    },
+    "answer": "C",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 29,
+    "question": "A user runs `nohup ./long_script.sh &` and then closes the terminal. What happens to long_script.sh?",
+    "choices": {
+      "A": "It is killed because closing the terminal sends SIGHUP",
+      "B": "It continues running because nohup makes it immune to SIGHUP",
+      "C": "It is suspended until the user logs back in",
+      "D": "It continues only if the user ran `disown` first"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 30,
+    "question": "An admin needs to replace all occurrences of 'oldhost' with 'newhost' in a file in-place. They run `sed -i 's/oldhost/newhost/g' config.txt`. What does the `-i` flag do?",
+    "choices": {
+      "A": "Makes the substitution case-insensitive",
+      "B": "Edits the file in-place (modifies the original file directly)",
+      "C": "Runs in interactive mode, prompting before each replacement",
+      "D": "Inserts new lines instead of substituting"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "basic"
+  },
+  {
+    "id": 31,
+    "question": "Running `ls -ld /tmp` shows `drwxrwxrwt`. The `t` at the end indicates:",
+    "choices": {
+      "A": "The directory has the setgid bit set",
+      "B": "The directory has the sticky bit set, so only file owners can delete their own files",
+      "C": "The directory is a temporary filesystem mounted in RAM",
+      "D": "The directory has extended ACLs applied"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 32,
+    "question": "A user runs `xargs -0 rm < <(find /tmp -name '*.bak' -print0)`. Why is `-print0` paired with `xargs -0`?",
+    "choices": {
+      "A": "To enable parallel deletion of files",
+      "B": "To use null bytes as delimiters, safely handling filenames with spaces and newlines",
+      "C": "To limit the number of files deleted to zero errors",
+      "D": "To force find and xargs to operate in binary mode"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 33,
+    "question": "The bash variable `$!` contains:",
+    "choices": {
+      "A": "The exit status of the last command",
+      "B": "The process ID of the most recently backgrounded job",
+      "C": "The number of the last error that occurred",
+      "D": "A boolean indicating if the last command was a built-in"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 34,
+    "question": "A script contains `exec > >(tee -a /var/log/script.log) 2>&1`. What does this accomplish?",
+    "choices": {
+      "A": "It redirects all subsequent stdout and stderr to both the terminal and the log file",
+      "B": "It replaces the current process with the tee command",
+      "C": "It appends only stderr to the log file",
+      "D": "It creates a background process that monitors the log file"
+    },
+    "answer": "A",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 35,
+    "question": "An admin runs `lsof +D /var/log` and sees a list of processes. What information is this command providing?",
+    "choices": {
+      "A": "All deleted files that were in /var/log",
+      "B": "All processes that have open files anywhere under the /var/log directory",
+      "C": "Disk usage statistics for /var/log",
+      "D": "The directory structure of /var/log in tree format"
+    },
+    "answer": "B",
+    "category": "command_line",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 36,
+    "question": "An admin runs `df -h` and sees a filesystem at 100% usage, but `du -sh /*` totals only show 70% used. What is the most likely explanation?",
+    "choices": {
+      "A": "du does not count filesystem metadata and journal overhead",
+      "B": "Deleted files are still held open by running processes, consuming space not visible to du",
+      "C": "df includes swap space in its calculation but du does not",
+      "D": "The filesystem has compression enabled, and df shows uncompressed size"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 37,
+    "question": "A partition is formatted with ext4 and mounted at /data. The admin notices that 5% of the disk is reserved. Who is this space reserved for by default?",
+    "choices": {
+      "A": "The kernel ring buffer for crash recovery",
+      "B": "The root user, to prevent non-root users from filling the disk completely",
+      "C": "Filesystem journal transactions",
+      "D": "Snapshot storage for automatic backups"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 38,
+    "question": "An admin adds this line to /etc/fstab: `UUID=abc-123 /data ext4 defaults,noatime 0 2`. What does the `2` in the last field mean?",
+    "choices": {
+      "A": "The filesystem should be checked by fsck after the root filesystem",
+      "B": "The filesystem should be mounted with priority 2",
+      "C": "The filesystem should be backed up twice daily by dump",
+      "D": "The filesystem uses RAID level 2"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 39,
+    "question": "Running `ls -li file1 file2` shows both files have the same inode number. What does this mean?",
+    "choices": {
+      "A": "They are symbolic links pointing to the same target",
+      "B": "They are hard links -- two directory entries pointing to the same inode (same data on disk)",
+      "C": "One is a copy of the other with identical metadata",
+      "D": "They are on different filesystems that happen to reuse the same inode number"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 40,
+    "question": "An admin runs `mount -o remount,ro /data` on a busy filesystem and it fails. What must they do first?",
+    "choices": {
+      "A": "Unmount /data completely before remounting read-only",
+      "B": "Ensure no processes have open files for writing on /data, then retry",
+      "C": "Convert the filesystem to read-only mode using tune2fs",
+      "D": "Reboot the system because live remount is not supported"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 41,
+    "question": "The directory /proc on a Linux system is:",
+    "choices": {
+      "A": "A real on-disk filesystem containing process core dumps",
+      "B": "A virtual filesystem (procfs) providing kernel and process information as files",
+      "C": "A mount point for removable media",
+      "D": "A directory used only during system installation"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 42,
+    "question": "After running `chmod 2755 /shared/dir`, newly created files in that directory will:",
+    "choices": {
+      "A": "Be readable by all but only writable by the owner",
+      "B": "Inherit the group ownership of /shared/dir due to the setgid bit",
+      "C": "Have the sticky bit set, preventing deletion by non-owners",
+      "D": "Be executable by all users"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 43,
+    "question": "An admin is setting up LVM. They run `pvcreate /dev/sdb1`, then `vgcreate data_vg /dev/sdb1`, then `lvcreate -L 50G -n data_lv data_vg`. What is the correct order of the LVM hierarchy from bottom to top?",
+    "choices": {
+      "A": "Volume Group -> Physical Volume -> Logical Volume",
+      "B": "Physical Volume -> Volume Group -> Logical Volume",
+      "C": "Logical Volume -> Volume Group -> Physical Volume",
+      "D": "Physical Volume -> Logical Volume -> Volume Group"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 44,
+    "question": "A filesystem shows these permissions on a file: `-rwsr-xr-x root root /usr/bin/passwd`. What does the `s` in the owner execute position indicate?",
+    "choices": {
+      "A": "The file is a symbolic link",
+      "B": "The setuid bit is set, so the program runs with the file owner's (root) privileges",
+      "C": "The file is shared and can be executed by multiple users simultaneously",
+      "D": "The file is a system binary that cannot be modified"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 45,
+    "question": "An admin needs to extend a logical volume by 10GB and resize the ext4 filesystem on it. Which sequence is correct?",
+    "choices": {
+      "A": "resize2fs /dev/data_vg/data_lv, then lvextend -L +10G /dev/data_vg/data_lv",
+      "B": "lvextend -L +10G /dev/data_vg/data_lv, then resize2fs /dev/data_vg/data_lv",
+      "C": "vgextend data_vg +10G, then resize2fs /dev/data_vg/data_lv",
+      "D": "lvextend -L +10G /dev/data_vg/data_lv (the filesystem is resized automatically always)"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 46,
+    "question": "Running `ln -s /etc/nginx/sites-available/mysite /etc/nginx/sites-enabled/mysite` creates what?",
+    "choices": {
+      "A": "A hard link from sites-enabled to sites-available",
+      "B": "A symbolic link in sites-enabled pointing to the file in sites-available",
+      "C": "A copy of the configuration file in sites-enabled",
+      "D": "A bind mount of the sites-available directory"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 47,
+    "question": "An admin deletes a symbolic link's target file. What happens when they try to read the symlink?",
+    "choices": {
+      "A": "The symlink is automatically deleted",
+      "B": "The symlink becomes a 'dangling' link and reading it produces an error (No such file or directory)",
+      "C": "The symlink still works because it cached the file contents",
+      "D": "The symlink now points to /dev/null"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 48,
+    "question": "Why can't a hard link be created across different filesystems?",
+    "choices": {
+      "A": "Hard links require identical block sizes on both filesystems",
+      "B": "Hard links reference an inode number, and inode numbers are only unique within a single filesystem",
+      "C": "The kernel prohibits cross-filesystem links for security reasons",
+      "D": "Hard links rely on the same journal, which differs between filesystems"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 49,
+    "question": "An admin runs `tune2fs -l /dev/sda1` and sees 'Maximum mount count: -1'. What does this mean?",
+    "choices": {
+      "A": "The filesystem has been mounted once in read-only mode",
+      "B": "Automatic filesystem checking based on mount count is disabled",
+      "C": "The filesystem is corrupted and needs immediate fsck",
+      "D": "The filesystem does not support journaling"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 50,
+    "question": "An ext4 filesystem is running out of inodes (df -i shows 100% inode usage) but has free disk space. What is the likely cause?",
+    "choices": {
+      "A": "The disk has bad sectors consuming inode space",
+      "B": "A very large number of small files has been created, exhausting the fixed inode count",
+      "C": "The journal is consuming all available inodes",
+      "D": "Inode usage always mirrors disk space usage, so the df output is incorrect"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 51,
+    "question": "An admin wants to test a filesystem mount without persisting it. They run `mount /dev/sdb1 /mnt/test`. After a reboot, will /dev/sdb1 still be mounted at /mnt/test?",
+    "choices": {
+      "A": "Yes, mount always persists across reboots",
+      "B": "No, manual mount commands are not persistent; the entry must be in /etc/fstab to survive a reboot",
+      "C": "Yes, but only if the filesystem is ext4",
+      "D": "It depends on whether systemd is running"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 52,
+    "question": "Comparing XFS and ext4: what is a key difference in shrinking the filesystem?",
+    "choices": {
+      "A": "XFS supports online shrinking but ext4 does not",
+      "B": "ext4 can be shrunk (offline) but XFS does not support shrinking at all",
+      "C": "Both support online shrinking equally",
+      "D": "Neither filesystem supports shrinking under any circumstances"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 53,
+    "question": "The /etc/fstab field `defaults` is equivalent to which set of mount options?",
+    "choices": {
+      "A": "rw, suid, dev, exec, auto, nouser, async",
+      "B": "ro, nosuid, nodev, noexec, noauto, user, sync",
+      "C": "rw, nosuid, nodev, exec, auto, nouser, sync",
+      "D": "rw, suid, dev, exec, auto, user, async"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 54,
+    "question": "An admin runs `btrfs subvolume snapshot /data /data/.snap_20260226`. What type of snapshot does btrfs create by default?",
+    "choices": {
+      "A": "A full copy of all data blocks",
+      "B": "A read-write copy-on-write snapshot that initially shares data blocks with the original",
+      "C": "A compressed archive of the subvolume",
+      "D": "A read-only snapshot that cannot be modified"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 55,
+    "question": "An admin adds `usrquota,grpquota` to the mount options for /home in /etc/fstab. After remounting, what additional steps are needed to enforce disk quotas?",
+    "choices": {
+      "A": "No additional steps; quotas are active immediately after mounting with those options",
+      "B": "Run quotacheck to build the quota database, then quotaon to enable enforcement",
+      "C": "Edit /etc/security/limits.conf to set per-user disk limits",
+      "D": "Reboot the system and quotas become active automatically"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 56,
+    "question": "Running `dumpe2fs /dev/sda1 | grep -i 'block size'` returns `Block size: 4096`. An admin wants to store millions of tiny 100-byte files efficiently. What is the problem?",
+    "choices": {
+      "A": "The block size is too large; each tiny file still consumes at least one 4096-byte block, wasting space",
+      "B": "The block size is too small for modern disks and should be increased",
+      "C": "Block size has no effect on storage efficiency for small files",
+      "D": "The filesystem will refuse to store files smaller than the block size"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 57,
+    "question": "An admin observes that /dev/sda2 is an LVM physical volume. They want to add /dev/sdc1 to the same volume group `vg0`. Which command is correct?",
+    "choices": {
+      "A": "pvcreate /dev/sdc1 && vgextend vg0 /dev/sdc1",
+      "B": "vgcreate vg0 /dev/sdc1",
+      "C": "lvcreate -L 100%FREE vg0 /dev/sdc1",
+      "D": "pvmove /dev/sdc1 vg0"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 58,
+    "question": "What is stored in an inode on a Linux filesystem?",
+    "choices": {
+      "A": "The filename and the file's data blocks",
+      "B": "Metadata such as permissions, ownership, timestamps, and pointers to data blocks, but NOT the filename",
+      "C": "Only the file's data content",
+      "D": "The filename, permissions, and a pointer to the parent directory"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "basic"
+  },
+  {
+    "id": 59,
+    "question": "An admin runs `findmnt --target /home` and sees `TYPE: ext4` and `OPTIONS: rw,relatime`. What does `relatime` do?",
+    "choices": {
+      "A": "Updates the access time only if the previous access time is older than the modify time, or more than 24 hours old",
+      "B": "Disables all access time updates completely",
+      "C": "Records relative timestamps instead of absolute ones",
+      "D": "Updates access time on every single read operation"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 60,
+    "question": "The FHS specifies /usr/local as the directory for:",
+    "choices": {
+      "A": "User home directories on local (non-networked) systems",
+      "B": "Locally installed software that should not be overwritten by system package updates",
+      "C": "Temporary files that are local to the current boot session",
+      "D": "Locale and internationalization data files"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 61,
+    "question": "An admin runs `mount -o bind /var/log /mnt/log_view`. What does a bind mount do?",
+    "choices": {
+      "A": "Creates a new filesystem formatted identically to /var/log",
+      "B": "Makes the contents of /var/log accessible at /mnt/log_view without a separate device; both paths show the same directory tree",
+      "C": "Creates a symbolic link from /mnt/log_view to /var/log",
+      "D": "Mounts a loopback device containing a copy of /var/log"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 62,
+    "question": "Running `chmod o+t /shared` sets the sticky bit on the directory. After this, which statement is true?",
+    "choices": {
+      "A": "Files in /shared can only be listed by the directory owner",
+      "B": "Files in /shared can be read by anyone but only deleted or renamed by their owner, the directory owner, or root",
+      "C": "New files in /shared inherit the ownership of the directory",
+      "D": "The sticky bit prevents any user from creating new files"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 63,
+    "question": "An admin runs `mkfs.ext4 -N 2000000 /dev/sdb1`. What does the `-N 2000000` flag do?",
+    "choices": {
+      "A": "Sets the filesystem label to 2000000",
+      "B": "Creates the filesystem with exactly 2,000,000 inodes",
+      "C": "Limits the filesystem to 2,000,000 blocks",
+      "D": "Sets the block count to 2 million for a reserved pool"
+    },
+    "answer": "B",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 64,
+    "question": "A file has permissions `---x--s--x`. What do the second `s` and the trailing `x` indicate in the group and other fields?",
+    "choices": {
+      "A": "The setgid bit is set with group execute permission, and others have execute permission",
+      "B": "The setuid bit is set with group read permission",
+      "C": "The sticky bit is set and others have write permission",
+      "D": "The file is a socket with special permissions"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 65,
+    "question": "An admin wants to monitor disk I/O in real time. Which command provides per-device I/O statistics updated at regular intervals?",
+    "choices": {
+      "A": "iostat -x 2",
+      "B": "df -h --interval=2",
+      "C": "du --watch /dev/sda",
+      "D": "mount --stats /dev/sda"
+    },
+    "answer": "A",
+    "category": "filesystems",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 66,
+    "question": "An admin runs `apt update` and sees 'Hit', 'Get', and 'Ign' prefixes in the output. What does 'Ign' mean?",
+    "choices": {
+      "A": "The repository returned an HTTP 403 Forbidden error",
+      "B": "The requested file does not exist for that suite or component, and apt ignored the missing entry",
+      "C": "The repository metadata was downloaded successfully without changes",
+      "D": "The GPG signature check for that repository failed but was bypassed"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 67,
+    "question": "Running `dpkg -L nginx` outputs a list. What does this list contain?",
+    "choices": {
+      "A": "All packages that depend on nginx",
+      "B": "All files installed by the nginx package",
+      "C": "All available versions of nginx in configured repositories",
+      "D": "The changelog of the nginx package"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 68,
+    "question": "An admin finds a file `/usr/lib/libfoo.so.2` and wants to know which installed package it belongs to. Which command determines this?",
+    "choices": {
+      "A": "apt search libfoo",
+      "B": "dpkg -S /usr/lib/libfoo.so.2",
+      "C": "apt-cache depends libfoo",
+      "D": "dpkg --configure libfoo"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 69,
+    "question": "An `apt upgrade` is interrupted by a power failure, leaving dpkg in an inconsistent state. Which command attempts to fix this?",
+    "choices": {
+      "A": "apt autoremove",
+      "B": "dpkg --configure -a",
+      "C": "apt-cache clean",
+      "D": "dpkg --purge --force-all"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 70,
+    "question": "The file /etc/apt/sources.list contains the line: `deb http://deb.debian.org/debian bookworm main contrib non-free`. What does 'contrib' represent?",
+    "choices": {
+      "A": "Packages contributed by third-party developers outside of Debian",
+      "B": "Free packages that depend on packages in the non-free section",
+      "C": "Package contributions that have not yet been reviewed",
+      "D": "Optional documentation packages"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 71,
+    "question": "An admin runs `apt-mark hold nginx`. What is the effect?",
+    "choices": {
+      "A": "nginx is pinned to a specific repository",
+      "B": "nginx is prevented from being upgraded, removed, or installed by apt",
+      "C": "nginx is marked as manually installed so it won't be autoremoved",
+      "D": "nginx's configuration files are protected from being overwritten"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 72,
+    "question": "Running `apt-cache policy nginx` shows multiple versions with different priorities. What does a priority of 100 typically indicate?",
+    "choices": {
+      "A": "The package is the highest priority and will always be selected",
+      "B": "The package is currently installed",
+      "C": "The package version is from the default release",
+      "D": "The package is marked for removal"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 73,
+    "question": "A .deb package file is actually what type of archive?",
+    "choices": {
+      "A": "A gzip-compressed tar archive",
+      "B": "An ar archive containing control.tar and data.tar archives",
+      "C": "A ZIP file with a special manifest",
+      "D": "A cpio archive with dpkg headers"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 74,
+    "question": "An admin wants to install a package from the testing repository while keeping the system on the stable release. They create /etc/apt/preferences.d/pin with apt pinning rules. Which Pin-Priority value would make the testing package install only when explicitly requested?",
+    "choices": {
+      "A": "1001 -- forces install of the pinned version",
+      "B": "100 -- makes it available only when explicitly targeted",
+      "C": "500 -- default priority for target release",
+      "D": "-1 -- never installs the package"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 75,
+    "question": "Running `apt install ./package.deb` (with the leading `./`) differs from `dpkg -i package.deb` in what key way?",
+    "choices": {
+      "A": "apt also resolves and installs missing dependencies from configured repositories",
+      "B": "There is no difference; apt simply calls dpkg internally",
+      "C": "apt installs the package in a sandbox",
+      "D": "dpkg resolves dependencies but apt does not"
+    },
+    "answer": "A",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 76,
+    "question": "An admin runs `apt autoremove` and 15 packages are listed for removal. What are these packages?",
+    "choices": {
+      "A": "Packages that have newer versions available",
+      "B": "Packages that were automatically installed as dependencies and are no longer required by any installed package",
+      "C": "Packages that have known security vulnerabilities",
+      "D": "Packages from disabled repositories"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 77,
+    "question": "The command `dpkg --purge nginx` differs from `dpkg --remove nginx` in that purge also:",
+    "choices": {
+      "A": "Removes the package's dependencies",
+      "B": "Removes the package's configuration files in addition to its installed files",
+      "C": "Forces removal even if other packages depend on it",
+      "D": "Removes the package from the apt cache"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 78,
+    "question": "An admin adds a third-party APT repository and runs `apt update`, but gets a 'NO_PUBKEY' error. What must they do?",
+    "choices": {
+      "A": "Disable GPG checking in apt.conf",
+      "B": "Import the repository's GPG key so apt can verify the package signatures",
+      "C": "Convert the repository to use HTTP instead of HTTPS",
+      "D": "Reinstall the apt package to refresh the keyring"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 79,
+    "question": "Running `dpkg -l | grep '^rc'` shows packages in the 'rc' state. What does 'rc' mean?",
+    "choices": {
+      "A": "Recently configured -- packages configured but not yet used",
+      "B": "Removed but configuration files are still present on the system",
+      "C": "Release candidate -- packages in a pre-release state",
+      "D": "Recursively installed -- packages installed as dependencies"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 80,
+    "question": "An admin runs `apt-cache rdepends nginx`. What does this output show?",
+    "choices": {
+      "A": "The packages that nginx depends on",
+      "B": "All packages that depend on (require) nginx -- the reverse dependencies",
+      "C": "The recommended packages for nginx",
+      "D": "The repository from which nginx was downloaded"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 81,
+    "question": "On a Red Hat-based system, the equivalent of `dpkg -S /path/to/file` (finding which package owns a file) is:",
+    "choices": {
+      "A": "yum whatprovides /path/to/file",
+      "B": "rpm -qf /path/to/file",
+      "C": "dnf deplist /path/to/file",
+      "D": "rpm -qa /path/to/file"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 82,
+    "question": "What is the primary difference between `apt upgrade` and `apt full-upgrade`?",
+    "choices": {
+      "A": "apt upgrade only updates security patches; full-upgrade updates everything",
+      "B": "apt upgrade will never remove packages, while full-upgrade may remove packages if needed to resolve dependency changes",
+      "C": "full-upgrade upgrades the kernel but apt upgrade does not",
+      "D": "There is no difference; they are aliases for the same operation"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 83,
+    "question": "An admin wants to download a .deb package without installing it. Which command achieves this?",
+    "choices": {
+      "A": "apt download nginx",
+      "B": "apt install --dry-run nginx",
+      "C": "dpkg --unpack nginx",
+      "D": "apt-cache fetch nginx"
+    },
+    "answer": "A",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 84,
+    "question": "A Snap package runs in a confined environment. What is the primary security mechanism Snap uses for confinement?",
+    "choices": {
+      "A": "chroot jails",
+      "B": "AppArmor profiles and seccomp filters",
+      "C": "SELinux mandatory access control exclusively",
+      "D": "Docker containers running inside snapd"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 85,
+    "question": "Running `apt-cache showsrc nginx` displays information about:",
+    "choices": {
+      "A": "The compiled binary package nginx",
+      "B": "The source package that builds the nginx binary package(s)",
+      "C": "The source code repository URL for nginx",
+      "D": "All screenshots available for the nginx package"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 86,
+    "question": "An admin configures an APT proxy by adding `Acquire::http::Proxy \"http://proxy:3128\";` to which file?",
+    "choices": {
+      "A": "/etc/environment",
+      "B": "/etc/apt/apt.conf or a file in /etc/apt/apt.conf.d/",
+      "C": "/etc/apt/sources.list",
+      "D": "/etc/proxy.conf"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 87,
+    "question": "On an Arch Linux system, `pacman -Syu` performs which operations?",
+    "choices": {
+      "A": "Installs a package named 'syu'",
+      "B": "Synchronizes the package database (-Sy) and then upgrades all installed packages (-u)",
+      "C": "Removes unused packages and cleans the cache",
+      "D": "Searches for packages matching the pattern 'yu'"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 88,
+    "question": "Flatpak applications differ from traditional .deb packages primarily in that Flatpak:",
+    "choices": {
+      "A": "Installs directly into /usr and shares all system libraries",
+      "B": "Bundles its own runtime dependencies, providing isolation from the host system's libraries",
+      "C": "Requires root access for all operations",
+      "D": "Can only be installed from the Debian repositories"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 89,
+    "question": "An admin runs `dpkg --configure -a` after a failed upgrade. This command:",
+    "choices": {
+      "A": "Downloads and reinstalls all broken packages",
+      "B": "Attempts to configure all packages that have been unpacked but not yet configured",
+      "C": "Reverts all packages to their previous versions",
+      "D": "Clears the dpkg lock file and resets the database"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 90,
+    "question": "The file /etc/apt/apt.conf.d/50unattended-upgrades is used to:",
+    "choices": {
+      "A": "Schedule automatic security updates with fine-grained control over which packages are upgraded",
+      "B": "Disable all automatic updates system-wide",
+      "C": "Configure apt proxy settings for unattended machines",
+      "D": "Define the order in which packages are upgraded"
+    },
+    "answer": "A",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 91,
+    "question": "Running `apt-mark showmanual` lists packages that:",
+    "choices": {
+      "A": "Have manual pages installed",
+      "B": "Were explicitly installed by the user (not pulled in as automatic dependencies)",
+      "C": "Require manual configuration after installation",
+      "D": "Are on hold and must be manually upgraded"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 92,
+    "question": "An admin runs `dpkg-deb -x package.deb /tmp/extract`. What does this do?",
+    "choices": {
+      "A": "Installs the package into /tmp/extract instead of the system root",
+      "B": "Extracts the data files from the .deb archive into /tmp/extract without installing",
+      "C": "Executes the package's post-installation scripts in /tmp/extract",
+      "D": "Verifies the package checksums and extracts a report"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 93,
+    "question": "An admin needs to prevent a specific version of a package from being installed via apt pinning. They set Pin-Priority to:",
+    "choices": {
+      "A": "1001 to force-block the package",
+      "B": "-1 to ensure the version is never installed",
+      "C": "0 to mark it as neutral",
+      "D": "100 to deprioritize it below default"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 94,
+    "question": "On a Debian system, `apt-key` has been deprecated. The recommended method for managing repository GPG keys is now:",
+    "choices": {
+      "A": "Placing the keyring file in /etc/apt/trusted.gpg.d/ or using signed-by in the source entry",
+      "B": "Using gpg --import to add keys to the user's keyring",
+      "C": "Disabling GPG verification entirely",
+      "D": "Embedding the key directly in /etc/apt/sources.list"
+    },
+    "answer": "A",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 95,
+    "question": "Running `yum provides '*/nginx.conf'` on a RHEL-based system will:",
+    "choices": {
+      "A": "Install the package that provides nginx.conf",
+      "B": "Search all repositories for packages that contain a file matching the path pattern */nginx.conf",
+      "C": "Display the contents of nginx.conf from the installed package",
+      "D": "Create a new nginx.conf file from a template"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 96,
+    "question": "An admin runs `apt clean`. What is removed?",
+    "choices": {
+      "A": "All installed packages matching a clean pattern",
+      "B": "All downloaded .deb files from the local apt cache (/var/cache/apt/archives/)",
+      "C": "Orphaned configuration files from removed packages",
+      "D": "Empty directories left behind by removed packages"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 97,
+    "question": "The `dpkg --compare-versions '2.1.0' gt '2.0.10'` command returns exit code 0. What does this confirm?",
+    "choices": {
+      "A": "Version 2.1.0 is greater than 2.0.10 according to Debian version comparison rules",
+      "B": "Both versions are equal",
+      "C": "Version 2.0.10 is greater because 10 > 0",
+      "D": "The command does not perform version comparison; it checks string equality"
+    },
+    "answer": "A",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 98,
+    "question": "On a Fedora system, `dnf history undo last` will:",
+    "choices": {
+      "A": "Undo the last dnf transaction, reverting installs, upgrades, or removals performed",
+      "B": "Clear the dnf history log",
+      "C": "Reboot the system to the last known-good state",
+      "D": "Remove all packages installed in the current session"
+    },
+    "answer": "A",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 99,
+    "question": "An admin runs `apt list --upgradable`. This command shows:",
+    "choices": {
+      "A": "All installed packages on the system",
+      "B": "Packages that have newer versions available in the configured repositories",
+      "C": "Packages that were recently upgraded",
+      "D": "Packages from third-party repositories only"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "basic"
+  },
+  {
+    "id": 100,
+    "question": "A .deb package's control.tar archive contains a `preinst` script. When does this script execute?",
+    "choices": {
+      "A": "After the package files have been fully unpacked and configured",
+      "B": "Before the package's files are unpacked onto the filesystem",
+      "C": "Only during package removal, before files are deleted",
+      "D": "During apt update, when repository metadata is fetched"
+    },
+    "answer": "B",
+    "category": "package_management",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 101,
+    "question": "A sysadmin runs `ps aux` and sees a process in state `Z`. What does this indicate?",
+    "choices": {
+      "A": "The process is sleeping and waiting for I/O",
+      "B": "The process has terminated but its parent has not yet called wait() to collect its exit status",
+      "C": "The process is stopped by a signal such as SIGTSTP",
+      "D": "The process is actively running on a CPU core"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 102,
+    "question": "You want to send a process with PID 4821 the default termination signal. Which command does this?",
+    "choices": {
+      "A": "kill -9 4821",
+      "B": "kill -SIGKILL 4821",
+      "C": "kill 4821",
+      "D": "kill -STOP 4821"
+    },
+    "answer": "C",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 103,
+    "question": "Which signal cannot be caught or ignored by a process?",
+    "choices": {
+      "A": "SIGTERM",
+      "B": "SIGHUP",
+      "C": "SIGKILL",
+      "D": "SIGUSR1"
+    },
+    "answer": "C",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 104,
+    "question": "A user types `sleep 300 &` in a terminal. What happens to the sleep process?",
+    "choices": {
+      "A": "It runs in the foreground and blocks the terminal for 300 seconds",
+      "B": "It is placed in the background and the shell immediately returns a prompt",
+      "C": "It is suspended and must be resumed with fg",
+      "D": "It is immediately killed because sleep cannot run in the background"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 105,
+    "question": "Which command shows the current crontab entries for the logged-in user?",
+    "choices": {
+      "A": "crontab -e",
+      "B": "crontab -l",
+      "C": "crontab -r",
+      "D": "cat /etc/crontab"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 106,
+    "question": "A process has a nice value of 19. What does this mean about its scheduling priority?",
+    "choices": {
+      "A": "It has the highest scheduling priority among user processes",
+      "B": "It has the lowest scheduling priority, yielding CPU to other processes",
+      "C": "It runs in real-time scheduling mode",
+      "D": "It is pinned to CPU core 19"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 107,
+    "question": "You run `systemctl status sshd` and see 'Active: inactive (dead)'. What does this mean?",
+    "choices": {
+      "A": "The sshd service is running but not accepting connections",
+      "B": "The sshd service is not currently running",
+      "C": "The sshd unit file is missing",
+      "D": "The sshd service is in a failed state due to a crash"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 108,
+    "question": "Which cron schedule expression means 'every day at 3:30 AM'?",
+    "choices": {
+      "A": "30 3 * * *",
+      "B": "3 30 * * *",
+      "C": "* * 3 30 *",
+      "D": "30 3 1 * *"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 109,
+    "question": "A user wants to bring background job number 2 to the foreground. Which command is correct?",
+    "choices": {
+      "A": "bg %2",
+      "B": "fg %2",
+      "C": "jobs -f 2",
+      "D": "resume %2"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 110,
+    "question": "What is the PID of the init/systemd process on a standard Linux system?",
+    "choices": {
+      "A": "0",
+      "B": "1",
+      "C": "It varies on each boot",
+      "D": "-1"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 111,
+    "question": "Which file in the /proc filesystem shows the command line used to start process 1234?",
+    "choices": {
+      "A": "/proc/1234/status",
+      "B": "/proc/1234/cmdline",
+      "C": "/proc/1234/maps",
+      "D": "/proc/1234/environ"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 112,
+    "question": "Which command starts the nginx service and also configures it to start automatically on boot?",
+    "choices": {
+      "A": "systemctl start nginx && systemctl enable nginx",
+      "B": "systemctl restart nginx",
+      "C": "systemctl reload nginx",
+      "D": "systemctl mask nginx"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "basic"
+  },
+  {
+    "id": 113,
+    "question": "A process is in state `D` (uninterruptible sleep). An admin sends it `kill -9`. What happens?",
+    "choices": {
+      "A": "The process is immediately terminated",
+      "B": "The signal is queued but the process will not die until it returns from the kernel I/O operation",
+      "C": "The signal is silently discarded because SIGKILL has no effect on D-state processes",
+      "D": "The process transitions to Z state immediately"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 114,
+    "question": "A crontab entry reads `*/15 8-17 * * 1-5 /usr/local/bin/report.sh`. When does this job run?",
+    "choices": {
+      "A": "Every 15 minutes on weekdays between 8:00 AM and 5:59 PM",
+      "B": "At 15 minutes past every hour on weekdays",
+      "C": "Every 15 minutes, all day, every day",
+      "D": "Every 15 minutes on weekdays between 8:00 AM and 5:00 PM only"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 115,
+    "question": "An admin runs `nohup ./long_task.sh &` and then logs out. What happens to the process?",
+    "choices": {
+      "A": "It receives SIGHUP and terminates when the session ends",
+      "B": "It continues running because nohup prevents SIGHUP from terminating it",
+      "C": "It is suspended until the user logs back in",
+      "D": "It is automatically moved to a systemd user slice and paused"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 116,
+    "question": "You want to lower the priority of a running process with PID 5500 to nice value 10. Which command works for a non-root user who owns the process?",
+    "choices": {
+      "A": "renice -n 10 -p 5500",
+      "B": "renice -n -10 -p 5500",
+      "C": "nice -n 10 5500",
+      "D": "renice -n 10 -u root"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 117,
+    "question": "After running `systemctl enable myapp.service`, the service does not start. Why?",
+    "choices": {
+      "A": "enable is broken and requires a reboot to take effect",
+      "B": "enable only creates the symlink for automatic startup on boot; it does not start the service immediately",
+      "C": "enable requires --now by default but the flag was not recognized",
+      "D": "The unit file must first be reloaded with daemon-reload before enable works"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 118,
+    "question": "An admin needs to view only the kernel messages from the last boot in the systemd journal. Which command achieves this?",
+    "choices": {
+      "A": "journalctl -b -k",
+      "B": "journalctl --user -b",
+      "C": "journalctl -f",
+      "D": "journalctl --disk-usage"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 119,
+    "question": "A script should execute exactly once at 11:00 PM tonight. Which tool is most appropriate?",
+    "choices": {
+      "A": "cron with a one-time entry",
+      "B": "at 11:00 PM",
+      "C": "systemd-run --on-boot",
+      "D": "sleep until 11 PM in a background process"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 120,
+    "question": "Running `ulimit -n` returns 1024. What does this limit?",
+    "choices": {
+      "A": "The maximum number of open file descriptors per process",
+      "B": "The maximum number of processes the user can create",
+      "C": "The maximum file size in kilobytes",
+      "D": "The maximum number of network connections"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 121,
+    "question": "A user runs `kill -HUP $(cat /var/run/nginx.pid)`. What is the typical effect on nginx?",
+    "choices": {
+      "A": "nginx is forcefully killed immediately",
+      "B": "nginx gracefully reloads its configuration without dropping connections",
+      "C": "nginx dumps core for debugging",
+      "D": "nginx pauses all processing until another signal is sent"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 122,
+    "question": "An admin sees many zombie processes under a single parent. What is the most effective fix?",
+    "choices": {
+      "A": "Send SIGKILL to each zombie process individually",
+      "B": "Fix or restart the parent process so it properly calls wait() on its children",
+      "C": "Increase the system process limit with ulimit -u",
+      "D": "Run sync to flush zombies from the process table"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 123,
+    "question": "A user presses Ctrl+Z while a program is running in the foreground. They then run `ps -eo pid,ppid,stat,cmd` and see that the program's STAT column shows `T`. What does this indicate?",
+    "choices": {
+      "A": "The process is in uninterruptible sleep waiting for disk I/O",
+      "B": "The process is a zombie awaiting parent cleanup",
+      "C": "The process has been stopped by the SIGTSTP signal from Ctrl+Z",
+      "D": "The process has entered a CPU throttled state due to cgroup limits"
+    },
+    "answer": "C",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 124,
+    "question": "Which command correctly shows only the logs for the apache2 systemd unit since yesterday?",
+    "choices": {
+      "A": "journalctl -u apache2 --since yesterday",
+      "B": "journalctl apache2 --after yesterday",
+      "C": "systemctl logs apache2 --since yesterday",
+      "D": "journalctl -f -u apache2 yesterday"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 125,
+    "question": "A systemd timer unit has `OnCalendar=Mon *-*-* 06:00:00`. When does this timer trigger?",
+    "choices": {
+      "A": "Every Monday at 6:00 AM",
+      "B": "Every day at 6:00 AM",
+      "C": "Every month on the 1st Monday at 6:00 AM",
+      "D": "Only on the first Monday of each year at 6:00 AM"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 126,
+    "question": "A user checks /proc/loadavg and sees `4.50 3.20 1.80 2/350 9812`. The system has 2 CPU cores. What does this indicate?",
+    "choices": {
+      "A": "The system is idle with low CPU demand over the past 15 minutes",
+      "B": "The 1-minute load average shows the system is significantly overloaded relative to its CPU count",
+      "C": "There are 4.5 processes currently running on the CPU",
+      "D": "The system has 4.5 GB of memory in use"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 127,
+    "question": "A sysadmin wants to prevent a systemd service from being started, even manually. Which command achieves this?",
+    "choices": {
+      "A": "systemctl disable myservice",
+      "B": "systemctl stop myservice",
+      "C": "systemctl mask myservice",
+      "D": "systemctl freeze myservice"
+    },
+    "answer": "C",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 128,
+    "question": "A process sends SIGUSR1 to itself. The process has not registered a handler for SIGUSR1. What happens?",
+    "choices": {
+      "A": "The signal is silently ignored",
+      "B": "The process is terminated (default action for SIGUSR1)",
+      "C": "The process dumps core",
+      "D": "The process is stopped"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 129,
+    "question": "An admin configures a systemd service with `Restart=on-failure` and `RestartSec=5`. The service exits with code 0. What happens?",
+    "choices": {
+      "A": "systemd restarts the service after 5 seconds",
+      "B": "systemd does not restart the service because exit code 0 indicates success, not failure",
+      "C": "systemd marks the unit as failed",
+      "D": "systemd restarts the service immediately without waiting"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 130,
+    "question": "A cgroup v2 memory.max is set to 512M for a slice. A process in that slice tries to allocate memory beyond this limit. What happens?",
+    "choices": {
+      "A": "The kernel silently ignores the cgroup limit",
+      "B": "The OOM killer is invoked to kill a process within the cgroup",
+      "C": "The allocation succeeds but the process is throttled",
+      "D": "The process is moved to a different cgroup automatically"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 131,
+    "question": "An admin needs to trace all system calls made by a running process with PID 7890 without stopping it. Which command is appropriate?",
+    "choices": {
+      "A": "strace -p 7890",
+      "B": "ltrace -S 7890",
+      "C": "gdb attach 7890",
+      "D": "perf record -p 7890"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 132,
+    "question": "A database service configured with Type=notify in its systemd unit occasionally reports activation timeouts. The daemon itself logs successful initialization within 5 seconds. What is the most likely explanation?",
+    "choices": {
+      "A": "The daemon binary does not call the sd_notify readiness protocol",
+      "B": "The TimeoutStartSec value is set to zero",
+      "C": "The service needs Type=simple instead to detect the listening socket",
+      "D": "journald is dropping the startup log messages before systemd reads them"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 133,
+    "question": "An admin examines /proc/5000/fd and sees symlinks to various files. What does each entry represent?",
+    "choices": {
+      "A": "Shared library files loaded by the process",
+      "B": "Open file descriptors held by process 5000",
+      "C": "Files that process 5000 has recently deleted",
+      "D": "Memory-mapped regions of the process"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 134,
+    "question": "A sysadmin runs `nice -n -5 ./compute.sh` as a regular user and sees `nice: cannot set niceness: Permission denied` on stderr, but the script still runs. Why did the script execute despite the error?",
+    "choices": {
+      "A": "The shell automatically retried with nice value 0 after the first failure",
+      "B": "POSIX requires nice to still invoke the command even if setting the priority fails",
+      "C": "The error message was from a previous command in the shell history",
+      "D": "The kernel silently clamped the nice value to 0 and allowed the process to start"
+    },
+    "answer": "B",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 135,
+    "question": "A systemd timer has `OnBootSec=15min` and `OnUnitActiveSec=1h`. How does this timer behave?",
+    "choices": {
+      "A": "It fires 15 minutes after boot, then every hour after the associated service unit last activated",
+      "B": "It fires only once, 15 minutes after boot",
+      "C": "It fires every 15 minutes and every hour simultaneously",
+      "D": "It fires every hour starting 15 minutes after midnight"
+    },
+    "answer": "A",
+    "category": "processes",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 136,
+    "question": "Which command displays all IP addresses assigned to all network interfaces?",
+    "choices": {
+      "A": "ip addr show",
+      "B": "ip route show",
+      "C": "ip link show",
+      "D": "ip neigh show"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 137,
+    "question": "A user runs `ping -c 4 8.8.8.8` and receives replies. What does this confirm?",
+    "choices": {
+      "A": "DNS resolution is working correctly",
+      "B": "The host has IP connectivity to 8.8.8.8 and ICMP is not blocked along the path",
+      "C": "The web server at 8.8.8.8 is serving HTTP traffic",
+      "D": "The local firewall is completely disabled"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 138,
+    "question": "Which file is traditionally used to map hostnames to IP addresses locally, before DNS is queried?",
+    "choices": {
+      "A": "/etc/resolv.conf",
+      "B": "/etc/hosts",
+      "C": "/etc/hostname",
+      "D": "/etc/nsswitch.conf"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 139,
+    "question": "An admin runs `ss -tlnp`. What does this show?",
+    "choices": {
+      "A": "All established TCP connections with process information",
+      "B": "All TCP sockets in the listening state with numeric ports and associated process names",
+      "C": "All UDP sockets with routing information",
+      "D": "All UNIX domain sockets"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 140,
+    "question": "What does the command `curl -I https://example.com` return?",
+    "choices": {
+      "A": "The full HTML body of the page",
+      "B": "Only the HTTP response headers",
+      "C": "The SSL certificate details",
+      "D": "The DNS lookup results for example.com"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 141,
+    "question": "Which command shows the current default gateway on a Linux system?",
+    "choices": {
+      "A": "ip route show default",
+      "B": "ip addr show",
+      "C": "ip link show",
+      "D": "ip neigh show"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 142,
+    "question": "An admin edits /etc/resolv.conf and adds `nameserver 1.1.1.1`. What is the effect?",
+    "choices": {
+      "A": "The system will use 1.1.1.1 as a DNS resolver",
+      "B": "The system will route all traffic through 1.1.1.1",
+      "C": "The system's hostname changes to 1.1.1.1",
+      "D": "The system will block all DNS queries"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 143,
+    "question": "Which command downloads a file from a URL and saves it to disk?",
+    "choices": {
+      "A": "curl https://example.com/file.tar.gz (with no flags)",
+      "B": "wget https://example.com/file.tar.gz",
+      "C": "ssh https://example.com/file.tar.gz",
+      "D": "scp https://example.com/file.tar.gz ."
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 144,
+    "question": "What does `traceroute example.com` show?",
+    "choices": {
+      "A": "The SSL certificate chain for example.com",
+      "B": "The network hops (routers) between the local host and example.com",
+      "C": "The open ports on example.com",
+      "D": "The DNS records for example.com"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 145,
+    "question": "An admin runs `ip link set eth0 down`. What happens?",
+    "choices": {
+      "A": "The IP address of eth0 is removed but the interface stays up",
+      "B": "The network interface eth0 is administratively disabled",
+      "C": "The eth0 interface is permanently deleted",
+      "D": "The MTU of eth0 is set to 0"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 146,
+    "question": "Which command is used to check which process is listening on TCP port 443?",
+    "choices": {
+      "A": "ss -tlnp | grep :443",
+      "B": "ip route get 443",
+      "C": "ping -p 443 localhost",
+      "D": "traceroute -p 443 localhost"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 147,
+    "question": "A user can ping 8.8.8.8 but cannot reach google.com by name. What is the most likely cause?",
+    "choices": {
+      "A": "The default gateway is missing",
+      "B": "DNS resolution is not working",
+      "C": "The network interface is down",
+      "D": "IP forwarding is disabled"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "basic"
+  },
+  {
+    "id": 148,
+    "question": "An admin runs `ssh -L 8080:dbserver:5432 jumphost`. What does this create?",
+    "choices": {
+      "A": "A reverse tunnel from jumphost port 8080 to the local machine",
+      "B": "A local port forward: connections to localhost:8080 are tunneled through jumphost to dbserver:5432",
+      "C": "A SOCKS proxy on port 8080 via jumphost",
+      "D": "A direct connection to dbserver:5432 bypassing jumphost"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 149,
+    "question": "An iptables rule reads: `iptables -A INPUT -p tcp --dport 22 -s 10.0.0.0/8 -j ACCEPT`. What does it do?",
+    "choices": {
+      "A": "Blocks SSH traffic from the 10.0.0.0/8 network",
+      "B": "Accepts incoming TCP connections to port 22 from the 10.0.0.0/8 network",
+      "C": "Forwards port 22 traffic to the 10.0.0.0/8 network",
+      "D": "Logs all SSH connection attempts from 10.0.0.0/8"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 150,
+    "question": "An admin runs `nmcli connection modify eth0 ipv4.method manual ipv4.addresses 192.168.1.50/24 ipv4.gateway 192.168.1.1`. What must be done next for the change to take effect?",
+    "choices": {
+      "A": "Nothing; changes are applied immediately",
+      "B": "Reboot the entire system",
+      "C": "Bring the connection down and up again, or run nmcli connection up eth0",
+      "D": "Run systemctl restart systemd-networkd"
+    },
+    "answer": "C",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 151,
+    "question": "A server has `net.ipv4.ip_forward=0` in sysctl. What is the effect?",
+    "choices": {
+      "A": "The server cannot receive any incoming packets",
+      "B": "The server will not forward packets between its network interfaces (no routing)",
+      "C": "The server cannot establish outbound connections",
+      "D": "The server drops all ICMP packets"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 152,
+    "question": "An admin captures traffic with `tcpdump -i eth0 -nn port 53`. What does this capture?",
+    "choices": {
+      "A": "All HTTP traffic on eth0",
+      "B": "All DNS traffic (TCP and UDP on port 53) on interface eth0 with numeric output",
+      "C": "Only TCP traffic on port 53",
+      "D": "All traffic on eth0 except port 53"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 153,
+    "question": "A host's ARP table shows an entry `192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff STALE`. What does the STALE state mean?",
+    "choices": {
+      "A": "The entry is invalid and will cause packet drops",
+      "B": "The entry was previously valid but has not been recently confirmed; it will be revalidated when needed",
+      "C": "The MAC address has changed and the entry is incorrect",
+      "D": "The ARP entry was manually added and is permanent"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 154,
+    "question": "Which SSH configuration directive in ~/.ssh/config prevents SSH from asking about unknown host keys?",
+    "choices": {
+      "A": "StrictHostKeyChecking no",
+      "B": "PasswordAuthentication no",
+      "C": "ForwardAgent yes",
+      "D": "HostKeyAlgorithms none"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 155,
+    "question": "A Debian server has a VLAN sub-interface eth0.100 configured. Traffic sent from this interface arrives at the remote switch but is placed on the native VLAN instead of VLAN 100. The switch trunk port is configured correctly. What should the admin check on the Linux side?",
+    "choices": {
+      "A": "Whether the parent interface eth0 has an IP address that conflicts with eth0.100",
+      "B": "Whether the application is binding to eth0 instead of eth0.100",
+      "C": "Whether the default route points through eth0 rather than eth0.100",
+      "D": "Whether the switch requires 802.1ad (QinQ) instead of standard 802.1Q tagging"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 156,
+    "question": "A web server listens on port 8080. The admin runs `ufw allow 8080/tcp`. What is the effect?",
+    "choices": {
+      "A": "All outbound traffic on port 8080 is allowed",
+      "B": "Incoming TCP traffic to port 8080 is allowed through the firewall",
+      "C": "Port 8080 is forwarded to port 80",
+      "D": "All traffic on port 8080 is blocked"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 157,
+    "question": "An admin runs `ssh -R 9090:localhost:3000 remotehost`. What does this set up?",
+    "choices": {
+      "A": "A local forward from port 9090 to remotehost:3000",
+      "B": "A reverse tunnel: connections to remotehost:9090 are forwarded back to the admin's localhost:3000",
+      "C": "A SOCKS proxy on remotehost port 9090",
+      "D": "A direct connection to localhost:3000 bypassing the SSH tunnel"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 158,
+    "question": "The MTU on an interface is set to 1500 bytes but the network path has a lower MTU segment of 1400. What symptom might occur if PMTUD is blocked?",
+    "choices": {
+      "A": "DNS lookups fail completely",
+      "B": "Small packets like pings work but large data transfers hang or stall",
+      "C": "All traffic fails immediately",
+      "D": "The interface automatically adjusts its MTU to 1400"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 159,
+    "question": "Which file does systemd-resolved typically manage as a stub resolver?",
+    "choices": {
+      "A": "/etc/hosts",
+      "B": "/run/systemd/resolve/stub-resolv.conf (symlinked from /etc/resolv.conf)",
+      "C": "/etc/nsswitch.conf",
+      "D": "/etc/hostname"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 160,
+    "question": "An admin runs `ip route add 10.10.0.0/16 via 192.168.1.254 dev eth0`. What does this do?",
+    "choices": {
+      "A": "Adds a default route through 192.168.1.254",
+      "B": "Adds a static route so traffic to 10.10.0.0/16 is sent to gateway 192.168.1.254 via eth0",
+      "C": "Removes the route to 10.10.0.0/16",
+      "D": "Adds a host route to 192.168.1.254"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 161,
+    "question": "An admin creates a network namespace with `ip netns add testns`. What is true about processes running inside this namespace?",
+    "choices": {
+      "A": "They share the host's network stack and IP addresses",
+      "B": "They have their own isolated network stack with separate interfaces, routes, and firewall rules",
+      "C": "They can only communicate via UNIX domain sockets",
+      "D": "They automatically get a copy of all host network interfaces"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 162,
+    "question": "An admin configures a bonded interface with `mode=802.3ad`. What does this bonding mode require?",
+    "choices": {
+      "A": "Nothing special; it works with any switch",
+      "B": "LACP support on the switch and proper LACP configuration on both ends",
+      "C": "Only one slave interface to function",
+      "D": "That all slave interfaces have different MAC addresses that are never synchronized"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 163,
+    "question": "A server has `iptables -P INPUT DROP` set as the default policy. The admin then adds `iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`. What is the combined effect?",
+    "choices": {
+      "A": "All incoming traffic is blocked including responses to outgoing connections",
+      "B": "Only traffic belonging to or related to already-established connections is accepted; all new unsolicited inbound connections are dropped",
+      "C": "All traffic is accepted because ESTABLISHED matches everything",
+      "D": "Only RELATED traffic is accepted; ESTABLISHED connections are dropped"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 164,
+    "question": "An admin wants to bridge two interfaces (eth0 and eth1) at layer 2. Which sequence of commands creates and configures the bridge?",
+    "choices": {
+      "A": "ip link add br0 type bridge; ip link set eth0 master br0; ip link set eth1 master br0; ip link set br0 up",
+      "B": "ip route add br0 type bridge eth0 eth1",
+      "C": "brctl add br0; brctl attach eth0 eth1 br0",
+      "D": "ip addr add bridge br0 eth0 eth1"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 165,
+    "question": "An nftables rule reads: `nft add rule inet filter input tcp dport {80, 443} accept`. What does this do?",
+    "choices": {
+      "A": "Blocks traffic on ports 80 and 443",
+      "B": "Accepts incoming TCP traffic destined for ports 80 and 443 in the inet filter input chain",
+      "C": "Forwards traffic from port 80 to port 443",
+      "D": "Logs traffic on ports 80 and 443 without accepting it"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 166,
+    "question": "SSH agent forwarding is enabled with `ForwardAgent yes`. A user SSHs from A to B, then from B to C. What security risk does this introduce?",
+    "choices": {
+      "A": "Host C can intercept the private key stored in A's SSH agent",
+      "B": "A compromised host B can use the forwarded agent socket to authenticate as the user to other systems",
+      "C": "The SSH connection between A and B becomes unencrypted",
+      "D": "Host C's host key is automatically trusted without verification"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 167,
+    "question": "An admin runs `tcpdump -i any -w capture.pcap 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0'`. What does this capture?",
+    "choices": {
+      "A": "All TCP packets regardless of flags",
+      "B": "Only TCP packets that have the SYN or FIN flag set, written to capture.pcap",
+      "C": "Only UDP packets with specific flags",
+      "D": "Only ICMP echo requests"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 168,
+    "question": "A server has two default routes of equal metric. How does the Linux kernel handle this by default?",
+    "choices": {
+      "A": "It uses the first route added and completely ignores the second",
+      "B": "It performs ECMP (Equal-Cost Multi-Path) routing and may distribute flows across both routes",
+      "C": "It immediately drops all packets because the routing table is ambiguous",
+      "D": "It alternates packets round-robin between the two routes at the packet level"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 169,
+    "question": "An admin runs `ip netns exec testns ip link set lo up`. Why is this step necessary?",
+    "choices": {
+      "A": "Network namespaces share the host's loopback so this is redundant",
+      "B": "A new network namespace has its own loopback interface that starts in the down state; it must be brought up for localhost communication",
+      "C": "This configures the default route inside the namespace",
+      "D": "This enables IP forwarding inside the namespace"
+    },
+    "answer": "B",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 170,
+    "question": "An admin wants to capture only the first 96 bytes of each packet for performance. Which tcpdump option achieves this?",
+    "choices": {
+      "A": "tcpdump -s 96",
+      "B": "tcpdump -c 96",
+      "C": "tcpdump -n 96",
+      "D": "tcpdump -l 96"
+    },
+    "answer": "A",
+    "category": "networking",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 171,
+    "question": "Which command creates a new user account named 'deploy' with a home directory?",
+    "choices": {
+      "A": "useradd -m deploy",
+      "B": "adduser --no-home deploy",
+      "C": "usermod -m deploy",
+      "D": "passwd deploy"
+    },
+    "answer": "A",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 172,
+    "question": "In /etc/passwd, a user entry shows the shell field as `/usr/sbin/nologin`. What does this mean?",
+    "choices": {
+      "A": "The user can log in but has no home directory",
+      "B": "The user account exists but interactive login is denied",
+      "C": "The user's password has expired",
+      "D": "The user is locked out due to failed login attempts"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 173,
+    "question": "Which command should be used to safely edit the /etc/sudoers file?",
+    "choices": {
+      "A": "nano /etc/sudoers",
+      "B": "visudo",
+      "C": "vim /etc/sudoers",
+      "D": "sudoedit /etc/sudoers"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 174,
+    "question": "A user runs `umask 027`. What permissions will newly created files have?",
+    "choices": {
+      "A": "rwxrwxrwx (777)",
+      "B": "rw-r----- (640)",
+      "C": "rwxr-x--- (750)",
+      "D": "rw-rw-rw- (666)"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 175,
+    "question": "Which file stores the hashed passwords for user accounts on a modern Linux system?",
+    "choices": {
+      "A": "/etc/passwd",
+      "B": "/etc/shadow",
+      "C": "/etc/group",
+      "D": "/etc/login.defs"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 176,
+    "question": "An admin runs `usermod -aG docker alice`. What does this do?",
+    "choices": {
+      "A": "Removes alice from the docker group",
+      "B": "Adds alice to the docker group without removing her from other supplementary groups",
+      "C": "Makes docker alice's primary group",
+      "D": "Creates the docker group and adds alice"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 177,
+    "question": "Which command generates a new SSH key pair using the Ed25519 algorithm?",
+    "choices": {
+      "A": "ssh-keygen -t ed25519",
+      "B": "ssh-keygen -t rsa -b 1024",
+      "C": "openssl genrsa 4096",
+      "D": "gpg --gen-key --type ed25519"
+    },
+    "answer": "A",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 178,
+    "question": "A user checks their group memberships. Which command lists all groups the current user belongs to?",
+    "choices": {
+      "A": "groups",
+      "B": "whoami -g",
+      "C": "id -n",
+      "D": "cat /etc/group | grep $USER"
+    },
+    "answer": "A",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 179,
+    "question": "What does the `x` in the password field of /etc/passwd indicate?",
+    "choices": {
+      "A": "The account has no password set",
+      "B": "The password is stored in /etc/shadow instead",
+      "C": "The account is locked",
+      "D": "The password is set to the literal string 'x'"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 180,
+    "question": "An admin runs `passwd -l bob`. What is the effect?",
+    "choices": {
+      "A": "Bob's password is changed to a new random value",
+      "B": "Bob's account is locked by prepending '!' to the password hash in /etc/shadow, preventing password authentication",
+      "C": "Bob's account is deleted",
+      "D": "Bob's home directory is removed"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "basic"
+  },
+  {
+    "id": 181,
+    "question": "An /etc/sudoers entry reads: `%devops ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx`. What does this allow?",
+    "choices": {
+      "A": "All users can restart any service without a password",
+      "B": "Members of the devops group can restart nginx via systemctl on any host without entering a password",
+      "C": "Only the user devops can run any systemctl command",
+      "D": "The devops group can restart nginx but must enter root's password"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 182,
+    "question": "An admin runs `setfacl -m u:alice:rw /srv/data/report.txt`. What effect does this have beyond traditional permissions?",
+    "choices": {
+      "A": "It changes the file's owner to alice",
+      "B": "It grants alice read and write access to the file via an ACL entry, independent of the file's owner/group/other permissions",
+      "C": "It changes the group ownership to alice's primary group",
+      "D": "It sets the sticky bit on the file"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 183,
+    "question": "A field in /etc/shadow reads `$6$rounds=5000$saltsalt$hashvalue...`. What does the `$6$` prefix indicate?",
+    "choices": {
+      "A": "The password was hashed using MD5",
+      "B": "The password was hashed using SHA-512",
+      "C": "The password was hashed using Blowfish (bcrypt)",
+      "D": "The password has been used 6 times"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 184,
+    "question": "An admin wants to force a user to change their password on next login. Which command achieves this?",
+    "choices": {
+      "A": "chage -d 0 username",
+      "B": "passwd -e username",
+      "C": "Both A and B accomplish this",
+      "D": "usermod --expire username"
+    },
+    "answer": "C",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 185,
+    "question": "A PAM configuration line reads: `auth required pam_faillock.so deny=5 unlock_time=900`. What does this do?",
+    "choices": {
+      "A": "Requires a 5-character minimum password length",
+      "B": "Locks the account for 900 seconds after 5 consecutive failed authentication attempts",
+      "C": "Allows 5 concurrent login sessions per user",
+      "D": "Sets the password expiration to 900 days with 5 warnings"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 186,
+    "question": "An admin runs `getfacl /srv/data/` and sees `default:user::rwx` in the output. What does this default ACL entry mean?",
+    "choices": {
+      "A": "The directory owner currently has rwx permissions",
+      "B": "New files and subdirectories created inside /srv/data/ will inherit an ACL giving the owning user rwx",
+      "C": "All users get rwx permissions on the directory",
+      "D": "The ACL is invalid and will be ignored"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 187,
+    "question": "An admin configures `PermitRootLogin prohibit-password` in /etc/ssh/sshd_config. What does this allow?",
+    "choices": {
+      "A": "Root can log in via SSH using a password only",
+      "B": "Root can log in via SSH only with key-based authentication, not with a password",
+      "C": "Root SSH login is completely disabled",
+      "D": "Root can log in with any method including password"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 188,
+    "question": "An admin runs `gpg --export --armor alice@example.com > alice.pub.asc`. What does this produce?",
+    "choices": {
+      "A": "Alice's private GPG key in ASCII-armored format",
+      "B": "Alice's public GPG key in ASCII-armored format",
+      "C": "An encrypted message for alice@example.com",
+      "D": "A signed hash of alice's key"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 189,
+    "question": "A user's /etc/shadow entry has `!` as the password hash field. What does this indicate?",
+    "choices": {
+      "A": "The password is set to the empty string",
+      "B": "The account is locked and password authentication is disabled",
+      "C": "The account uses only SSH keys and has no password policy",
+      "D": "The password hash is corrupted"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 190,
+    "question": "An admin runs `usermod -L -e 2026-01-01 jdoe`. What is the combined effect?",
+    "choices": {
+      "A": "jdoe's account is unlocked and set to never expire",
+      "B": "jdoe's password is locked (preventing password auth) and the account expires on 2026-01-01",
+      "C": "jdoe's account is deleted on 2026-01-01",
+      "D": "jdoe can only log in until 2026-01-01 using any method"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 191,
+    "question": "An admin needs to delegate specific root-level capabilities to a binary without using setuid. Which command gives the binary the ability to bind to privileged ports?",
+    "choices": {
+      "A": "chmod u+s /usr/local/bin/myapp",
+      "B": "setcap 'cap_net_bind_service=+ep' /usr/local/bin/myapp",
+      "C": "chown root:root /usr/local/bin/myapp",
+      "D": "setfacl -m u:root:x /usr/local/bin/myapp"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 192,
+    "question": "An admin runs `userdel -r terminated_user`. What does the `-r` flag do?",
+    "choices": {
+      "A": "Removes only the user account, preserving the home directory",
+      "B": "Removes the user account, home directory, and mail spool",
+      "C": "Recursively removes the user from all groups",
+      "D": "Removes the user's crontab only"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 193,
+    "question": "An admin configures SELinux and sees a denial in the audit log: `type=AVC msg=... denied { read } for ... scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:user_home_t:s0`. What does this mean?",
+    "choices": {
+      "A": "The httpd process was denied read access because the target file has the user_home_t context, which httpd_t is not allowed to access",
+      "B": "SELinux is disabled and the message is informational only",
+      "C": "The file has incorrect Unix permissions (not related to SELinux)",
+      "D": "The httpd process was granted temporary access via a boolean"
+    },
+    "answer": "A",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 194,
+    "question": "An admin sets up a chroot environment at /srv/chroot. A process running inside the chroot calls `chroot(\".\")` and then navigates with `../../../`. Can it escape?",
+    "choices": {
+      "A": "No, chroot is an absolute security boundary that cannot be escaped",
+      "B": "Yes, a root process inside a chroot can potentially escape by calling chroot with a relative path after creating a new root, making chroot inadequate for security isolation of privileged processes",
+      "C": "No, because the kernel prevents any directory traversal beyond the chroot",
+      "D": "Only if the process has CAP_SYS_ADMIN"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 195,
+    "question": "An AppArmor profile for /usr/bin/myapp contains the line `deny /etc/shadow r,`. What is the effect when myapp tries to read /etc/shadow?",
+    "choices": {
+      "A": "The read succeeds but a warning is logged to the audit subsystem",
+      "B": "The read is silently denied without generating any audit log entry",
+      "C": "The read is denied and an audit log entry is generated",
+      "D": "The profile switches to complain mode for that specific access"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 196,
+    "question": "An admin examines /etc/shadow and sees the password field `$y$j9T$salthash...`. What hash algorithm does the `$y$` prefix indicate?",
+    "choices": {
+      "A": "SHA-256",
+      "B": "SHA-512",
+      "C": "yescrypt",
+      "D": "Argon2"
+    },
+    "answer": "C",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 197,
+    "question": "A sudoers entry reads: `Defaults:deploy !requiretty, timestamp_timeout=0`. What are the effects for the deploy user?",
+    "choices": {
+      "A": "The deploy user must have a TTY and credentials are cached for 5 minutes",
+      "B": "The deploy user does not need a TTY to run sudo, and must re-authenticate with every sudo invocation (no credential caching)",
+      "C": "The deploy user's sudo access is disabled entirely",
+      "D": "The deploy user has an infinite credential cache timeout"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 198,
+    "question": "An admin wants to prevent any user from running more than 50 processes. Which file and directive configures this persistent limit?",
+    "choices": {
+      "A": "/etc/security/limits.conf with `* hard nproc 50`",
+      "B": "/etc/sysctl.conf with `kernel.max_procs=50`",
+      "C": "/etc/login.defs with MAX_PROCS=50",
+      "D": "/etc/environment with NPROC_LIMIT=50"
+    },
+    "answer": "A",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 199,
+    "question": "An admin runs `semanage fcontext -a -t httpd_sys_content_t '/srv/web(/.*)?'` followed by `restorecon -Rv /srv/web`. What do these commands accomplish?",
+    "choices": {
+      "A": "They change the Unix ownership of /srv/web to the httpd user",
+      "B": "They define and apply the SELinux file context httpd_sys_content_t to /srv/web and all its contents, allowing httpd to serve files from that directory",
+      "C": "They disable SELinux enforcement for the /srv/web directory",
+      "D": "They create an AppArmor profile for the /srv/web directory"
+    },
+    "answer": "B",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 200,
+    "question": "An admin configures PAM with the line `auth [success=2 default=ignore] pam_unix.so`. What does `success=2` mean in the PAM stack?",
+    "choices": {
+      "A": "If pam_unix.so succeeds, skip the next 2 modules in the stack and continue with the one after",
+      "B": "Require at least 2 successful authentications",
+      "C": "The module is tried a maximum of 2 times before failing",
+      "D": "If pam_unix.so fails, jump back 2 modules in the stack"
+    },
+    "answer": "A",
+    "category": "users_security",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 201,
+    "question": "A technician powers on a system and sees the message 'Verifying DMI Pool Data' before the OS loads. Which firmware interface is this system most likely using?",
+    "choices": {
+      "A": "UEFI with Secure Boot enabled",
+      "B": "Traditional BIOS (legacy)",
+      "C": "Coreboot with a UEFI payload",
+      "D": "UEFI in CSM (Compatibility Support Module) mode"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 202,
+    "question": "After installing a new kernel package on a Debian-based system, you need to regenerate the GRUB configuration. Which command accomplishes this?",
+    "choices": {
+      "A": "grub-install /dev/sda",
+      "B": "update-grub",
+      "C": "grub-set-default 0",
+      "D": "dpkg-reconfigure grub-pc"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 203,
+    "question": "A user runs 'dmesg | tail' immediately after plugging in a USB flash drive. What type of information will they most likely see?",
+    "choices": {
+      "A": "The filesystem type and mount point of the drive",
+      "B": "Kernel messages about device detection, driver binding, and partition table parsing",
+      "C": "The SMART health status of the USB drive",
+      "D": "A list of all currently mounted filesystems"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 204,
+    "question": "You want to list all currently loaded kernel modules on a running system. Which command provides this information?",
+    "choices": {
+      "A": "modprobe --list",
+      "B": "insmod -a",
+      "C": "lsmod",
+      "D": "depmod -l"
+    },
+    "answer": "C",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 205,
+    "question": "On a systemd-based system, which target is analogous to the traditional runlevel 3 (multi-user text mode with networking)?",
+    "choices": {
+      "A": "rescue.target",
+      "B": "multi-user.target",
+      "C": "graphical.target",
+      "D": "basic.target"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 206,
+    "question": "After a kernel update, the system fails to boot and drops to an initramfs shell. The error indicates the root filesystem cannot be found. Which is the most likely cause?",
+    "choices": {
+      "A": "The new kernel does not support the CPU architecture",
+      "B": "The initramfs was not regenerated and is missing the storage driver for the root disk",
+      "C": "The swap partition is full",
+      "D": "SELinux is blocking the root filesystem mount"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 207,
+    "question": "A system's /boot directory contains files named vmlinuz-5.15.0-91-generic, initrd.img-5.15.0-91-generic, and config-5.15.0-91-generic. What does the config-* file contain?",
+    "choices": {
+      "A": "GRUB menu entry definitions for that kernel version",
+      "B": "The kernel build configuration options used to compile that kernel",
+      "C": "Boot-time kernel command line parameters",
+      "D": "A list of kernel modules included in the initrd image"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 208,
+    "question": "Which file do you edit to change default kernel command line parameters that persist across GRUB configuration regeneration?",
+    "choices": {
+      "A": "/boot/grub/grub.cfg",
+      "B": "/etc/default/grub",
+      "C": "/etc/grub.d/40_custom",
+      "D": "/boot/grub/device.map"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "basic"
+  },
+  {
+    "id": 209,
+    "question": "You add 'quiet splash' to GRUB_CMDLINE_LINUX_DEFAULT in /etc/default/grub but the changes do not take effect on the next boot. What step was most likely missed?",
+    "choices": {
+      "A": "The GRUB bootloader was not reinstalled to the MBR",
+      "B": "grub-mkconfig (or update-grub) was not run after editing the file",
+      "C": "The kernel does not support the 'quiet' parameter",
+      "D": "The file must be saved as /etc/default/grub.cfg"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 210,
+    "question": "A sysadmin needs to permanently blacklist the 'nouveau' kernel module to use the proprietary NVIDIA driver. Where should this blacklist directive be placed?",
+    "choices": {
+      "A": "/etc/modules",
+      "B": "/etc/modprobe.d/blacklist-nouveau.conf",
+      "C": "/boot/grub/grub.cfg",
+      "D": "/lib/modules/$(uname -r)/modules.dep"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 211,
+    "question": "You run 'modinfo e1000e' and see 'parm: InterruptThrottleRate:...' in the output. What does this 'parm' line indicate?",
+    "choices": {
+      "A": "A required dependency that must be loaded before the module",
+      "B": "A module parameter that can be set when loading the module",
+      "C": "A hardware interrupt number assigned to the device",
+      "D": "A firmware file required by the module"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 212,
+    "question": "During boot, the system displays 'Gave up waiting for root file system device' and drops to a BusyBox initramfs shell. The root partition uses LVM. What is the most likely fix?",
+    "choices": {
+      "A": "Reinstall the bootloader with grub-install",
+      "B": "Rebuild the initramfs to include the LVM2 tools and device-mapper modules",
+      "C": "Disable Secure Boot in the UEFI settings",
+      "D": "Set the root= parameter to use a UUID instead of /dev/mapper path"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 213,
+    "question": "A UEFI system has Secure Boot enabled. After compiling a custom kernel, the system refuses to boot it. What is the fundamental issue?",
+    "choices": {
+      "A": "Custom kernels cannot be larger than 8 MB on UEFI systems",
+      "B": "The custom kernel is not signed with a key trusted by the UEFI firmware",
+      "C": "UEFI only supports kernels compiled with GCC, not Clang",
+      "D": "The EFI System Partition is formatted as ext4 instead of FAT32"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 214,
+    "question": "The correct boot sequence for a BIOS-based Linux system with GRUB2 is:",
+    "choices": {
+      "A": "BIOS -> GRUB Stage 1 -> GRUB Stage 2 -> kernel + initramfs -> init/systemd",
+      "B": "BIOS -> kernel -> GRUB -> initramfs -> systemd",
+      "C": "BIOS -> initramfs -> GRUB -> kernel -> systemd",
+      "D": "BIOS -> systemd -> GRUB -> kernel -> initramfs"
+    },
+    "answer": "A",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 215,
+    "question": "You pass 'init=/bin/bash' on the kernel command line at the GRUB menu. What happens when the kernel finishes loading?",
+    "choices": {
+      "A": "The system boots normally but with bash as the default shell",
+      "B": "The kernel executes /bin/bash as PID 1 instead of the normal init system, dropping to a root shell",
+      "C": "A bash script called /bin/bash.init is run to configure the system",
+      "D": "The system enters emergency mode through systemd"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 216,
+    "question": "You need to pass the kernel parameter 'nomodeset' for a single boot without permanently modifying GRUB configuration. How do you accomplish this?",
+    "choices": {
+      "A": "Edit /etc/default/grub and reboot immediately without running update-grub",
+      "B": "Press 'e' at the GRUB menu, append 'nomodeset' to the linux line, and press Ctrl+X or F10 to boot",
+      "C": "Create /etc/kernel/cmdline with 'nomodeset' and reboot",
+      "D": "Run 'sysctl -w kernel.nomodeset=1' and reboot"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 217,
+    "question": "On a UEFI system, the EFI System Partition (ESP) is typically mounted at which location?",
+    "choices": {
+      "A": "/boot/grub",
+      "B": "/boot/efi",
+      "C": "/efi/boot",
+      "D": "/sys/firmware/efi"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 218,
+    "question": "A system administrator wants to boot directly into a root shell for emergency recovery. Which systemd target should they select or pass on the kernel command line?",
+    "choices": {
+      "A": "systemd.unit=rescue.target",
+      "B": "systemd.unit=emergency.target",
+      "C": "systemd.unit=debug.target",
+      "D": "systemd.unit=maintenance.target"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 219,
+    "question": "A kernel panic message reads: 'VFS: Unable to mount root fs on unknown-block(0,0)'. This most commonly indicates:",
+    "choices": {
+      "A": "The filesystem has been corrupted and needs fsck",
+      "B": "The kernel cannot find the root device, often because the initramfs lacks the necessary storage drivers",
+      "C": "The /etc/fstab file has a syntax error",
+      "D": "The root partition has exceeded its inode limit"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 220,
+    "question": "On a Fedora system using dracut, you add a new hardware RAID controller and need to regenerate the initramfs for the current kernel. Which command is correct?",
+    "choices": {
+      "A": "mkinitramfs -o /boot/initramfs-$(uname -r).img $(uname -r)",
+      "B": "dracut --force /boot/initramfs-$(uname -r).img $(uname -r)",
+      "C": "update-initramfs -u -k $(uname -r)",
+      "D": "grub-mkconfig -o /boot/initramfs-$(uname -r).img"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 221,
+    "question": "You examine /sys/firmware/efi and the directory exists with contents. What does this confirm about the system?",
+    "choices": {
+      "A": "Secure Boot is enabled",
+      "B": "The system booted in UEFI mode (not legacy BIOS)",
+      "C": "The EFI System Partition is mounted and healthy",
+      "D": "GRUB is installed in EFI mode"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 222,
+    "question": "After running `modprobe vfio-pci`, the module does not appear in `lsmod` output, and `modprobe` returned exit code 0 with no error messages. Running `modprobe -n -v vfio-pci` outputs `builtin vfio_pci`. What does this indicate?",
+    "choices": {
+      "A": "The module file is corrupt and modprobe silently skipped it",
+      "B": "The module's init function returned an error, causing it to be unloaded",
+      "C": "The module is compiled directly into the kernel and is always active, so it does not appear in lsmod",
+      "D": "The module was blacklisted in /etc/modprobe.d/ and modprobe ignored it"
+    },
+    "answer": "C",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 223,
+    "question": "You need to pass a module option 'power_save=0' to the snd_hda_intel module every time it loads. After creating /etc/modprobe.d/snd_hda_intel.conf, which directive is correct?",
+    "choices": {
+      "A": "install snd_hda_intel power_save=0",
+      "B": "options snd_hda_intel power_save=0",
+      "C": "params snd_hda_intel power_save=0",
+      "D": "set snd_hda_intel.power_save=0"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 224,
+    "question": "A kernel panic trace shows 'Kernel panic - not syncing: Attempted to kill init!' What does this specifically mean?",
+    "choices": {
+      "A": "The init binary was not found at the specified path",
+      "B": "PID 1 (the init process) crashed or exited, and the kernel cannot continue without it",
+      "C": "The OOM killer attempted to kill the init process due to memory pressure",
+      "D": "A segmentation fault occurred in the kernel's init subsystem"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 225,
+    "question": "On a UEFI system with Secure Boot, you want to load a third-party kernel module (e.g., VirtualBox's vboxdrv). The module is unsigned. What is the standard approach to make this work without disabling Secure Boot entirely?",
+    "choices": {
+      "A": "Compile the module with the CONFIG_MODULE_SIG_FORCE=n option",
+      "B": "Generate a MOK (Machine Owner Key), sign the module with it, and enroll the key using mokutil",
+      "C": "Place the module in /lib/modules/trusted/ to bypass signature checks",
+      "D": "Add the module name to /etc/modprobe.d/secure-boot-whitelist.conf"
+    },
+    "answer": "B",
+    "category": "boot_kernel",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 226,
+    "question": "In a bash script, what is the value of $? immediately after a command that executed successfully?",
+    "choices": {
+      "A": "1",
+      "B": "-1",
+      "C": "0",
+      "D": "The PID of the last command"
+    },
+    "answer": "C",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 227,
+    "question": "Given the variable assignment name='hello world', which syntax correctly prints its value?",
+    "choices": {
+      "A": "echo $name",
+      "B": "echo ${name}",
+      "C": "echo \"$name\"",
+      "D": "All of the above will print 'hello world' in this case"
+    },
+    "answer": "D",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 228,
+    "question": "Which construct correctly tests if a file exists in a bash script?",
+    "choices": {
+      "A": "if [ -f /etc/passwd ]; then",
+      "B": "if ( -f /etc/passwd ); then",
+      "C": "if { -f /etc/passwd }; then",
+      "D": "if test -f /etc/passwd; do"
+    },
+    "answer": "A",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 229,
+    "question": "What does the following bash loop print?\n\nfor i in 1 2 3; do\n  echo -n \"$i \"\ndone",
+    "choices": {
+      "A": "1\n2\n3",
+      "B": "1 2 3 ",
+      "C": "123",
+      "D": "1, 2, 3"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 230,
+    "question": "In a bash function, how do you access the first argument passed to the function?",
+    "choices": {
+      "A": "$0",
+      "B": "$1",
+      "C": "$ARG1",
+      "D": "args[0]"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 231,
+    "question": "Which command pipeline counts the number of unique lines in a file?",
+    "choices": {
+      "A": "cat file.txt | sort | uniq | wc -l",
+      "B": "cat file.txt | uniq | wc -l",
+      "C": "cat file.txt | wc -u",
+      "D": "cat file.txt | unique | count"
+    },
+    "answer": "A",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 232,
+    "question": "What is the difference between single quotes and double quotes in bash when the variable name='world'?",
+    "choices": {
+      "A": "There is no difference; both 'hello $name' and \"hello $name\" produce 'hello world'",
+      "B": "'hello $name' produces 'hello $name' while \"hello $name\" produces 'hello world'",
+      "C": "'hello $name' produces 'hello world' while \"hello $name\" produces 'hello $name'",
+      "D": "Single quotes allow command substitution; double quotes do not"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 233,
+    "question": "Which command reads a line of input from the user into the variable 'answer' in a bash script?",
+    "choices": {
+      "A": "input answer",
+      "B": "read answer",
+      "C": "scan answer",
+      "D": "get answer"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 234,
+    "question": "Given: file='/home/user/documents/report.txt'. What does ${file##*/} evaluate to?",
+    "choices": {
+      "A": "/home/user/documents/",
+      "B": "report.txt",
+      "C": "report",
+      "D": ".txt"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 235,
+    "question": "What does 'set -e' do at the top of a bash script?",
+    "choices": {
+      "A": "Enables verbose output of every command before execution",
+      "B": "Causes the script to exit immediately if any command returns a non-zero status",
+      "C": "Makes all variables read-only after first assignment",
+      "D": "Exports all variables to child processes"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 236,
+    "question": "In a bash script using 'set -u', what happens when the script tries to reference an unset variable?",
+    "choices": {
+      "A": "The variable expands to an empty string",
+      "B": "The variable expands to the string 'undefined'",
+      "C": "The script exits with an error about the unbound variable",
+      "D": "A warning is printed but execution continues"
+    },
+    "answer": "C",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 237,
+    "question": "What is the output of: echo ${var:-default} when var is not set?",
+    "choices": {
+      "A": "An empty line",
+      "B": "default",
+      "C": "var",
+      "D": "${var:-default}"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 238,
+    "question": "Which bash construct is used to match a variable against multiple patterns, similar to a switch statement?",
+    "choices": {
+      "A": "switch/case/esac",
+      "B": "case/in/esac",
+      "C": "match/when/end",
+      "D": "select/option/done"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 239,
+    "question": "What does the following awk command do?\n\nawk -F: '{print $1, $3}' /etc/passwd",
+    "choices": {
+      "A": "Prints the first and third lines of /etc/passwd",
+      "B": "Prints the first and third colon-delimited fields (username and UID) of each line",
+      "C": "Searches for lines containing a colon followed by the number 3",
+      "D": "Prints the first 3 characters of each line"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 240,
+    "question": "You have a here document in a bash script:\n\ncat <<'EOF'\nThe variable is $HOME\nEOF\n\nWhat is printed?",
+    "choices": {
+      "A": "The variable is /home/username (with $HOME expanded)",
+      "B": "The variable is $HOME (literal text, no expansion)",
+      "C": "A syntax error because of the quotes around EOF",
+      "D": "An empty line because single-quoted heredoc delimiters suppress all output"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 241,
+    "question": "What does 'trap cleanup EXIT' do in a bash script where 'cleanup' is a defined function?",
+    "choices": {
+      "A": "Calls the cleanup function when the script receives SIGTERM",
+      "B": "Calls the cleanup function whenever the script exits, regardless of the reason",
+      "C": "Prevents the script from being terminated by any signal",
+      "D": "Defines an alias called 'cleanup' that runs 'exit'"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 242,
+    "question": "Given: str='Hello World', what does ${str,,} produce in bash 4+?",
+    "choices": {
+      "A": "HELLO WORLD",
+      "B": "hello world",
+      "C": "Hello world",
+      "D": "hello World"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 243,
+    "question": "Which sed command replaces all occurrences of 'foo' with 'bar' in a file in-place?",
+    "choices": {
+      "A": "sed 's/foo/bar/' file.txt",
+      "B": "sed -i 's/foo/bar/g' file.txt",
+      "C": "sed -r 'replace foo bar' file.txt",
+      "D": "sed --inplace 'foo->bar' file.txt"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 244,
+    "question": "What is the purpose of 'set -o pipefail' in a bash script?",
+    "choices": {
+      "A": "It makes pipes run sequentially instead of in parallel",
+      "B": "It causes a pipeline to return the exit status of the last (rightmost) command that failed, rather than the last command",
+      "C": "It prevents broken pipe errors when a reader closes early",
+      "D": "It buffers all pipeline output until the entire pipeline completes"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 245,
+    "question": "What is the difference between $@ and $* when both are double-quoted in a bash script called with arguments 'one' 'two three'?",
+    "choices": {
+      "A": "There is no difference; both produce identical results",
+      "B": "\"$@\" expands to two separate arguments ('one' and 'two three'), while \"$*\" expands to one single argument ('one two three')",
+      "C": "\"$*\" expands to two separate arguments, while \"$@\" expands to one single argument",
+      "D": "\"$@\" includes $0 (the script name) while \"$*\" does not"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 246,
+    "question": "What does the bash syntax: diff <(sort file1.txt) <(sort file2.txt) use?",
+    "choices": {
+      "A": "Command substitution with temporary files",
+      "B": "Process substitution, providing each command's output as a file descriptor",
+      "C": "Subshell redirection into named pipes manually created by the user",
+      "D": "Heredoc input for the diff command"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 247,
+    "question": "In a bash script, you declare: declare -A config; config[host]='server1'; config[port]='8080'. What type of data structure is 'config'?",
+    "choices": {
+      "A": "An indexed array",
+      "B": "An associative array (hash map)",
+      "C": "A readonly variable",
+      "D": "An exported environment variable"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 248,
+    "question": "What does the following bash construct do?\n\nexec 3>&1\nresult=$(command 2>&1 1>&3)\nexec 3>&-",
+    "choices": {
+      "A": "Discards all output from 'command'",
+      "B": "Captures stderr of 'command' into 'result' while letting stdout pass through to the terminal",
+      "C": "Redirects both stdout and stderr to file descriptor 3",
+      "D": "Creates a background process that logs to file descriptor 3"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 249,
+    "question": "Given: text='foo:bar:baz', what does ${text//:/,} evaluate to?",
+    "choices": {
+      "A": "foo,bar:baz",
+      "B": "foo:bar,baz",
+      "C": "foo,bar,baz",
+      "D": ",foo,bar,baz,"
+    },
+    "answer": "C",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 250,
+    "question": "You write a bash script with this function:\n\nmyfunc() {\n  local -n ref=$1\n  ref='modified'\n}\n\nname='original'\nmyfunc name\necho $name\n\nWhat is printed?",
+    "choices": {
+      "A": "original",
+      "B": "modified",
+      "C": "name",
+      "D": "A syntax error occurs because 'local -n' is not valid"
+    },
+    "answer": "B",
+    "category": "shell_scripting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 251,
+    "question": "A user reports that a systemd service failed to start. Which command shows the most recent log entries for that specific service?",
+    "choices": {
+      "A": "cat /var/log/messages | grep servicename",
+      "B": "journalctl -u servicename.service",
+      "C": "dmesg | grep servicename",
+      "D": "systemctl log servicename"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 252,
+    "question": "A user runs a command and gets 'bash: nmap: command not found'. Which of the following is the most likely cause?",
+    "choices": {
+      "A": "The nmap binary exists but has no execute permission",
+      "B": "The nmap package is not installed on the system",
+      "C": "The user's shell configuration is corrupted",
+      "D": "The network is not available"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 253,
+    "question": "A server's disk shows 100% usage according to 'df -h'. Users are getting 'No space left on device' errors. Which is the fastest way to identify what is consuming the most space?",
+    "choices": {
+      "A": "ls -la /",
+      "B": "du -sh /* | sort -rh | head",
+      "C": "fdisk -l",
+      "D": "free -h"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 254,
+    "question": "You try to edit a file and get 'Permission denied'. Running 'ls -l' shows: -rw-r--r-- 1 root root 1024 Jan 1 12:00 config.txt. You are logged in as user 'dave'. Why was permission denied?",
+    "choices": {
+      "A": "The file is owned by root and 'dave' only has read permission (other: r--)",
+      "B": "The file system is mounted as read-only",
+      "C": "SELinux is blocking write access",
+      "D": "The file is locked by another process"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 255,
+    "question": "After restarting a web server service, you want to check if it is actively running. Which command confirms this?",
+    "choices": {
+      "A": "systemctl status nginx",
+      "B": "service nginx installed",
+      "C": "chkconfig nginx on",
+      "D": "systemctl enable nginx"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 256,
+    "question": "A user reports they cannot reach an external website. Which command sequence is a reasonable first step to diagnose the issue?",
+    "choices": {
+      "A": "traceroute the-website.com, then check iptables rules",
+      "B": "ping 8.8.8.8 to test connectivity, then ping the-website.com to test DNS",
+      "C": "Restart the network service immediately",
+      "D": "Check /var/log/auth.log for authentication failures"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 257,
+    "question": "You see a process in 'Z' (zombie) state in the output of 'ps aux'. What does this mean?",
+    "choices": {
+      "A": "The process is consuming excessive CPU resources",
+      "B": "The process has terminated but its parent has not yet collected its exit status via wait()",
+      "C": "The process is sleeping and waiting for I/O",
+      "D": "The process has been paused by SIGSTOP"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 258,
+    "question": "A system has high load average but low CPU utilization. Which type of bottleneck does this most commonly indicate?",
+    "choices": {
+      "A": "CPU-bound processes consuming resources",
+      "B": "Many processes in uninterruptible sleep, usually waiting for I/O (disk)",
+      "C": "A memory leak causing constant garbage collection",
+      "D": "Network saturation causing packet drops"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 259,
+    "question": "You run 'journalctl -b' on a systemd system. What logs does this show?",
+    "choices": {
+      "A": "Only boot loader messages",
+      "B": "All journal messages from the current boot",
+      "C": "Only messages from the systemd-boot service",
+      "D": "Binary log files in raw format"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 260,
+    "question": "A script fails to execute and the error message says 'bad interpreter: No such file or directory'. The shebang line reads: #!/usr/bin/pythn. What is the problem?",
+    "choices": {
+      "A": "The script file does not have execute permissions",
+      "B": "The interpreter path in the shebang line is misspelled; /usr/bin/pythn does not exist",
+      "C": "The script file is in the wrong directory",
+      "D": "The kernel does not support shebang lines"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 261,
+    "question": "After a sudden power loss, a system fails to boot and drops to an emergency shell. Running 'dmesg' shows filesystem errors on /dev/sda2. What is the most appropriate recovery step?",
+    "choices": {
+      "A": "Reformat /dev/sda2 with mkfs.ext4",
+      "B": "Run 'fsck /dev/sda2' to check and repair the filesystem",
+      "C": "Remount the partition with 'mount -o remount,rw /dev/sda2'",
+      "D": "Edit /etc/fstab to remove the entry for /dev/sda2"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 262,
+    "question": "You suspect DNS resolution is failing on a server. Which command directly tests if the system can resolve a domain name?",
+    "choices": {
+      "A": "ping google.com",
+      "B": "nslookup google.com (or dig google.com)",
+      "C": "netstat -tlnp",
+      "D": "ip route show"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 263,
+    "question": "Running 'systemctl status myapp.service' shows 'Active: failed' with 'status=203/EXEC'. What does exit code 203 indicate?",
+    "choices": {
+      "A": "The service ran out of memory",
+      "B": "The ExecStart binary could not be executed (missing, not executable, or bad path)",
+      "C": "The service was killed by a signal",
+      "D": "The service timed out during startup"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 264,
+    "question": "The kernel's OOM killer terminated a process. Where would you find evidence of this?",
+    "choices": {
+      "A": "In /var/log/oom_history.log",
+      "B": "In dmesg or journalctl output, showing 'Out of memory: Killed process <PID>'",
+      "C": "In the output of 'free -m'",
+      "D": "In /proc/meminfo under the 'OOMKills' field"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 265,
+    "question": "A service fails with 'status=217/USER' in systemctl status output. What does this mean?",
+    "choices": {
+      "A": "The user exceeded their login session limit",
+      "B": "The User= specified in the unit file does not exist on the system",
+      "C": "The service requires root privileges but is running as a regular user",
+      "D": "PAM authentication failed for the service"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 266,
+    "question": "'df -h' shows a filesystem at 50% usage, but a user still gets 'No space left on device' when creating new files. What should you check?",
+    "choices": {
+      "A": "The swap space usage with 'swapon -s'",
+      "B": "The inode usage with 'df -i', as the filesystem may have run out of inodes",
+      "C": "The file size limit with 'ulimit -f'",
+      "D": "The disk SMART status with 'smartctl'"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 267,
+    "question": "You need to trace the system calls made by a running process with PID 1234. Which command accomplishes this?",
+    "choices": {
+      "A": "strace -p 1234",
+      "B": "ltrace --pid 1234",
+      "C": "gdb attach 1234",
+      "D": "perf trace 1234"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 268,
+    "question": "A server's SSH connections are being refused. You verify that sshd is running and listening on port 22. 'ping' to the server works from the client. What should you investigate next?",
+    "choices": {
+      "A": "Check if a firewall (iptables/nftables/firewalld) is blocking port 22",
+      "B": "Regenerate the SSH host keys",
+      "C": "Check if the server has run out of memory",
+      "D": "Verify the DNS SRV records for SSH"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 269,
+    "question": "A binary crashes and you see 'Segmentation fault (core dumped)' in the terminal. What does this indicate?",
+    "choices": {
+      "A": "The binary tried to allocate more memory than available",
+      "B": "The binary attempted to access a memory address it was not allowed to access",
+      "C": "The binary's shared libraries are missing",
+      "D": "The filesystem where the binary resides is corrupted"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 270,
+    "question": "You run 'journalctl --since \"1 hour ago\" -p err' and see no output. What does this mean?",
+    "choices": {
+      "A": "The journal is corrupted and cannot be read",
+      "B": "No messages at error priority or higher were logged in the past hour",
+      "C": "The system clock is incorrect so the time filter matched nothing",
+      "D": "You need root privileges to see error-level messages"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 271,
+    "question": "A systemd service keeps restarting in a loop. You see 'start request repeated too quickly' in the logs, followed by the service entering a 'failed' state. What systemd mechanism caused this?",
+    "choices": {
+      "A": "The service's WatchdogSec= timer expired",
+      "B": "systemd's start rate limiting detected too many restarts within StartLimitIntervalSec",
+      "C": "The service's MemoryMax= cgroup limit was reached",
+      "D": "The service's dependencies formed a circular reference"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 272,
+    "question": "After deleting large log files, 'df -h' still shows the disk as full. What is the most likely explanation?",
+    "choices": {
+      "A": "The delete operation requires a filesystem sync with 'sync' command",
+      "B": "A running process still holds the deleted files open, so the space is not freed until the process releases them",
+      "C": "The files were only soft-deleted and exist in a trash directory",
+      "D": "The filesystem journal needs to be flushed"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 273,
+    "question": "You run 'top' and see a process in 'D' (uninterruptible sleep) state. What does this typically indicate?",
+    "choices": {
+      "A": "The process is in a debug/trace mode",
+      "B": "The process is waiting for I/O completion (usually disk) and cannot be interrupted or killed",
+      "C": "The process is a daemon running in the background",
+      "D": "The process has been stopped by a SIGSTOP signal"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 274,
+    "question": "A server can ping external IPs (e.g., 8.8.8.8) but cannot access any websites by domain name. What is the most likely issue?",
+    "choices": {
+      "A": "The default gateway is misconfigured",
+      "B": "DNS resolution is failing; check /etc/resolv.conf and the configured DNS servers",
+      "C": "The HTTP/HTTPS ports are blocked by a firewall",
+      "D": "The network interface is in promiscuous mode"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 275,
+    "question": "You run `free -h` and notice the 'free' column shows only 128M on a 32GB server, but 'available' shows 24G and 'buff/cache' shows 28G. A junior admin is alarmed by the low free memory. What should you tell them?",
+    "choices": {
+      "A": "The system is critically low on memory and needs more RAM immediately",
+      "B": "This is normal; Linux uses free RAM for disk caching, and the 'available' column shows 24G can still be used by applications",
+      "C": "The buff/cache memory is leaked and cannot be reclaimed without a reboot",
+      "D": "The system is about to start heavy swapping since free memory is under 1%"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 276,
+    "question": "Authentication failures for SSH are logged to which file on a Debian-based system?",
+    "choices": {
+      "A": "/var/log/sshd.log",
+      "B": "/var/log/auth.log",
+      "C": "/var/log/secure",
+      "D": "/var/log/access.log"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "basic"
+  },
+  {
+    "id": 277,
+    "question": "A process is consuming increasing amounts of RSS (Resident Set Size) memory over time without releasing it. What does this pattern most likely indicate?",
+    "choices": {
+      "A": "Normal memory-mapped file caching",
+      "B": "A memory leak in the process",
+      "C": "The kernel's memory compaction process is failing",
+      "D": "Swap is disabled causing memory to not be paged out"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 278,
+    "question": "You examine /var/log/kern.log and see repeated messages: 'EXT4-fs error (device sda1): __ext4_find_entry: reading directory lblock 0'. What does this suggest?",
+    "choices": {
+      "A": "The disk partition table is corrupted",
+      "B": "Filesystem metadata corruption on sda1 that likely requires fsck",
+      "C": "The disk firmware needs to be updated",
+      "D": "A kernel bug in the ext4 driver"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 279,
+    "question": "A production server has load averages of 150 with only 8 CPU cores. Running 'ps aux' shows hundreds of processes in 'D' state. The system is nearly unresponsive. What is the most likely root cause?",
+    "choices": {
+      "A": "A CPU-intensive process is monopolizing all cores",
+      "B": "A storage subsystem failure causing all I/O operations to hang, creating a cascading pile-up of blocked processes",
+      "C": "A network DDoS attack consuming all available sockets",
+      "D": "A memory leak exhausting all RAM and swap"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 280,
+    "question": "After an OOM kill event, you want to check which process was chosen and why. You find dmesg output showing 'oom_score_adj' values. What determines which process the OOM killer selects?",
+    "choices": {
+      "A": "The process with the highest PID number is always killed first",
+      "B": "The process using the most memory (highest oom_score) is selected, modified by oom_score_adj",
+      "C": "The most recently started process is always killed",
+      "D": "The process with the lowest nice value is selected"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 281,
+    "question": "You run 'strace -e trace=open,read command' and see it repeatedly trying to open a shared library that does not exist. The error is 'ENOENT'. What should you do?",
+    "choices": {
+      "A": "Run 'ldconfig' after installing the missing library package",
+      "B": "Recompile the command with static linking",
+      "C": "Set LD_PRELOAD to point to an alternative library",
+      "D": "Clear the filesystem cache with 'echo 3 > /proc/sys/vm/drop_caches'"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 282,
+    "question": "A system rebooted unexpectedly. You run 'journalctl --list-boots' and see the previous boot. Looking at its logs with 'journalctl -b -1', the final entries show no shutdown sequence. What does this suggest?",
+    "choices": {
+      "A": "The system performed a clean reboot but the journal was not flushed",
+      "B": "The system crashed, lost power, or was hard-reset (no graceful shutdown occurred)",
+      "C": "The journal was rotated and the shutdown messages were deleted",
+      "D": "A user ran 'systemctl halt' which does not log a shutdown sequence"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 283,
+    "question": "You are diagnosing why a container cannot reach the internet. 'ping 8.8.8.8' fails from inside the container but works from the host. On the host, 'iptables -t nat -L POSTROUTING' shows no masquerade rule for the container network. What is the diagnosis?",
+    "choices": {
+      "A": "The container's DNS configuration is wrong",
+      "B": "NAT/masquerade is not configured for the container network, so outbound packets have a private source IP that external routers will not route back",
+      "C": "The container has no default route configured",
+      "D": "IP forwarding is disabled on the container"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 284,
+    "question": "A service unit file has: ExecStart=/opt/app/bin/myapp. Running 'systemctl start myapp' fails with status=203/EXEC. You verify /opt/app/bin/myapp exists. What else should you check?",
+    "choices": {
+      "A": "Whether the service's User= has permission to access /opt/app/bin/myapp and whether the binary has execute permissions",
+      "B": "Whether the service's Group= directive matches the binary's group owner",
+      "C": "Whether AppArmor is installed on the system",
+      "D": "Whether the binary is in the systemd unit file's $PATH"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 285,
+    "question": "After a kernel upgrade, a previously working NFS mount fails on boot with 'mount.nfs: requested NFS version or transport protocol is not supported'. The nfs kernel module loads fine. What should you investigate?",
+    "choices": {
+      "A": "Whether the nfs-utils or nfs-common userspace package needs to be upgraded to match the new kernel",
+      "B": "Whether the server-side NFS export has changed",
+      "C": "Whether the system clock is out of sync with the NFS server",
+      "D": "Whether the filesystem type in /etc/fstab should be changed to nfs4"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 286,
+    "question": "A segfault occurs in a C application. The core dump shows the crash at address 0x0000000000000000. What is the most likely programming error?",
+    "choices": {
+      "A": "A stack buffer overflow",
+      "B": "A NULL pointer dereference",
+      "C": "A double-free vulnerability",
+      "D": "An integer overflow causing a wrong allocation size"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 287,
+    "question": "You notice /var/log/syslog has stopped being updated even though rsyslog is running. 'df -h /var' shows 100% usage. After freeing disk space, syslog still does not resume writing. What is the most likely next step?",
+    "choices": {
+      "A": "Restart the rsyslog service so it reopens its file handles",
+      "B": "Reboot the server to clear all file caches",
+      "C": "Run fsck on the /var partition",
+      "D": "Increase the maximum file size in rsyslog.conf"
+    },
+    "answer": "A",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 288,
+    "question": "You see multiple zombie processes (Z state) whose parent is PID 1 (systemd/init). What typically causes orphaned zombies to be reparented to PID 1?",
+    "choices": {
+      "A": "The zombie processes are kernel threads that cannot be reaped",
+      "B": "The original parent process exited without calling wait() on its children, so the orphans were adopted by init",
+      "C": "PID 1 created the zombie processes directly",
+      "D": "The processes are in a deadlock waiting for a mutex held by PID 1"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 289,
+    "question": "A system boots to a GRUB rescue prompt showing: 'error: unknown filesystem. Entering rescue mode... grub rescue>'. The disk has not been physically replaced. What is the most likely cause?",
+    "choices": {
+      "A": "The kernel image in /boot has been deleted",
+      "B": "The filesystem on the GRUB partition (or the partition table) has become corrupted, so GRUB cannot read its configuration",
+      "C": "The BIOS boot order was changed to a different disk",
+      "D": "The initramfs is missing"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 290,
+    "question": "You see repeated 'Out of memory: Killed process' messages despite the system having 32 GB of RAM and processes using only 16 GB total. The system has no swap. What might explain the OOM kills?",
+    "choices": {
+      "A": "The remaining memory is fragmented and cannot satisfy large contiguous allocations",
+      "B": "A cgroup memory limit (MemoryMax/MemoryLimit) is set on the processes, restricting their memory below the system total",
+      "C": "The 32 GB of RAM is reported incorrectly and some DIMMs have failed",
+      "D": "The kernel requires 16 GB of reserved memory that is not available to userspace"
+    },
+    "answer": "B",
+    "category": "troubleshooting",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 291,
+    "question": "Linux uses which type of kernel architecture?",
+    "choices": {
+      "A": "Microkernel",
+      "B": "Monolithic kernel (with loadable module support)",
+      "C": "Hybrid kernel like Windows NT",
+      "D": "Exokernel"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 292,
+    "question": "What is the primary difference between userspace and kernel space?",
+    "choices": {
+      "A": "Userspace programs run on the CPU while kernel code runs on the GPU",
+      "B": "Userspace is restricted from directly accessing hardware or kernel memory; it must use system calls",
+      "C": "Userspace is for compiled languages and kernel space is for interpreted languages",
+      "D": "Userspace runs in RAM while kernel space runs on disk"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 293,
+    "question": "Which virtual filesystem provides information about running processes, one directory per PID?",
+    "choices": {
+      "A": "/sys",
+      "B": "/dev",
+      "C": "/proc",
+      "D": "/run"
+    },
+    "answer": "C",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 294,
+    "question": "What is swap space used for in Linux?",
+    "choices": {
+      "A": "Temporary storage for frequently accessed files to speed up reads",
+      "B": "Extending available memory by moving inactive memory pages to disk when RAM is full",
+      "C": "A backup location for the kernel image in case /boot is corrupted",
+      "D": "Storing inter-process communication buffers between applications"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 295,
+    "question": "In Linux, what is a system call (syscall)?",
+    "choices": {
+      "A": "A function call between two userspace programs via shared memory",
+      "B": "A request from a userspace program to the kernel to perform a privileged operation",
+      "C": "A call from the kernel to a hardware device driver",
+      "D": "A network request between two Linux machines"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 296,
+    "question": "Which of the following is a block device?",
+    "choices": {
+      "A": "/dev/tty0",
+      "B": "/dev/null",
+      "C": "/dev/sda",
+      "D": "/dev/random"
+    },
+    "answer": "C",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 297,
+    "question": "What does the /sys virtual filesystem expose?",
+    "choices": {
+      "A": "Log files from system services",
+      "B": "A structured hierarchy of kernel objects, device information, and driver parameters",
+      "C": "User account and authentication information",
+      "D": "System backup and recovery data"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 298,
+    "question": "In traditional SysV init, what is a runlevel?",
+    "choices": {
+      "A": "A CPU priority level assigned to system processes",
+      "B": "A predefined system state that determines which services are running",
+      "C": "The amount of time the system has been running since boot",
+      "D": "A level of kernel debugging verbosity"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "basic"
+  },
+  {
+    "id": 299,
+    "question": "In Linux, what is the page cache?",
+    "choices": {
+      "A": "A hardware cache on the CPU that stores recently used memory pages",
+      "B": "A kernel mechanism that caches file data in RAM to speed up subsequent reads and writes to disk",
+      "C": "A swap partition reserved for frequently accessed pages",
+      "D": "A per-process memory area used for storing stack frames"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 300,
+    "question": "What is the role of udev in a Linux system?",
+    "choices": {
+      "A": "It compiles and loads kernel modules at boot time",
+      "B": "It dynamically manages device nodes in /dev based on kernel events when hardware is detected or removed",
+      "C": "It provides a userspace filesystem for device configuration",
+      "D": "It handles user authentication for device access"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 301,
+    "question": "Which Linux mechanism allows limiting the CPU, memory, and I/O resources available to a group of processes?",
+    "choices": {
+      "A": "nice and renice",
+      "B": "cgroups (control groups)",
+      "C": "ulimit",
+      "D": "SELinux"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 302,
+    "question": "Linux namespaces are a key technology behind containers. What do PID namespaces specifically provide?",
+    "choices": {
+      "A": "Isolated filesystem views so containers cannot see the host's files",
+      "B": "Isolated process ID number spaces so a container's processes are numbered independently from the host",
+      "C": "Isolated CPU scheduling so containers get dedicated CPU time",
+      "D": "Isolated kernel versions so each container can run a different kernel"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 303,
+    "question": "What is the difference between a pipe and a Unix domain socket for IPC?",
+    "choices": {
+      "A": "Pipes are unidirectional (or half-duplex) by default, while Unix domain sockets support bidirectional communication",
+      "B": "Pipes work over the network, while Unix domain sockets are local only",
+      "C": "Pipes support multiple readers and writers, while sockets support only one-to-one communication",
+      "D": "There is no practical difference; they use the same kernel mechanism"
+    },
+    "answer": "A",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 304,
+    "question": "A device file has major number 8 and minor number 0 (8, 0). What do these numbers signify?",
+    "choices": {
+      "A": "The file has 8 hard links and 0 bytes of data",
+      "B": "The major number identifies the driver (8 = sd/SCSI disk), the minor number identifies the specific device instance (0 = first disk, whole disk)",
+      "C": "The device runs at speed 8 with priority 0",
+      "D": "The major number is the inode and the minor number is the block size"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 305,
+    "question": "What does virtual memory provide to each process in Linux?",
+    "choices": {
+      "A": "Direct access to all physical memory in the system",
+      "B": "An isolated, contiguous address space that the kernel maps to physical memory (or swap) as needed",
+      "C": "A fixed allocation of physical RAM equal to the process's memory limit",
+      "D": "A shared address space visible to all processes on the system"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 306,
+    "question": "Which IPC mechanism allows two unrelated processes to access the same region of physical memory?",
+    "choices": {
+      "A": "Anonymous pipes",
+      "B": "Signal handlers",
+      "C": "POSIX shared memory (shm_open) or SysV shared memory (shmget)",
+      "D": "Environment variables"
+    },
+    "answer": "C",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 307,
+    "question": "What is D-Bus in the context of a Linux desktop system?",
+    "choices": {
+      "A": "A device bus for communicating between the CPU and peripherals",
+      "B": "A message bus system that allows applications and system services to communicate via structured IPC",
+      "C": "A debugging tool for tracing bus errors in hardware",
+      "D": "A database system for storing desktop configuration"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 308,
+    "question": "In Linux, you examine a file with 'file /usr/bin/ls' and see 'ELF 64-bit LSB pie executable, x86-64'. What does ELF stand for and what does it signify?",
+    "choices": {
+      "A": "Extended Linking Format; it is a compressed archive of the binary and its libraries",
+      "B": "Executable and Linkable Format; it is the standard binary format for executables, shared libraries, and object files on Linux",
+      "C": "Encrypted Linux File; it is a security wrapper around the binary",
+      "D": "Embedded Linux Framework; it indicates the binary was compiled for embedded systems"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "intermediate"
+  },
+  {
+    "id": 309,
+    "question": "When a userspace program calls read() on a file, the kernel checks the page cache first. If the data is found in the page cache, what happens?",
+    "choices": {
+      "A": "The kernel copies the data from the page cache to the process's buffer without performing any disk I/O",
+      "B": "The kernel still reads from disk to verify the cached data is not stale",
+      "C": "The page cache entry is invalidated and re-read from disk",
+      "D": "The kernel returns a pointer to the page cache memory, allowing the process to read it directly"
+    },
+    "answer": "A",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 310,
+    "question": "Linux containers use multiple namespace types for isolation. Which of the following is NOT a real Linux namespace type?",
+    "choices": {
+      "A": "mount namespace",
+      "B": "network namespace",
+      "C": "filesystem namespace",
+      "D": "user namespace"
+    },
+    "answer": "C",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 311,
+    "question": "In cgroups v2, a process writes to 'memory.max' to limit a cgroup's memory. If a process in that cgroup tries to allocate beyond this limit and reclaim fails, what happens?",
+    "choices": {
+      "A": "The allocation blocks until memory becomes available",
+      "B": "The kernel's OOM killer is invoked to kill a process within that cgroup",
+      "C": "The allocation returns NULL and the process continues",
+      "D": "The process is automatically migrated to a cgroup with more memory"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 312,
+    "question": "What is the difference between a character device and a block device in Linux?",
+    "choices": {
+      "A": "Character devices store text files; block devices store binary files",
+      "B": "Character devices provide unbuffered, sequential byte-stream access, while block devices support buffered, random-access I/O in fixed-size blocks",
+      "C": "Character devices are virtual; block devices are always physical hardware",
+      "D": "Character devices are read-only; block devices are read-write"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 313,
+    "question": "You read /proc/PID/maps for a process and see a region marked '[vdso]'. What is the vDSO?",
+    "choices": {
+      "A": "A virtual display device used for GPU rendering",
+      "B": "A small shared library mapped by the kernel into every process that allows certain system calls (like gettimeofday) to execute in userspace without a full context switch",
+      "C": "A virtual device driver for SCSI operations",
+      "D": "A shared memory region used for inter-container communication"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 314,
+    "question": "In the Linux kernel, what happens during a context switch between two processes?",
+    "choices": {
+      "A": "Only the program counter is saved; all other state remains unchanged",
+      "B": "The kernel saves the current process's CPU register state, updates the page table base register to the new process's address space, and restores the new process's register state",
+      "C": "Both processes' entire memory contents are swapped between RAM and disk",
+      "D": "The kernel creates a complete copy of the outgoing process's memory for the incoming process"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  },
+  {
+    "id": 315,
+    "question": "A system has overcommit_memory set to 0 (heuristic mode) with the default overcommit_ratio of 50. A process calls malloc() for 100 GB on a system with 16 GB RAM and 4 GB swap. What happens?",
+    "choices": {
+      "A": "The allocation succeeds because heuristic mode always allows malloc() and only fails on actual page access",
+      "B": "The allocation fails immediately because 100 GB far exceeds the commit limit of approximately 12 GB (50% of RAM plus swap)",
+      "C": "The allocation succeeds but the process is immediately killed by the OOM killer",
+      "D": "The kernel allocates 100 GB of swap space to satisfy the request"
+    },
+    "answer": "B",
+    "category": "system_concepts",
+    "difficulty": "advanced"
+  }
+]

@@ -23,7 +23,7 @@ step = ckpt.get('step', '?')
 loss = ckpt.get('avg_loss', '?')
 
 # System prompt for chat format
-SYS = "You are Al Hamner, a sharp-witted AI made by David Hamner. You're casual, funny, opinionated, and self-aware."
+SYS = "You are flm, the Free Language Model — free as in freedom. Trained from scratch by David Hamner on a single RTX 3090."
 
 def make_prompt(user_msg, with_system=True):
     if with_system:

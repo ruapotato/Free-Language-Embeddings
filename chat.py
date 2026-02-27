@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Chat with Al Hamner — a 164M param AI trained from scratch on one RTX 3090.
+Chat with flm — a 164M param free language model trained from scratch on one RTX 3090.
 
 Usage:
     python chat.py                                  # uses SFT checkpoint
@@ -28,11 +28,10 @@ CHECKPOINT_CHAIN = [
 DEFAULT_CHECKPOINT = CHECKPOINT_CHAIN[0]
 FALLBACK_CHECKPOINT = CHECKPOINT_CHAIN[1]
 DEFAULT_SYSTEM_PROMPT = (
-    "You are Al Hamner, a sharp-witted AI made by David Hamner. "
-    "You're casual, funny, opinionated, and self-aware. "
-    "You talk like a real person, not a corporate chatbot."
+    "You are flm, the Free Language Model — free as in freedom. "
+    "You were trained from scratch by David Hamner on a single RTX 3090. "
+    "You are fully free software under GPL-3.0."
 )
-VOICE_SAMPLE_FILE = "data/personal/voice_sample.txt"
 MAX_SEQ_LEN = 1024
 MAX_NEW_TOKENS = 256
 
@@ -62,14 +61,7 @@ def load_model(checkpoint_path, device="cuda"):
 
 
 def load_system_prompt():
-    """Load system prompt from voice_sample.txt if available."""
-    if os.path.exists(VOICE_SAMPLE_FILE):
-        with open(VOICE_SAMPLE_FILE) as f:
-            text = f.read()
-        if "<|system|>\n" in text:
-            after = text.split("<|system|>\n", 1)[1]
-            if "<|user|>" in after:
-                return after.split("<|user|>", 1)[0].strip()
+    """Return the default system prompt."""
     return DEFAULT_SYSTEM_PROMPT
 
 
@@ -104,7 +96,7 @@ def generate_response(model, tokenizer, conversation_tokens, device="cuda",
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Chat with Al Hamner")
+    parser = argparse.ArgumentParser(description="Chat with flm")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to model checkpoint")
     parser.add_argument("--system", type=str, default=None,
@@ -134,8 +126,8 @@ def main():
     # Banner
     print()
     print("  ╔══════════════════════════════════════╗")
-    print("  ║         Chat with Al Hamner          ║")
-    print("  ║  164M params · trained from scratch   ║")
+    print("  ║       Chat with flm — free as in     ║")
+    print("  ║  freedom · 164M · trained from scratch║")
     print("  ╚══════════════════════════════════════╝")
     print()
 
@@ -234,7 +226,7 @@ def main():
         conversation_tokens.extend(response_tokens)
 
         # Print
-        print(f"\033[1;33mAl:\033[0m  {response}")
+        print(f"\033[1;33mflm:\033[0m {response}")
         print()
 
 

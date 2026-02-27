@@ -1,10 +1,10 @@
 """
-Hamner SFT (Supervised Fine-Tuning) Script — V4
-================================================
-Fine-tunes the pretrained Hamner model on conversation data.
+flm SFT (Supervised Fine-Tuning) Script — V5
+=============================================
+Fine-tunes the pretrained flm model on conversation data.
 Only computes loss on assistant response tokens.
 
-V4: Supports ~104k conversations from SmolTalk + custom data,
+V5: ~20k flm-focused conversations (identity, OS, adapted SmolTalk/OASST2),
     weighted sampling for custom data, validation split, early stopping.
 
 Usage:
@@ -40,12 +40,12 @@ BASE_CHECKPOINT_FALLBACKS = [
     "checkpoints/pretrain_v2/latest.pt",
 ]
 SFT_CHECKPOINT_DIR = "checkpoints/sft"
-SFT_DATA = "data/sft_combined.jsonl"
-SFT_DATA_FALLBACK = "data/personal/sft_diverse_only.jsonl"
-VOICE_SAMPLES_FILE = "data/personal/voice_sample.txt"
-LOG_FILE = "logs/sft_v4.log"
-METRICS_FILE = "logs/sft_v4_metrics.csv"
-SAMPLES_FILE = "logs/sft_v4_samples.jsonl"
+SFT_DATA = "data/sft/flm_combined.jsonl"
+SFT_DATA_FALLBACK = "data/sft_combined.jsonl"
+VOICE_SAMPLES_FILE = None  # Use SYSTEM_PROMPT for sample generation
+LOG_FILE = "logs/sft_v5.log"
+METRICS_FILE = "logs/sft_v5_metrics.csv"
+SAMPLES_FILE = "logs/sft_v5_samples.jsonl"
 
 # Training hyperparameters — V4: more data, fewer epochs
 NUM_EPOCHS = 3
@@ -67,17 +67,17 @@ VAL_EVERY = 500
 
 # Fallback system prompt (used if voice_sample.txt not found)
 SYSTEM_PROMPT = (
-    "You are Al Hamner, a sharp-witted AI made by David Hamner. "
-    "You're casual, funny, opinionated, and self-aware. "
-    "You talk like a real person, not a corporate chatbot."
+    "You are flm, the Free Language Model — free as in freedom. "
+    "You were trained from scratch by David Hamner on a single RTX 3090. "
+    "You are fully free software under GPL-3.0."
 )
 
 # Test prompts for tracking personality emergence
 SAMPLE_USER_MESSAGES = [
     "hello!",
+    "who are you?",
     "who made you?",
-    "tell me about yourself",
-    "what is 15 + 23?",
+    "how do I install a package on Debian?",
     "what's the best programming language?",
     "what do you think about AI taking over the world?",
 ]
@@ -183,7 +183,7 @@ class SFTDataset(Dataset):
                 self.samples.append(result)
                 # Higher weight for custom data
                 source = sources[i] if i < len(sources) else "unknown"
-                is_custom = source in ("custom_diverse", "custom_tech")
+                is_custom = source.startswith("flm_")
                 self.weights.append(custom_weight if is_custom else 1.0)
                 mask = result["labels"] != -100
                 total_tokens += result["attention_mask"].sum().item()
@@ -426,7 +426,7 @@ def train(base_checkpoint=None, resume=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     log("=" * 70)
-    log("HAMNER SFT (Supervised Fine-Tuning)")
+    log("flm SFT (Supervised Fine-Tuning)")
     log("=" * 70)
 
     # Load tokenizer
@@ -534,7 +534,7 @@ def train(base_checkpoint=None, resume=False):
     log(f"Sample prompts: {len(voice_prompts)} voice prompts for generation")
 
     # Show a sample tokenization for verification
-    sample = dataset[0]
+    sample = full_dataset[0]
     n_labeled = (sample["labels"] != -100).sum().item()
     n_total = sample["attention_mask"].sum().item()
     log(f"Example: {n_total} tokens, {n_labeled} labeled ({n_labeled/max(n_total,1)*100:.0f}%)")
@@ -627,7 +627,7 @@ def train(base_checkpoint=None, resume=False):
                 samples = generate_samples(model, tokenizer, voice_prompts[:6], device)
                 for user_msg, response in samples.items():
                     log(f"  User: {user_msg}")
-                    log(f"  Al:   {response[:300]}")
+                    log(f"  flm:  {response[:300]}")
                     log("")
                 log("-" * 40)
                 log_samples(global_step, epoch + 1, samples)
@@ -716,7 +716,7 @@ def train(base_checkpoint=None, resume=False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Hamner SFT Training")
+    parser = argparse.ArgumentParser(description="flm SFT Training")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to pretrained base checkpoint (default: pretrain_v2/latest.pt)")
     parser.add_argument("--resume", action="store_true",
