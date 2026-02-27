@@ -65,6 +65,7 @@ class FlmEvaluator:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.max_len = config.max_seq_len if hasattr(config, "max_seq_len") else 1024
+        self.pad_id = self.tokenizer.pad_token_id or 0
 
         step = ckpt.get("step", "?")
         loss = ckpt.get("avg_loss", "?")
@@ -87,7 +88,7 @@ class FlmEvaluator:
         input_ids = self._truncate(input_ids)
 
         outputs = self.model(input_ids)
-        last_logits = outputs["logits"][:, -1, :]  # [1, vocab_size]
+        last_logits = outputs["logits"][:, -1, :]
         log_probs = F.log_softmax(last_logits, dim=-1)
 
         result = {}
@@ -95,6 +96,31 @@ class FlmEvaluator:
             token_id = self.tokenizer.encode(label, add_special_tokens=False)[0]
             result[label] = log_probs[0, token_id].item()
         return result
+
+    @torch.no_grad()
+    def batch_answer_logprobs(self, prompts: list[str], token_labels: list[str]) -> list[dict[str, float]]:
+        """Batched version: get answer token log-probs for multiple prompts."""
+        encoded = [self.tokenizer.encode(p, add_special_tokens=False) for p in prompts]
+        max_len = min(max(len(e) for e in encoded), self.max_len)
+
+        # Left-pad so last token is aligned
+        input_ids = torch.full((len(encoded), max_len), self.pad_id, dtype=torch.long, device=self.device)
+        attention_mask = torch.zeros((len(encoded), max_len), dtype=torch.long, device=self.device)
+        for i, ids in enumerate(encoded):
+            ids = ids[-max_len:]  # truncate from left
+            input_ids[i, max_len - len(ids):] = torch.tensor(ids, dtype=torch.long)
+            attention_mask[i, max_len - len(ids):] = 1
+
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            outputs = self.model(input_ids, attention_mask=attention_mask)
+        last_logits = outputs["logits"][:, -1, :]  # [batch, vocab]
+        log_probs = F.log_softmax(last_logits.float(), dim=-1)
+
+        label_ids = [self.tokenizer.encode(l, add_special_tokens=False)[0] for l in token_labels]
+        results = []
+        for i in range(len(prompts)):
+            results.append({label: log_probs[i, tid].item() for label, tid in zip(token_labels, label_ids)})
+        return results
 
     @torch.no_grad()
     def get_completion_logprob(self, prompt: str, completion: str) -> float:
@@ -108,23 +134,62 @@ class FlmEvaluator:
         all_ids = self._truncate(all_ids)
 
         outputs = self.model(all_ids)
-        logits = outputs["logits"]  # [1, seq_len, vocab_size]
+        logits = outputs["logits"]
         log_probs = F.log_softmax(logits, dim=-1)
 
-        # Score only the completion tokens
         n_prompt = len(prompt_ids)
-        # After truncation, adjust n_prompt
         n_prompt = max(0, n_prompt - max(0, len(prompt_ids) + len(completion_ids) - all_ids.shape[1]))
         n_completion = all_ids.shape[1] - n_prompt
 
         total = 0.0
         for i in range(n_completion):
-            pos = n_prompt + i  # position of completion token
+            pos = n_prompt + i
             if pos == 0:
                 continue
             token_id = all_ids[0, pos].item()
             total += log_probs[0, pos - 1, token_id].item()
         return total / max(n_completion, 1)
+
+    @torch.no_grad()
+    def batch_completion_logprobs(self, pairs: list[tuple[str, str]]) -> list[float]:
+        """Batched version: mean log-prob for multiple (prompt, completion) pairs."""
+        all_encoded = []
+        prompt_lens = []
+        for prompt, completion in pairs:
+            p_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+            c_ids = self.tokenizer.encode(completion, add_special_tokens=False)
+            combined = (p_ids + c_ids)[-self.max_len:]
+            p_len = max(0, len(p_ids) - max(0, len(p_ids) + len(c_ids) - self.max_len))
+            all_encoded.append(combined)
+            prompt_lens.append(p_len)
+
+        max_len = max(len(e) for e in all_encoded)
+        # Right-pad
+        input_ids = torch.full((len(all_encoded), max_len), self.pad_id, dtype=torch.long, device=self.device)
+        attention_mask = torch.zeros((len(all_encoded), max_len), dtype=torch.long, device=self.device)
+        for i, ids in enumerate(all_encoded):
+            input_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
+            attention_mask[i, :len(ids)] = 1
+
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            outputs = self.model(input_ids, attention_mask=attention_mask)
+        logits = outputs["logits"]
+        log_probs = F.log_softmax(logits.float(), dim=-1)
+
+        results = []
+        for i in range(len(pairs)):
+            n_prompt = prompt_lens[i]
+            n_total = len(all_encoded[i])
+            n_completion = n_total - n_prompt
+            total = 0.0
+            for j in range(n_completion):
+                pos = n_prompt + j
+                if pos == 0:
+                    continue
+                token_id = input_ids[i, pos].item()
+                total += log_probs[i, pos - 1, token_id].item()
+            results.append(total / max(n_completion, 1))
+        return results
 
 
 class HFEvaluator:
@@ -232,8 +297,11 @@ def eval_question(evaluator, question: dict) -> dict:
         }
 
 
+BATCH_SIZE_EVAL = 64  # batch size for evaluation — saturates GPU
+
+
 def run_benchmark(evaluator, bench_name: str, questions: list[dict]) -> dict:
-    """Run a single benchmark and return results dict."""
+    """Run a single benchmark and return results dict. Uses batching when available."""
     meta = get_benchmark_meta(bench_name)
     results = {
         "benchmark": bench_name,
@@ -247,36 +315,113 @@ def run_benchmark(evaluator, bench_name: str, questions: list[dict]) -> dict:
     }
 
     start = time.time()
+    has_batch = hasattr(evaluator, "batch_answer_logprobs")
+    scoring = meta["scoring"]
 
-    for i, q in enumerate(questions):
-        outcome = eval_question(evaluator, q)
+    if has_batch and scoring == "token":
+        # Batched token-MCQ evaluation
+        for batch_start in range(0, len(questions), BATCH_SIZE_EVAL):
+            batch_qs = questions[batch_start:batch_start + BATCH_SIZE_EVAL]
+            prompts = [q["prompt"] for q in batch_qs]
+            labels = batch_qs[0].get("token_labels", ["A", "B", "C", "D"][:len(batch_qs[0]["choices"])])
+            batch_logprobs = evaluator.batch_answer_logprobs(prompts, labels)
 
-        if outcome["correct"]:
-            results["correct"] += 1
+            for j, (q, logprobs) in enumerate(zip(batch_qs, batch_logprobs)):
+                predicted_label = max(logprobs, key=logprobs.get)
+                predicted_idx = labels.index(predicted_label)
+                correct = predicted_idx == q["answer_idx"]
+                if correct:
+                    results["correct"] += 1
+                results["per_question"].append({
+                    "id": q["id"], "correct": correct,
+                    "predicted_idx": predicted_idx, "answer_idx": q["answer_idx"],
+                    "scores": logprobs, "category": q.get("category"),
+                })
+                cat = q.get("category")
+                if cat:
+                    results["per_category"][cat]["total"] += 1
+                    if correct:
+                        results["per_category"][cat]["correct"] += 1
 
-        results["per_question"].append({
-            "id": q["id"],
-            "correct": outcome["correct"],
-            "predicted_idx": outcome["predicted_idx"],
-            "answer_idx": q["answer_idx"],
-            "scores": outcome["scores"],
-            "category": q.get("category"),
-        })
-
-        cat = q.get("category")
-        if cat:
-            results["per_category"][cat]["total"] += 1
-            if outcome["correct"]:
-                results["per_category"][cat]["correct"] += 1
-
-        # Progress
-        if (i + 1) % 50 == 0 or i == 0 or i == len(questions) - 1:
-            acc = results["correct"] / (i + 1) * 100
+            done = min(batch_start + BATCH_SIZE_EVAL, len(questions))
             elapsed = time.time() - start
-            rate = (i + 1) / elapsed if elapsed > 0 else 0
-            eta = (len(questions) - i - 1) / rate if rate > 0 else 0
-            print(f"  [{i+1:4d}/{len(questions)}] {bench_name}: "
-                  f"acc={acc:5.1f}% ({rate:.1f} q/s, ETA {eta:.0f}s)")
+            acc = results["correct"] / done * 100
+            rate = done / elapsed if elapsed > 0 else 0
+            eta = (len(questions) - done) / rate if rate > 0 else 0
+            print(f"  [{done:4d}/{len(questions)}] {bench_name}: "
+                  f"acc={acc:5.1f}% ({rate:.0f} q/s, ETA {eta:.0f}s)")
+
+    elif has_batch and scoring == "completion":
+        # Batched completion-MCQ: batch all prompt+choice pairs
+        for batch_start in range(0, len(questions), BATCH_SIZE_EVAL):
+            batch_qs = questions[batch_start:batch_start + BATCH_SIZE_EVAL]
+            # Flatten: each question has N choices → N pairs
+            all_pairs = []
+            pair_map = []  # (question_idx_in_batch, choice_idx)
+            for qi, q in enumerate(batch_qs):
+                for ci, choice in enumerate(q["choices"]):
+                    all_pairs.append((q["prompt"], choice))
+                    pair_map.append((qi, ci))
+
+            # Evaluate in sub-batches to avoid OOM
+            all_scores = []
+            for sub_start in range(0, len(all_pairs), BATCH_SIZE_EVAL):
+                sub_pairs = all_pairs[sub_start:sub_start + BATCH_SIZE_EVAL]
+                all_scores.extend(evaluator.batch_completion_logprobs(sub_pairs))
+
+            # Regroup scores by question
+            q_scores = [{} for _ in batch_qs]
+            for (qi, ci), score in zip(pair_map, all_scores):
+                q_scores[qi][ci] = score
+
+            for j, (q, scores) in enumerate(zip(batch_qs, q_scores)):
+                predicted_idx = max(scores, key=scores.get)
+                correct = predicted_idx == q["answer_idx"]
+                if correct:
+                    results["correct"] += 1
+                results["per_question"].append({
+                    "id": q["id"], "correct": correct,
+                    "predicted_idx": predicted_idx, "answer_idx": q["answer_idx"],
+                    "scores": {str(k): v for k, v in scores.items()},
+                    "category": q.get("category"),
+                })
+                cat = q.get("category")
+                if cat:
+                    results["per_category"][cat]["total"] += 1
+                    if correct:
+                        results["per_category"][cat]["correct"] += 1
+
+            done = min(batch_start + BATCH_SIZE_EVAL, len(questions))
+            elapsed = time.time() - start
+            acc = results["correct"] / done * 100
+            rate = done / elapsed if elapsed > 0 else 0
+            eta = (len(questions) - done) / rate if rate > 0 else 0
+            print(f"  [{done:4d}/{len(questions)}] {bench_name}: "
+                  f"acc={acc:5.1f}% ({rate:.0f} q/s, ETA {eta:.0f}s)")
+    else:
+        # Fallback: unbatched (for HF models or when batch methods unavailable)
+        for i, q in enumerate(questions):
+            outcome = eval_question(evaluator, q)
+            if outcome["correct"]:
+                results["correct"] += 1
+            results["per_question"].append({
+                "id": q["id"], "correct": outcome["correct"],
+                "predicted_idx": outcome["predicted_idx"],
+                "answer_idx": q["answer_idx"],
+                "scores": outcome["scores"], "category": q.get("category"),
+            })
+            cat = q.get("category")
+            if cat:
+                results["per_category"][cat]["total"] += 1
+                if outcome["correct"]:
+                    results["per_category"][cat]["correct"] += 1
+            if (i + 1) % 50 == 0 or i == 0 or i == len(questions) - 1:
+                acc = results["correct"] / (i + 1) * 100
+                elapsed = time.time() - start
+                rate = (i + 1) / elapsed if elapsed > 0 else 0
+                eta = (len(questions) - i - 1) / rate if rate > 0 else 0
+                print(f"  [{i+1:4d}/{len(questions)}] {bench_name}: "
+                      f"acc={acc:5.1f}% ({rate:.1f} q/s, ETA {eta:.0f}s)")
 
     elapsed = time.time() - start
     results["elapsed_seconds"] = round(elapsed, 1)

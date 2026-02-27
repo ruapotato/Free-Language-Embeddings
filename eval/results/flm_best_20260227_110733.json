@@ -1,0 +1,882 @@
+{
+  "model": "flm_best",
+  "timestamp": "2026-02-27T11:05:07.972973",
+  "benchmarks": {
+    "linux_bench": {
+      "benchmark": "linux_bench",
+      "benchmark_name": "LinuxBench",
+      "scoring": "token",
+      "baseline": 0.25,
+      "total": 315,
+      "correct": 57,
+      "accuracy": 0.18095238095238095,
+      "elapsed_seconds": 0.9,
+      "per_category": {
+        "command_line": {
+          "correct": 6,
+          "total": 35
+        },
+        "filesystems": {
+          "correct": 7,
+          "total": 30
+        },
+        "package_management": {
+          "correct": 6,
+          "total": 35
+        },
+        "processes": {
+          "correct": 11,
+          "total": 35
+        },
+        "networking": {
+          "correct": 7,
+          "total": 35
+        },
+        "users_security": {
+          "correct": 6,
+          "total": 30
+        },
+        "boot_kernel": {
+          "correct": 2,
+          "total": 25
+        },
+        "shell_scripting": {
+          "correct": 2,
+          "total": 25
+        },
+        "troubleshooting": {
+          "correct": 8,
+          "total": 40
+        },
+        "system_concepts": {
+          "correct": 2,
+          "total": 25
+        }
+      }
+    },
+    "arc_easy": {
+      "benchmark": "arc_easy",
+      "benchmark_name": "ARC-Easy",
+      "scoring": "token",
+      "baseline": 0.25,
+      "total": 2376,
+      "correct": 603,
+      "accuracy": 0.2537878787878788,
+      "elapsed_seconds": 4.0,
+      "per_category": {}
+    },
+    "hellaswag": {
+      "benchmark": "hellaswag",
+      "benchmark_name": "HellaSwag",
+      "scoring": "completion",
+      "baseline": 0.25,
+      "total": 10042,
+      "correct": 3091,
+      "accuracy": 0.30780720971917946,
+      "elapsed_seconds": 99.2,
+      "per_category": {
+        "Roof shingle removal": {
+          "correct": 8,
+          "total": 14
+        },
+        "Clean and jerk": {
+          "correct": 45,
+          "total": 137
+        },
+        "Canoeing": {
+          "correct": 5,
+          "total": 14
+        },
+        "High jump": {
+          "correct": 28,
+          "total": 117
+        },
+        "Playing harmonica": {
+          "correct": 31,
+          "total": 97
+        },
+        "Sumo": {
+          "correct": 0,
+          "total": 3
+        },
+        "Sharpening knives": {
+          "correct": 47,
+          "total": 138
+        },
+        "Playing bagpipes": {
+          "correct": 3,
+          "total": 10
+        },
+        "Playing water polo": {
+          "correct": 5,
+          "total": 15
+        },
+        "Having an ice cream": {
+          "correct": 40,
+          "total": 116
+        },
+        "Cheerleading": {
+          "correct": 5,
+          "total": 23
+        },
+        "Cutting the grass": {
+          "correct": 45,
+          "total": 131
+        },
+        "Washing face": {
+          "correct": 50,
+          "total": 136
+        },
+        "Paintball": {
+          "correct": 4,
+          "total": 10
+        },
+        "Gargling mouthwash": {
+          "correct": 21,
+          "total": 63
+        },
+        "Archery": {
+          "correct": 2,
+          "total": 9
+        },
+        "Surfing": {
+          "correct": 6,
+          "total": 20
+        },
+        "Plastering": {
+          "correct": 2,
+          "total": 7
+        },
+        "Applying sunscreen": {
+          "correct": 10,
+          "total": 20
+        },
+        "Beer pong": {
+          "correct": 3,
+          "total": 15
+        },
+        "Grooming dog": {
+          "correct": 5,
+          "total": 11
+        },
+        "Polishing shoes": {
+          "correct": 2,
+          "total": 14
+        },
+        "Zumba": {
+          "correct": 3,
+          "total": 10
+        },
+        "Running a marathon": {
+          "correct": 48,
+          "total": 140
+        },
+        "Using the pommel horse": {
+          "correct": 4,
+          "total": 10
+        },
+        "Kayaking": {
+          "correct": 2,
+          "total": 7
+        },
+        "Cleaning windows": {
+          "correct": 7,
+          "total": 16
+        },
+        "Ice fishing": {
+          "correct": 38,
+          "total": 127
+        },
+        "Hitting a pinata": {
+          "correct": 6,
+          "total": 16
+        },
+        "Playing violin": {
+          "correct": 40,
+          "total": 121
+        },
+        "Making a sandwich": {
+          "correct": 6,
+          "total": 12
+        },
+        "Making a lemonade": {
+          "correct": 11,
+          "total": 32
+        },
+        "Ironing clothes": {
+          "correct": 5,
+          "total": 15
+        },
+        "Clipping cat claws": {
+          "correct": 4,
+          "total": 22
+        },
+        "Baton twirling": {
+          "correct": 3,
+          "total": 14
+        },
+        "Removing ice from car": {
+          "correct": 4,
+          "total": 6
+        },
+        "Throwing darts": {
+          "correct": 1,
+          "total": 4
+        },
+        "Rollerblading": {
+          "correct": 6,
+          "total": 13
+        },
+        "Layup drill in basketball": {
+          "correct": 25,
+          "total": 111
+        },
+        "Using parallel bars": {
+          "correct": 6,
+          "total": 21
+        },
+        "Doing a powerbomb": {
+          "correct": 2,
+          "total": 12
+        },
+        "Scuba diving": {
+          "correct": 10,
+          "total": 23
+        },
+        "Cleaning sink": {
+          "correct": 1,
+          "total": 8
+        },
+        "Playing polo": {
+          "correct": 3,
+          "total": 12
+        },
+        "Doing fencing": {
+          "correct": 4,
+          "total": 8
+        },
+        "Putting on shoes": {
+          "correct": 1,
+          "total": 2
+        },
+        "Mooping floor": {
+          "correct": 2,
+          "total": 9
+        },
+        "Tennis serve with ball bouncing": {
+          "correct": 3,
+          "total": 13
+        },
+        "Blowing leaves": {
+          "correct": 2,
+          "total": 11
+        },
+        "Drinking beer": {
+          "correct": 5,
+          "total": 11
+        },
+        "Playing guitarra": {
+          "correct": 5,
+          "total": 18
+        },
+        "Skiing": {
+          "correct": 4,
+          "total": 17
+        },
+        "Hand car wash": {
+          "correct": 6,
+          "total": 23
+        },
+        "Using the rowing machine": {
+          "correct": 6,
+          "total": 10
+        },
+        "Kite flying": {
+          "correct": 0,
+          "total": 2
+        },
+        "Putting on makeup": {
+          "correct": 3,
+          "total": 7
+        },
+        "Putting in contact lenses": {
+          "correct": 5,
+          "total": 12
+        },
+        "BMX": {
+          "correct": 4,
+          "total": 9
+        },
+        "Longboarding": {
+          "correct": 5,
+          "total": 11
+        },
+        "Getting a piercing": {
+          "correct": 5,
+          "total": 18
+        },
+        "Hand washing clothes": {
+          "correct": 2,
+          "total": 8
+        },
+        "Disc dog": {
+          "correct": 12,
+          "total": 32
+        },
+        "Shuffleboard": {
+          "correct": 5,
+          "total": 13
+        },
+        "Snow tubing": {
+          "correct": 7,
+          "total": 18
+        },
+        "Cricket": {
+          "correct": 2,
+          "total": 5
+        },
+        "Hanging wallpaper": {
+          "correct": 6,
+          "total": 11
+        },
+        "Drum corps": {
+          "correct": 4,
+          "total": 8
+        },
+        "Painting furniture": {
+          "correct": 7,
+          "total": 19
+        },
+        "Fun sliding down": {
+          "correct": 1,
+          "total": 5
+        },
+        "Doing motocross": {
+          "correct": 3,
+          "total": 7
+        },
+        "Assembling bicycle": {
+          "correct": 4,
+          "total": 8
+        },
+        "Playing drums": {
+          "correct": 6,
+          "total": 15
+        },
+        "Spread mulch": {
+          "correct": 2,
+          "total": 6
+        },
+        "Camel ride": {
+          "correct": 7,
+          "total": 16
+        },
+        "Painting": {
+          "correct": 0,
+          "total": 1
+        },
+        "Playing badminton": {
+          "correct": 2,
+          "total": 15
+        },
+        "Wakeboarding": {
+          "correct": 3,
+          "total": 13
+        },
+        "Rock climbing": {
+          "correct": 4,
+          "total": 9
+        },
+        "Cleaning shoes": {
+          "correct": 2,
+          "total": 11
+        },
+        "Discus throw": {
+          "correct": 5,
+          "total": 12
+        },
+        "Hurling": {
+          "correct": 4,
+          "total": 8
+        },
+        "Raking leaves": {
+          "correct": 7,
+          "total": 11
+        },
+        "Wrapping presents": {
+          "correct": 8,
+          "total": 17
+        },
+        "Waterskiing": {
+          "correct": 6,
+          "total": 19
+        },
+        "Tai chi": {
+          "correct": 1,
+          "total": 9
+        },
+        "Rope skipping": {
+          "correct": 5,
+          "total": 21
+        },
+        "Bathing dog": {
+          "correct": 2,
+          "total": 11
+        },
+        "Triple jump": {
+          "correct": 6,
+          "total": 11
+        },
+        "Playing kickball": {
+          "correct": 1,
+          "total": 2
+        },
+        "Spinning": {
+          "correct": 6,
+          "total": 18
+        },
+        "Horseback riding": {
+          "correct": 6,
+          "total": 12
+        },
+        "Playing accordion": {
+          "correct": 2,
+          "total": 6
+        },
+        "Slacklining": {
+          "correct": 6,
+          "total": 12
+        },
+        "Snatch": {
+          "correct": 2,
+          "total": 6
+        },
+        "Swimming": {
+          "correct": 6,
+          "total": 14
+        },
+        "Sailing": {
+          "correct": 0,
+          "total": 4
+        },
+        "Playing beach volleyball": {
+          "correct": 3,
+          "total": 17
+        },
+        "Getting a haircut": {
+          "correct": 4,
+          "total": 8
+        },
+        "Powerbocking": {
+          "correct": 3,
+          "total": 14
+        },
+        "Arm wrestling": {
+          "correct": 5,
+          "total": 20
+        },
+        "Futsal": {
+          "correct": 7,
+          "total": 25
+        },
+        "Beach soccer": {
+          "correct": 5,
+          "total": 12
+        },
+        "Doing karate": {
+          "correct": 6,
+          "total": 11
+        },
+        "Windsurfing": {
+          "correct": 1,
+          "total": 7
+        },
+        "Tumbling": {
+          "correct": 3,
+          "total": 7
+        },
+        "Bullfighting": {
+          "correct": 1,
+          "total": 8
+        },
+        "Fixing bicycle": {
+          "correct": 1,
+          "total": 6
+        },
+        "Table soccer": {
+          "correct": 0,
+          "total": 7
+        },
+        "Skateboarding": {
+          "correct": 5,
+          "total": 9
+        },
+        "Doing kickboxing": {
+          "correct": 2,
+          "total": 4
+        },
+        "Kneeling": {
+          "correct": 5,
+          "total": 11
+        },
+        "Polishing forniture": {
+          "correct": 3,
+          "total": 9
+        },
+        "Starting a campfire": {
+          "correct": 8,
+          "total": 14
+        },
+        "Croquet": {
+          "correct": 3,
+          "total": 11
+        },
+        "Removing curlers": {
+          "correct": 2,
+          "total": 9
+        },
+        "Carving jack-o-lanterns": {
+          "correct": 7,
+          "total": 18
+        },
+        "Long jump": {
+          "correct": 3,
+          "total": 7
+        },
+        "Shoveling snow": {
+          "correct": 4,
+          "total": 18
+        },
+        "Washing hands": {
+          "correct": 3,
+          "total": 5
+        },
+        "Calf roping": {
+          "correct": 6,
+          "total": 27
+        },
+        "Using uneven bars": {
+          "correct": 0,
+          "total": 8
+        },
+        "Elliptical trainer": {
+          "correct": 5,
+          "total": 15
+        },
+        "Making a cake": {
+          "correct": 12,
+          "total": 30
+        },
+        "Javelin throw": {
+          "correct": 2,
+          "total": 5
+        },
+        "Baking cookies": {
+          "correct": 13,
+          "total": 33
+        },
+        "Playing congas": {
+          "correct": 1,
+          "total": 8
+        },
+        "Preparing salad": {
+          "correct": 2,
+          "total": 10
+        },
+        "Mixing drinks": {
+          "correct": 3,
+          "total": 13
+        },
+        "Chopping wood": {
+          "correct": 1,
+          "total": 9
+        },
+        "Smoking a cigarette": {
+          "correct": 2,
+          "total": 7
+        },
+        "Blow-drying hair": {
+          "correct": 1,
+          "total": 9
+        },
+        "Laying tile": {
+          "correct": 2,
+          "total": 12
+        },
+        "Capoeira": {
+          "correct": 5,
+          "total": 14
+        },
+        "Breakdancing": {
+          "correct": 0,
+          "total": 2
+        },
+        "Trimming branches or hedges": {
+          "correct": 1,
+          "total": 4
+        },
+        "Plataform diving": {
+          "correct": 4,
+          "total": 13
+        },
+        "Preparing pasta": {
+          "correct": 4,
+          "total": 12
+        },
+        "River tubing": {
+          "correct": 2,
+          "total": 11
+        },
+        "Shaving legs": {
+          "correct": 0,
+          "total": 5
+        },
+        "Drinking coffee": {
+          "correct": 4,
+          "total": 5
+        },
+        "Playing pool": {
+          "correct": 10,
+          "total": 26
+        },
+        "Rock-paper-scissors": {
+          "correct": 3,
+          "total": 6
+        },
+        "Shot put": {
+          "correct": 6,
+          "total": 12
+        },
+        "Decorating the Christmas tree": {
+          "correct": 1,
+          "total": 7
+        },
+        "Tango": {
+          "correct": 1,
+          "total": 9
+        },
+        "Braiding hair": {
+          "correct": 4,
+          "total": 6
+        },
+        "Walking the dog": {
+          "correct": 1,
+          "total": 8
+        },
+        "Playing squash": {
+          "correct": 0,
+          "total": 4
+        },
+        "Mowing the lawn": {
+          "correct": 3,
+          "total": 9
+        },
+        "Playing saxophone": {
+          "correct": 0,
+          "total": 9
+        },
+        "Fixing the roof": {
+          "correct": 2,
+          "total": 4
+        },
+        "Doing crunches": {
+          "correct": 8,
+          "total": 15
+        },
+        "Playing piano": {
+          "correct": 1,
+          "total": 9
+        },
+        "Installing carpet": {
+          "correct": 3,
+          "total": 11
+        },
+        "Shaving": {
+          "correct": 1,
+          "total": 9
+        },
+        "Pole vault": {
+          "correct": 2,
+          "total": 6
+        },
+        "Ping-pong": {
+          "correct": 4,
+          "total": 9
+        },
+        "Getting a tattoo": {
+          "correct": 1,
+          "total": 2
+        },
+        "Playing ice hockey": {
+          "correct": 2,
+          "total": 8
+        },
+        "Ballet": {
+          "correct": 2,
+          "total": 7
+        },
+        "Smoking hookah": {
+          "correct": 2,
+          "total": 10
+        },
+        "Playing rubik cube": {
+          "correct": 1,
+          "total": 3
+        },
+        "Welding": {
+          "correct": 2,
+          "total": 8
+        },
+        "Hula hoop": {
+          "correct": 0,
+          "total": 8
+        },
+        "Knitting": {
+          "correct": 1,
+          "total": 5
+        },
+        "Vacuuming floor": {
+          "correct": 2,
+          "total": 9
+        },
+        "Dodgeball": {
+          "correct": 3,
+          "total": 9
+        },
+        "Playing blackjack": {
+          "correct": 3,
+          "total": 6
+        },
+        "Hopscotch": {
+          "correct": 2,
+          "total": 7
+        },
+        "Playing lacrosse": {
+          "correct": 7,
+          "total": 15
+        },
+        "Brushing teeth": {
+          "correct": 0,
+          "total": 3
+        },
+        "Volleyball": {
+          "correct": 3,
+          "total": 4
+        },
+        "Building sandcastles": {
+          "correct": 1,
+          "total": 5
+        },
+        "Personal Care and Style": {
+          "correct": 742,
+          "total": 2627
+        },
+        "Health": {
+          "correct": 152,
+          "total": 427
+        },
+        "Food and Entertaining": {
+          "correct": 139,
+          "total": 500
+        },
+        "Travel": {
+          "correct": 24,
+          "total": 60
+        },
+        "Youth": {
+          "correct": 39,
+          "total": 161
+        },
+        "Family Life": {
+          "correct": 298,
+          "total": 980
+        },
+        "Computers and Electronics": {
+          "correct": 146,
+          "total": 454
+        },
+        "Pets and Animals": {
+          "correct": 92,
+          "total": 255
+        },
+        "Work World": {
+          "correct": 27,
+          "total": 86
+        },
+        "Education and Communications": {
+          "correct": 81,
+          "total": 201
+        },
+        "Finance and Business": {
+          "correct": 64,
+          "total": 265
+        },
+        "Home and Garden": {
+          "correct": 122,
+          "total": 390
+        },
+        "Uncategorized": {
+          "correct": 1,
+          "total": 7
+        },
+        "Sports and Fitness": {
+          "correct": 44,
+          "total": 144
+        },
+        "Cars & Other Vehicles": {
+          "correct": 22,
+          "total": 65
+        },
+        "Relationships": {
+          "correct": 30,
+          "total": 113
+        },
+        "Holidays and Traditions": {
+          "correct": 10,
+          "total": 38
+        },
+        "Philosophy and Religion": {
+          "correct": 7,
+          "total": 24
+        },
+        "Home,Categories": {
+          "correct": 1,
+          "total": 2
+        }
+      }
+    },
+    "piqa": {
+      "benchmark": "piqa",
+      "benchmark_name": "PIQA",
+      "scoring": "completion",
+      "baseline": 0.5,
+      "total": 1838,
+      "correct": 1095,
+      "accuracy": 0.5957562568008705,
+      "elapsed_seconds": 8.1,
+      "per_category": {}
+    },
+    "winogrande": {
+      "benchmark": "winogrande",
+      "benchmark_name": "WinoGrande",
+      "scoring": "completion",
+      "baseline": 0.5,
+      "total": 1267,
+      "correct": 636,
+      "accuracy": 0.5019731649565904,
+      "elapsed_seconds": 3.8,
+      "per_category": {}
+    },
+    "boolq": {
+      "benchmark": "boolq",
+      "benchmark_name": "BoolQ",
+      "scoring": "token",
+      "baseline": 0.5,
+      "total": 3270,
+      "correct": 2015,
+      "accuracy": 0.6162079510703364,
+      "elapsed_seconds": 20.8,
+      "per_category": {}
+    }
+  }
+}
