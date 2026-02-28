@@ -100,7 +100,7 @@ python train_dpo.py
 | [GNU Info manuals](https://www.gnu.org/manual/) | GFDL | 46 | ~14M | Core tool documentation |
 | Linux kernel docs | GPL-2.0 | 4,721 | ~10M | Kernel internals |
 | [TLDP](https://tldp.org/) guides | GFDL | 422 | ~10M | Classic Linux instruction |
-| [Arch Wiki](https://wiki.archlinux.org/) | CC-BY-SA | 2,109 | ~9M | Practical configuration |
+| [Arch Wiki](https://wiki.archlinux.org/) | GFDL | 2,109 | ~9M | Practical configuration |
 
 ### Code (~128M tokens)
 

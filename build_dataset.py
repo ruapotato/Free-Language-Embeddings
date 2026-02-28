@@ -14,7 +14,7 @@ Sources:
 
   Linux/Unix Specialization (~1.5B tokens):
     - Debian man pages (GPL/BSD)
-    - Arch Wiki (CC-BY-SA)
+    - Arch Wiki (GFDL)
     - TLDP guides (GFDL)
     - RFC documents (IETF)
     - Linux kernel Documentation/ (GPL v2)
@@ -700,7 +700,7 @@ def build_archwiki():
 
             text = "\n".join(parts)
 
-            if write_doc(f, text, "archwiki", "GFDL/CC-BY-SA"):
+            if write_doc(f, text, "archwiki", "GFDL"):
                 count += 1
 
     log(f"  Arch Wiki complete: {count:,} articles → {out_path}")
@@ -1112,7 +1112,7 @@ SOURCES = {
     "manpages":      ("Debian Man Pages",        "GPL/BSD",       build_manpages),
     "kernel_docs":   ("Linux Kernel Docs",       "GPL-2.0",       build_kernel_docs),
     "rfcs":          ("RFC Documents",           "IETF",          build_rfcs),
-    "archwiki":      ("Arch Wiki",               "CC-BY-SA",      build_archwiki),
+    "archwiki":      ("Arch Wiki",               "GFDL",          build_archwiki),
     "tldp":          ("TLDP Guides",             "GFDL",          build_tldp),
     "gnu_manuals":   ("GNU Info Manuals",        "GFDL",          build_gnu_manuals),
     "thestack":      ("FOSS Code (curated repos)","MIT/GPL/Apache",build_thestack),
