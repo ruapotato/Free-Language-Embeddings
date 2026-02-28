@@ -27,7 +27,7 @@ flm is NOT a general-purpose chatbot competing with GPT-4. It's a focused, knowl
 | Intermediate size | 3456 |
 | Parameters | 493M |
 | Sequence length | 2048 |
-| Tokenizer | cosmo2-tokenizer (32,000 vocab) |
+| Tokenizer | cosmo2-tokenizer (49,152 vocab) |
 
 Key components: RMSNorm, SwiGLU, RoPE, GQA, fp16 mixed precision, torch.compile, gradient checkpointing. Fits on RTX 3090 at batch 8-10 with ~18 GB peak VRAM.
 
@@ -35,25 +35,25 @@ Key components: RMSNorm, SwiGLU, RoPE, GQA, fp16 mixed precision, torch.compile,
 
 3-phase pipeline inspired by [SmolLM2](https://arxiv.org/abs/2502.02737), trained on a single RTX 3090 with exclusively DFSG-compliant, human-written data.
 
-### Phase 1: Pretraining (~12B tokens, multi-stage data mix)
+### Phase 1: Pretraining (~10B tokens, multi-stage data mix)
 
-One continuous pretraining run with the data mix evolving across 4 internal stages, following SmolLM2's curriculum approach. Linux/Unix knowledge is included from the start.
+One continuous pretraining run with the data mix evolving across 4 internal stages, following SmolLM2's curriculum approach. Linux/Unix knowledge is included from step 1.
 
 ```bash
-python build_dataset_v2.py   # download, process, tokenize all sources
-python train_pretrain.py --fresh
+python build_dataset.py      # download + process all 11 DFSG sources (~40 GB)
+python train_pretrain.py --fresh   # ~15 days on RTX 3090
 ```
 
-**Hyperparameters**: LR 5e-4, WSD schedule (warmup-stable-decay), seq length 2048, gradient checkpointing ON.
+**Hyperparameters**: LR 5e-4, WSD schedule (warmup-stable-decay), AdamW (betas 0.9/0.95), weight decay 0.1, seq length 2048, batch 8, gradient checkpointing ON, torch.compile. 610K steps, ~7,800 tok/s on RTX 3090.
 
 **Internal stages (evolving data mix):**
 
-| Stage | Tokens | General Text | Linux/Unix Docs | Code |
-|-------|--------|-------------|-----------------|------|
-| 1 (0-6B) | 6B | 80% | 10% | 10% |
-| 2 (6-8B) | 2B | 65% | 20% | 15% |
-| 3 (8-10B) | 2B | 55% | 25% | 20% |
-| 4 (10-12B) | 2B | 45% | 30% | 25% |
+| Stage | Steps | General Text | Linux/Unix Docs | Code |
+|-------|-------|-------------|-----------------|------|
+| 1 | 0–305K | 80% | 10% | 10% |
+| 2 | 305K–409K | 65% | 20% | 15% |
+| 3 | 409K–506K | 55% | 25% | 20% |
+| 4 | 506K–610K | 45% | 30% | 25% |
 
 ### Phase 2: Supervised Fine-Tuning
 
@@ -81,35 +81,33 @@ python train_dpo.py
 
 ## Training Data — 100% DFSG-Compliant, 100% Human-Written
 
-Every source is explicitly licensed for redistribution and derivative works. No Common Crawl derivatives (FineWeb, DCLM, C4, etc.) — web scraping doesn't respect page-level licenses. No AI-generated content — model output provenance is always ambiguous.
+~12B tokens across 11 sources, all explicitly licensed for redistribution and derivative works. No Common Crawl derivatives (FineWeb, DCLM, C4, etc.) — web scraping doesn't respect page-level licenses. No AI-generated content — model output provenance is always ambiguous.
 
-### General Knowledge (~10B tokens)
+### General Knowledge (~11.7B tokens)
 
-| Source | License | Est. Tokens | Description |
-|--------|---------|-------------|-------------|
-| [Wikipedia English](https://dumps.wikimedia.org/) | CC-BY-SA | 4.7B | General knowledge anchor |
-| [Stack Exchange](https://archive.org/details/stackexchange) (all sites, score>=3) | CC-BY-SA | 4.0B | Technical Q&A, reasoning |
-| [Project Gutenberg](https://www.gutenberg.org/) | Public Domain | 1.5B | Language quality, long-form text |
+| Source | License | Docs | Est. Tokens | Description |
+|--------|---------|------|-------------|-------------|
+| [Wikipedia English](https://dumps.wikimedia.org/) | CC-BY-SA | 5.9M articles | ~6.0B | General knowledge anchor |
+| [Project Gutenberg](https://www.gutenberg.org/) | Public Domain | 38K books | ~4.7B | Language quality, long-form text |
+| [Stack Exchange](https://archive.org/details/stackexchange) (all sites, score>=3) | CC-BY-SA | 2.9M posts | ~1.0B | Technical Q&A, reasoning |
 
-### Linux/Unix Specialization (~1.5B tokens)
+### Linux/Unix Specialization (~237M tokens)
 
-| Source | License | Est. Tokens | Description |
-|--------|---------|-------------|-------------|
-| SE Unix/Linux + Ask Ubuntu + Server Fault | CC-BY-SA | 400M | Linux troubleshooting (boosted weight) |
-| Debian man pages (all packages) | GPL/BSD | 500M | Command reference |
-| [TLDP](https://tldp.org/) guides | GFDL | 300M | Classic Linux instruction |
-| [Arch Wiki](https://wiki.archlinux.org/) + Debian/Ubuntu/Gentoo wikis | CC-BY-SA | 80M | Practical configuration |
-| [RFC documents](https://www.rfc-editor.org/) | IETF | 75M | Networking standards |
-| Linux kernel docs + GNU manuals + FreeBSD docs | GPL/BSD | 50M | Core system documentation |
-| Debian package docs | DFSG | 100M | Package ecosystem |
+| Source | License | Docs | Est. Tokens | Description |
+|--------|---------|------|-------------|-------------|
+| [RFC documents](https://www.rfc-editor.org/) | IETF | 9,710 | ~164M | Networking standards |
+| Debian man pages (all packages) | GPL/BSD | 8,336 | ~30M | Command reference |
+| [GNU Info manuals](https://www.gnu.org/manual/) | GFDL | 46 | ~14M | Core tool documentation |
+| Linux kernel docs | GPL-2.0 | 4,721 | ~10M | Kernel internals |
+| [TLDP](https://tldp.org/) guides | GFDL | 422 | ~10M | Classic Linux instruction |
+| [Arch Wiki](https://wiki.archlinux.org/) | CC-BY-SA | 2,109 | ~9M | Practical configuration |
 
-### Code (~1.5B tokens)
+### Code (~128M tokens)
 
-| Source | License | Est. Tokens | Description |
-|--------|---------|-------------|-------------|
-| [The Stack v1](https://huggingface.co/datasets/bigcode/the-stack-dedup) permissive (Shell/Python/C/Go/Rust) | MIT/Apache/BSD | 1.0B | Code understanding |
-| Linux kernel source | GPL v2 | 300M | Systems code |
-| Debian core source (apt, dpkg, systemd, coreutils) | GPL | 200M | Debian internals |
+| Source | License | Files | Est. Tokens | Description |
+|--------|---------|-------|-------------|-------------|
+| Linux kernel source | GPL-2.0 | 16,692 | ~91M | Systems code |
+| Curated FOSS repos (coreutils, openssh, git, curl, nginx, etc.) | MIT/GPL/Apache | 9,698 | ~37M | Code understanding |
 
 ### Post-Training
 
@@ -136,10 +134,10 @@ git clone https://github.com/ruapotato/chat_hamner.git
 cd chat_hamner
 pip install -r requirements.txt
 
-# 2. Build dataset (downloads, processes, tokenizes all DFSG sources)
-python build_dataset_v2.py
+# 2. Build dataset (downloads + processes all 11 DFSG sources, ~40 GB)
+python build_dataset.py
 
-# 3. Phase 1: Pretrain (~12-17 days on RTX 3090)
+# 3. Phase 1: Pretrain (~15 days on RTX 3090)
 python train_pretrain.py --fresh
 
 # 4. Phase 2: SFT
@@ -225,7 +223,7 @@ V2 scales the winner (Dense GQA) from 164M → 493M: wider (1280 vs 768), deeper
 flm/
 ├── model.py                  # Core transformer architecture (493M)
 ├── chat.py                   # Interactive CLI chat
-├── build_dataset_v2.py       # Download, process, tokenize all DFSG data sources
+├── build_dataset.py          # Download + process all 11 DFSG data sources
 ├── train_pretrain.py         # Phase 1: Multi-stage pretraining
 ├── train_sft.py              # Phase 2: Supervised fine-tuning
 ├── train_dpo.py              # Phase 3: DPO alignment
@@ -234,7 +232,7 @@ flm/
 │   ├── benchmarks.py         # Benchmark registry + loaders (6 benchmarks)
 │   ├── linux_bench.json      # LinuxBench: 315 Linux MCQ questions
 │   └── results/              # Evaluation results + plots
-├── data/                     # Processed training data (built by build_dataset_v2.py)
+├── data/                     # Processed training data (built by build_dataset.py)
 ├── checkpoints/              # Model checkpoints
 │   └── archive_v1/           # V1 (164M) checkpoints for reference
 └── logs/                     # Training logs, metrics, sample generations
