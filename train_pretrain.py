@@ -188,6 +188,7 @@ class LocalDataStreamer:
 
     All data comes from data/pretrain/*.jsonl files.
     Data mix evolves through 4 stages during training.
+    Supports save/restore of file positions for resumable training.
     """
 
     def __init__(self, tokenizer, seq_len=2048, max_steps=400_000):
@@ -195,7 +196,8 @@ class LocalDataStreamer:
         self.seq_len = seq_len
         self.max_steps = max_steps
 
-        self.sources = {}       # name → file handle / line iterator
+        self.source_paths = {}  # name → Path
+        self.source_files = {}  # name → open file handle
         self.source_sizes = {}  # name → file size (for weighting within category)
         self.token_buffers = {} # name → list of token ids
         self.current_stage = 0
@@ -207,7 +209,8 @@ class LocalDataStreamer:
         for name, category in DATA_CATEGORIES.items():
             path = data_dir / f"{name}.jsonl"
             if path.exists() and path.stat().st_size > 0:
-                self.sources[name] = self._jsonl_stream(path)
+                self.source_paths[name] = path
+                self.source_files[name] = open(path)
                 self.source_sizes[name] = path.stat().st_size
                 self.token_buffers[name] = []
                 log(f"  Data source: {name} ({category}) — "
@@ -215,32 +218,65 @@ class LocalDataStreamer:
             else:
                 log(f"  WARNING: Missing data source: {path}")
 
-        if not self.sources:
+        if not self.source_files:
             raise RuntimeError("No data sources found in data/pretrain/!")
 
         # Show category totals
         for cat in ["general", "linux", "code"]:
             cat_sources = [n for n, c in DATA_CATEGORIES.items()
-                           if c == cat and n in self.sources]
+                           if c == cat and n in self.source_files]
             cat_size = sum(self.source_sizes.get(n, 0) for n in cat_sources)
             log(f"  Category '{cat}': {len(cat_sources)} sources, "
                 f"{cat_size / 1e6:.0f} MB")
 
-    def _jsonl_stream(self, path):
-        """Yield text from a JSONL file, looping forever."""
+    def _read_next_text(self, name):
+        """Read next valid text from a source, looping at EOF."""
+        f = self.source_files[name]
         while True:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        doc = json.loads(line)
-                        text = doc.get("text", "")
-                        if len(text) >= 50:
-                            yield text
-                    except json.JSONDecodeError:
-                        continue
+            line = f.readline()
+            if not line:
+                # EOF — loop back to start
+                f.seek(0)
+                line = f.readline()
+                if not line:
+                    return ""
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                doc = json.loads(line)
+                text = doc.get("text", "")
+                if len(text) >= 50:
+                    return text
+            except json.JSONDecodeError:
+                continue
+
+    def get_state(self):
+        """Save file positions and token buffers for resumable training."""
+        state = {
+            "file_positions": {},
+            "token_buffers": {},
+            "rng_python": random.getstate(),
+        }
+        for name, f in self.source_files.items():
+            state["file_positions"][name] = f.tell()
+            state["token_buffers"][name] = self.token_buffers.get(name, [])
+        return state
+
+    def set_state(self, state):
+        """Restore file positions and token buffers from checkpoint."""
+        if not state:
+            return
+        positions = state.get("file_positions", {})
+        buffers = state.get("token_buffers", {})
+        for name in self.source_files:
+            if name in positions:
+                self.source_files[name].seek(positions[name])
+                log(f"  Restored {name} position: byte {positions[name]:,}")
+            if name in buffers:
+                self.token_buffers[name] = buffers[name]
+        if "rng_python" in state:
+            random.setstate(state["rng_python"])
 
     def get_stage_ratios(self, step):
         """Get category ratios for current training progress."""
@@ -275,11 +311,11 @@ class LocalDataStreamer:
 
         # Then pick a source within that category, weighted by file size
         cat_sources = [n for n, c in DATA_CATEGORIES.items()
-                       if c == chosen_cat and n in self.sources]
+                       if c == chosen_cat and n in self.source_files]
 
         if not cat_sources:
             # Fallback to any available source
-            cat_sources = list(self.sources.keys())
+            cat_sources = list(self.source_files.keys())
 
         # Weight by file size
         weights = [self.source_sizes.get(n, 1) for n in cat_sources]
@@ -304,7 +340,9 @@ class LocalDataStreamer:
             buf = self.token_buffers[source]
 
             while len(buf) < self.seq_len:
-                text = next(self.sources[source])
+                text = self._read_next_text(source)
+                if not text:
+                    break
                 tokens = self.tokenizer.encode(text, add_special_tokens=False)
                 tokens.append(self.tokenizer.eos_token_id or 0)
                 buf.extend(tokens)
@@ -491,7 +529,8 @@ def find_latest_checkpoint(checkpoint_dir):
 
 
 def save_checkpoint(model, optimizer, scaler, config, step, loss,
-                    checkpoint_dir, tokens_total=0, extra=None):
+                    checkpoint_dir, tokens_total=0, extra=None,
+                    data_streamer=None):
     os.makedirs(checkpoint_dir, exist_ok=True)
     raw_state = model.state_dict()
     clean_state = {k.replace("_orig_mod.", ""): v for k, v in raw_state.items()}
@@ -506,7 +545,11 @@ def save_checkpoint(model, optimizer, scaler, config, step, loss,
         "tokens_total": tokens_total,
         "timestamp": datetime.datetime.now().isoformat(),
         "training_type": "pretrain_v2",
+        "torch_rng_state": torch.random.get_rng_state(),
+        "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
     }
+    if data_streamer is not None:
+        ckpt_data["data_streamer_state"] = data_streamer.get_state()
     if extra:
         ckpt_data.update(extra)
 
@@ -555,11 +598,19 @@ def load_checkpoint(path, device="cuda"):
     loss = ckpt.get("avg_loss", float("inf"))
     tokens_total = ckpt.get("tokens_total", 0)
 
+    # Restore RNG states if available
+    if "torch_rng_state" in ckpt:
+        torch.random.set_rng_state(ckpt["torch_rng_state"])
+    if "cuda_rng_state" in ckpt and ckpt["cuda_rng_state"] is not None:
+        torch.cuda.set_rng_state(ckpt["cuda_rng_state"])
+
+    data_state = ckpt.get("data_streamer_state", None)
+
     total_p, _ = model.count_parameters()
     log(f"Resumed: {total_p:,} params | step {step} | loss {loss:.4f} | "
         f"tokens {tokens_total/1e9:.2f}B")
 
-    return model, optimizer, scaler, config, step, tokens_total
+    return model, optimizer, scaler, config, step, tokens_total, data_state
 
 
 # ---------------------------------------------------------------------------
@@ -638,8 +689,9 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
             log(f"Found existing checkpoint: {resume_from}")
 
     # Initialize or resume
+    data_state = None
     if resume_from:
-        model, optimizer, scaler, config, start_step, tokens_total = \
+        model, optimizer, scaler, config, start_step, tokens_total, data_state = \
             load_checkpoint(resume_from, device)
         config.vocab_size = tokenizer.vocab_size
     else:
@@ -679,6 +731,9 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
     # Data stream
     log("Initializing data sources...")
     data = LocalDataStreamer(tokenizer, seq_len=SEQ_LEN, max_steps=max_steps)
+    if data_state:
+        log("Restoring data stream position from checkpoint...")
+        data.set_state(data_state)
 
     # Validation set
     val_set = ValidationSet(tokenizer, seq_len=SEQ_LEN, n_batches=5,
@@ -818,6 +873,7 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
             save_checkpoint(
                 model, optimizer, scaler, config, step + 1, avg_loss,
                 CHECKPOINT_DIR, tokens_total=tokens_total,
+                data_streamer=data,
             )
 
         if shutdown_requested:
@@ -828,6 +884,7 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
     save_checkpoint(
         model, optimizer, scaler, config, step + 1, avg_loss,
         CHECKPOINT_DIR, tokens_total=tokens_total,
+        data_streamer=data,
     )
 
     # Final LinuxBench
