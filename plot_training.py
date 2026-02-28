@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
 """
-Plot training metrics for Hamner.
-
-Supports V4 (5-stage pipeline), V3 (50M staged), V2 (164M pretrain), and legacy.
-Auto-detects which training run has data.
+Plot training dashboard for flm V2.
 
 Usage:
-    python plot_training.py                    # auto-detect, show all plots
-    python plot_training.py --save             # save to logs/plots/
-    python plot_training.py --dashboard        # single dashboard image
-    python plot_training.py --live             # auto-refresh every 60s
-    python plot_training.py --v4               # force V4 metrics
-    python plot_training.py --v3               # force V3 metrics
-    python plot_training.py --v2               # force V2 metrics
-    python plot_training.py --tournament       # include legacy tournament data
+    python plot_training.py              # save dashboard to logs/plots/
+    python plot_training.py --live       # auto-refresh every 60s
+    python plot_training.py --show       # show interactively instead of saving
 """
 
 import os
@@ -22,1638 +14,375 @@ import csv
 import json
 import argparse
 import math
-from pathlib import Path
-import numpy as np
+import time
+from datetime import datetime
 
 try:
     import matplotlib
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
+    import numpy as np
 except ImportError:
     print("matplotlib not installed. Install with: pip install matplotlib")
     sys.exit(1)
 
-
-# V4 files (5-stage pipeline)
-V4_PRETRAIN_BASE_METRICS = "logs/pretrain_v4_base_metrics.csv"
-V4_PRETRAIN_ANNEAL_METRICS = "logs/pretrain_v4_anneal_metrics.csv"
-V4_CHAT_PRETRAIN_METRICS = "logs/chat_pretrain_v4_metrics.csv"
-V4_SFT_METRICS = "logs/sft_v4_metrics.csv"
-V4_DPO_METRICS = "logs/dpo_metrics.csv"
-V4_PRETRAIN_BASE_SAMPLES = "logs/pretrain_v4_base_samples.jsonl"
-
-V3_METRICS_FILE = "logs/v3_metrics.csv"
-V3_SAMPLES_FILE = "logs/v3_samples.jsonl"
-
-V2_METRICS_FILE = "logs/pretrain_v2_metrics.csv"
-V2_SAMPLES_FILE = "logs/pretrain_v2_samples.jsonl"
-
+# --- Config ---
+METRICS_FILE = "logs/pretrain_v2_metrics.csv"
+SAMPLES_FILE = "logs/pretrain_v2_samples.jsonl"
+V1_METRICS_FILE = "logs/pretrain_v4_base_metrics.csv"
 PLOT_DIR = "logs/plots"
 
-# V4 stage definitions
-V4_STAGES = [
-    ("pretrain_base",   "#2196F3", V4_PRETRAIN_BASE_METRICS),    # blue
-    ("pretrain_anneal", "#00BCD4", V4_PRETRAIN_ANNEAL_METRICS),  # teal
-    ("chat_pretrain",   "#4CAF50", V4_CHAT_PRETRAIN_METRICS),    # green
-    ("sft",             "#FF9800", V4_SFT_METRICS),              # orange
-    ("dpo",             "#9C27B0", V4_DPO_METRICS),              # purple
+TARGET_STEPS = 610_000
+BATCH_SIZE = 8
+SEQ_LEN = 2048
+TOKENS_PER_STEP = BATCH_SIZE * SEQ_LEN
+TARGET_TOKENS_B = TARGET_STEPS * TOKENS_PER_STEP / 1e9  # ~10.0B
+
+STAGE_BOUNDARIES = [
+    (0,       "S1: General 80%"),
+    (305_000, "S2: Linux 20%"),
+    (408_700, "S3: Linux 25%"),
+    (506_300, "S4: Linux 30%"),
 ]
-V4_STAGE_COLORS = {s[0]: s[1] for s in V4_STAGES}
-
-# Legacy files (v1 pretraining + curriculum + tournament)
-LEGACY_METRICS_FILE = "logs/metrics.csv"
-LEGACY_SAMPLES_FILE = "logs/samples.jsonl"
-TOURNAMENT_FILE = "logs/tournament_metrics.csv"
-CURRICULUM_METRICS_FILE = "logs/curriculum_metrics.csv"
-CURRICULUM_SAMPLES_FILE = "logs/curriculum_samples.jsonl"
-
-# V3.1 stage definitions — 8 stages with distinct colors
-V3_STAGES = [
-    ("structure",      "#2196F3"),  # blue
-    ("reasoning",      "#00BCD4"),  # teal
-    ("knowledge",      "#4CAF50"),  # green
-    ("context",        "#8BC34A"),  # lime
-    ("deep_knowledge", "#FFC107"),  # amber
-    ("dialogue",       "#FF9800"),  # orange
-    ("synthesis",      "#9C27B0"),  # purple
-    ("voice",          "#E91E63"),  # pink
-]
-V3_STAGE_COLORS = dict(V3_STAGES)
-V3_STAGE_ORDER = [s[0] for s in V3_STAGES]
-# Also match "xxx_done" stage transition markers
-for _name, _color in list(V3_STAGES):
-    V3_STAGE_COLORS[f"{_name}_done"] = _color
-
-# V2 target parameters (for V2 dashboard/projection)
-V2_TARGET_STEPS = 400_000
-V2_TARGET_BATCH_SIZE = 24
-V2_TARGET_SEQ_LEN = 1024
-V2_TARGET_TOKENS_B = V2_TARGET_STEPS * V2_TARGET_BATCH_SIZE * V2_TARGET_SEQ_LEN / 1e9  # ~9.8B
-
-# Backwards compat aliases used by existing functions
-TARGET_TOKENS_B = V2_TARGET_TOKENS_B
-TRAINING_EVENTS = []
+STAGE_COLORS = ["#42A5F5", "#66BB6A", "#FFA726", "#EF5350"]
 
 
-def annotate_events(ax, metrics, x_key="step"):
-    """Add vertical lines and labels for notable training events."""
-    if not metrics or not TRAINING_EVENTS:
-        return
-    x_vals = [m[x_key] for m in metrics]
-    x_min, x_max = min(x_vals), max(x_vals)
-    for step, label, _ in TRAINING_EVENTS:
-        # Map step to the appropriate x-axis value
-        if x_key == "step":
-            x = step
-        else:
-            # Find the closest metric entry to this step
-            closest = min(metrics, key=lambda m: abs(m["step"] - step))
-            x = closest[x_key]
-        if x < x_min or x > x_max:
-            continue
-        ax.axvline(x=x, color="#FF9800", linestyle="--", alpha=0.7, linewidth=1.2)
-        ax.text(x, ax.get_ylim()[1], f" {label}", rotation=45, fontsize=7,
-                color="#E65100", ha="left", va="top")
+def load_metrics():
+    """Load CSV metrics, handling mixed header formats."""
+    if not os.path.exists(METRICS_FILE):
+        print(f"No metrics file: {METRICS_FILE}")
+        return []
 
+    # The CSV may have two header formats from different runs.
+    # Old: timestamp,step,loss,perplexity,learning_rate,tokens_per_sec,tokens_total,tokens_billions,elapsed_hours,phase
+    # New: timestamp,step,loss,perplexity,learning_rate,tokens_per_sec,tokens_total,tokens_billions,elapsed_hours,val_loss,linux_bench_acc,stage
+    FIELDS_12 = ["timestamp", "step", "loss", "perplexity", "learning_rate",
+                 "tokens_per_sec", "tokens_total", "tokens_billions",
+                 "elapsed_hours", "val_loss", "linux_bench_acc", "stage"]
 
-METRICS_HEADER = ["timestamp", "step", "loss", "perplexity", "learning_rate",
-                   "tokens_per_sec", "tokens_total", "tokens_billions",
-                   "elapsed_hours", "val_loss"]
-
-
-def load_metrics(path):
-    """Load metrics CSV into list of dicts.
-
-    Handles CSVs with or without a header row.  If the first field of the
-    first line looks like a timestamp (starts with a digit), the standard
-    METRICS_HEADER is assumed.
-    """
-    rows = []
-    if not os.path.exists(path):
-        return rows
-    with open(path) as f:
-        first_line = f.readline()
-        if not first_line.strip():
-            return rows
-        # Detect whether the file has a header row
-        first_field = first_line.strip().split(",")[0]
-        has_header = not first_field[:1].isdigit()
-        f.seek(0)
-        if has_header:
-            reader = csv.DictReader(f)
-        else:
-            reader = csv.DictReader(f, fieldnames=METRICS_HEADER)
-        for row in reader:
-            for key in ["step", "tokens_total"]:
-                if key in row:
-                    row[key] = int(float(row[key]))
-            for key in ["loss", "perplexity", "learning_rate", "tokens_per_sec",
-                         "tokens_billions", "elapsed_hours"]:
-                if key in row and row[key]:
-                    row[key] = float(row[key])
-            rows.append(row)
-    return rows
-
-
-def load_tournament(path):
-    """Load tournament metrics CSV."""
-    rows = []
-    if not os.path.exists(path):
-        return rows
-    with open(path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            row["step"] = int(row["step"])
-            row["round"] = int(row["round"])
-            row["loss"] = float(row["loss"])
-            if row.get("tokens_per_sec"):
-                row["tokens_per_sec"] = float(row["tokens_per_sec"])
-            rows.append(row)
-    return rows
-
-
-def load_samples(path):
-    """Load sample generations JSONL."""
-    entries = []
-    if not os.path.exists(path):
-        return entries
-    with open(path) as f:
+    metrics = []
+    with open(METRICS_FILE) as f:
         for line in f:
             line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-    return entries
+            if not line or line.startswith("timestamp"):
+                continue
+            parts = line.split(",")
+            try:
+                row = {
+                    "step": int(parts[1]),
+                    "loss": float(parts[2]),
+                    "perplexity": float(parts[3]),
+                    "lr": float(parts[4]),
+                    "tokens_per_sec": float(parts[5]),
+                    "tokens_total": int(parts[6]),
+                    "tokens_billions": float(parts[7]),
+                    "elapsed_hours": float(parts[8]),
+                }
+                # Handle 12-column format (val_loss, linux_bench_acc, stage)
+                if len(parts) >= 12:
+                    row["val_loss"] = float(parts[9]) if parts[9] else None
+                    row["linux_bench_acc"] = float(parts[10]) if parts[10] else None
+                    row["stage"] = int(parts[11]) if parts[11] else 1
+                # Handle 10-column format (phase)
+                elif len(parts) >= 10:
+                    row["val_loss"] = None
+                    row["linux_bench_acc"] = None
+                    row["stage"] = 1
+                else:
+                    row["val_loss"] = None
+                    row["linux_bench_acc"] = None
+                    row["stage"] = 1
+                metrics.append(row)
+            except (ValueError, IndexError):
+                continue
+
+    return metrics
 
 
-def clean_metrics(metrics, jump_pct=0.4):
-    """Deduplicate by step, find the last restart spike, start from there.
-
-    Returns metrics from the last spike onward with spike artifacts removed.
-    This gives a clean view of the current training arc.
-    """
-    if not metrics:
+def load_v1_metrics():
+    """Load V1 (164M) pretrain metrics for comparison."""
+    if not os.path.exists(V1_METRICS_FILE):
         return []
-
-    # Deduplicate: keep lowest loss per step
-    by_step = {}
-    for m in metrics:
-        step = m["step"]
-        if step not in by_step or m["loss"] < by_step[step]["loss"]:
-            by_step[step] = m
-    deduped = sorted(by_step.values(), key=lambda m: m["step"])
-
-    if len(deduped) < 2:
-        return deduped
-
-    # Find the last spike: where loss jumps up > jump_pct from previous
-    last_spike_idx = 0
-    for i in range(1, len(deduped)):
-        if deduped[i]["loss"] > deduped[i - 1]["loss"] * (1 + jump_pct):
-            last_spike_idx = i
-
-    # Start from the point before the last spike (the clean anchor)
-    start = max(0, last_spike_idx - 1)
-    return deduped[start:]
+    metrics = []
+    with open(V1_METRICS_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("timestamp"):
+                continue
+            parts = line.split(",")
+            try:
+                metrics.append({
+                    "step": int(parts[1]),
+                    "loss": float(parts[2]),
+                    "tokens_billions": float(parts[7]),
+                })
+            except (ValueError, IndexError):
+                continue
+    return metrics
 
 
-def clean_v3_metrics(metrics):
-    """Clean V3 metrics: isolate the latest run, preserve stage transitions.
-
-    Unlike clean_metrics(), this does NOT remove loss jumps between stages —
-    those are the interesting data we want to visualize. Instead it finds
-    the last full training run (step 0 restart) and returns everything from there.
-    """
-    if not metrics:
+def load_samples():
+    """Load sample generations."""
+    if not os.path.exists(SAMPLES_FILE):
         return []
-
-    # Find the last time step went back to near 0 (a restart)
-    # Walk backwards and find where step drops significantly
-    last_restart = 0
-    for i in range(len(metrics) - 1, 0, -1):
-        if metrics[i]["step"] < metrics[i - 1]["step"] * 0.5:
-            last_restart = i
-            break
-
-    run = metrics[last_restart:]
-    if not run:
-        return metrics
-
-    # Within this run, deduplicate by step but keep chronological order
-    seen = set()
-    result = []
-    for m in run:
-        step = m["step"]
-        if step not in seen:
-            seen.add(step)
-            result.append(m)
-
-    return sorted(result, key=lambda m: m["step"])
+    samples = []
+    with open(SAMPLES_FILE) as f:
+        for line in f:
+            try:
+                samples.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return samples
 
 
-def fit_projection(clean, target_tokens_b=None):
-    """Fit power law to the clean tail of the loss curve and project forward.
-
-    Fits log(loss) = slope * log(tokens_B) + intercept on the last 50%
-    of the data, then extrapolates to target_tokens_b.
-
-    Returns dict with projection arrays and stats, or None on failure.
-    """
-    if target_tokens_b is None:
-        target_tokens_b = TARGET_TOKENS_B
-
-    if len(clean) < 40:
-        return None
-
-    # Fit on last 50% of clean data for stable extrapolation
-    n = len(clean)
-    fit_data = clean[n // 2:]
-
-    x = np.array([m["tokens_billions"] for m in fit_data])
-    y = np.array([m["loss"] for m in fit_data])
-
-    mask = (x > 0) & (y > 0)
-    x, y = x[mask], y[mask]
-    if len(x) < 20:
-        return None
-
-    try:
-        slope, intercept = np.polyfit(np.log(x), np.log(y), 1)
-        x_last = x[-1]
-        x_proj = np.linspace(x_last, target_tokens_b, 300)
-        y_proj = np.exp(intercept + slope * np.log(x_proj))
-        final_loss = np.exp(intercept + slope * np.log(target_tokens_b))
-        final_ppl = math.exp(min(final_loss, 20))
-        return {
-            "tokens": x_proj,
-            "loss": y_proj,
-            "ppl": np.array([math.exp(min(l, 20)) for l in y_proj]),
-            "final_loss": final_loss,
-            "final_ppl": final_ppl,
-            "slope": slope,
-        }
-    except Exception:
-        return None
+def smooth(values, window=50):
+    """Simple moving average."""
+    if len(values) < window:
+        return values
+    kernel = np.ones(window) / window
+    return np.convolve(values, kernel, mode="same")
 
 
-def plot_training_loss(metrics, save_dir=None, projection=None, anneal_metrics=None):
-    """Plot loss over training steps and tokens, with optional projection.
+def get_stage_color(step):
+    """Return color for the current training stage."""
+    stage_idx = 0
+    for i, (boundary, _) in enumerate(STAGE_BOUNDARIES):
+        if step >= boundary:
+            stage_idx = i
+    return STAGE_COLORS[stage_idx]
 
-    If *anneal_metrics* is provided it is drawn as a second colored segment
-    after the base data, with a vertical transition line.
-    """
+
+def plot_dashboard(metrics, v1_metrics=None, save=True, show=False):
+    """Generate 6-panel training dashboard."""
     if not metrics:
-        print("No training metrics to plot.")
+        print("No metrics to plot.")
         return
 
     steps = [m["step"] for m in metrics]
     losses = [m["loss"] for m in metrics]
-    tokens_b = [m["tokens_billions"] for m in metrics]
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Smoothing helper
-    def smooth(data, window=20):
-        return [sum(data[max(0,i-window):i+1]) / len(data[max(0,i-window):i+1])
-                for i in range(len(data))]
-
-    # --- helpers to draw anneal overlay on an axis ---
-    def _anneal_overlay_steps(ax, anneal, step_offset):
-        """Plot anneal data on a step-based axis, offset by step_offset."""
-        a_steps = [m["step"] + step_offset for m in anneal]
-        a_losses = [m["loss"] for m in anneal]
-        ax.plot(a_steps, a_losses, color="#00BCD4", linewidth=0.8, alpha=0.4)
-        if len(a_losses) > 20:
-            ax.plot(a_steps, smooth(a_losses), color="#00BCD4", linewidth=2, label="Anneal (smooth)")
-        else:
-            ax.plot(a_steps, a_losses, color="#00BCD4", linewidth=2, label="Anneal")
-        ax.axvline(x=step_offset, color="#FF9800", linestyle="--", linewidth=1.5, alpha=0.7)
-        ax.text(step_offset, ax.get_ylim()[1], " Anneal", rotation=45, fontsize=8,
-                color="#FF9800", ha="left", va="top", fontweight="bold")
-
-    def _anneal_overlay_tokens(ax, anneal):
-        """Plot anneal data on a tokens-based axis (tokens_billions is already cumulative)."""
-        a_tb = [m["tokens_billions"] for m in anneal]
-        a_losses = [m["loss"] for m in anneal]
-        ax.plot(a_tb, a_losses, color="#00BCD4", linewidth=0.8, alpha=0.4)
-        if len(a_losses) > 20:
-            ax.plot(a_tb, smooth(a_losses), color="#00BCD4", linewidth=2, label="Anneal (smooth)")
-        else:
-            ax.plot(a_tb, a_losses, color="#00BCD4", linewidth=2, label="Anneal")
-        # Transition line at start of anneal tokens
-        if a_tb:
-            ax.axvline(x=a_tb[0], color="#FF9800", linestyle="--", linewidth=1.5, alpha=0.7)
-            ax.text(a_tb[0], ax.get_ylim()[1], " Anneal", rotation=45, fontsize=8,
-                    color="#FF9800", ha="left", va="top", fontweight="bold")
-
-    # Loss vs steps — base in blue
-    ax1.plot(steps, losses, color="#2196F3", linewidth=0.8, alpha=0.4, label="Base (raw)")
-    if len(losses) > 20:
-        ax1.plot(steps, smooth(losses), color="#F44336", linewidth=2, label="Base (smooth)")
-    ax1.set_xlabel("Training Step")
-    ax1.set_ylabel("Loss")
-    ax1.set_title("Training Loss vs Steps")
-    ax1.grid(True, alpha=0.3)
-    ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    annotate_events(ax1, metrics, x_key="step")
-    if anneal_metrics:
-        base_max_step = max(steps)
-        _anneal_overlay_steps(ax1, anneal_metrics, base_max_step)
-    ax1.legend(fontsize=8)
-
-    # Loss vs tokens + projection — base in blue
-    ax2.plot(tokens_b, losses, color="#2196F3", linewidth=0.8, alpha=0.4, label="Base (raw)")
-    if len(losses) > 20:
-        ax2.plot(tokens_b, smooth(losses), color="#F44336", linewidth=2, label="Base (smooth)")
-    if projection:
-        ax2.plot(projection["tokens"], projection["loss"], color="#F44336",
-                 linewidth=2, linestyle="--", alpha=0.7, label=f"Projected (final {projection['final_loss']:.2f})")
-        ax2.axhline(y=projection["final_loss"], color="gray", linestyle=":", alpha=0.3)
-    ax2.set_xlabel("Tokens (Billions)")
-    ax2.set_ylabel("Loss")
-    ax2.set_title("Training Loss vs Tokens Processed")
-    ax2.grid(True, alpha=0.3)
-    annotate_events(ax2, metrics, x_key="tokens_billions")
-    if anneal_metrics:
-        _anneal_overlay_tokens(ax2, anneal_metrics)
-    ax2.legend(fontsize=8)
-
-    plt.suptitle("Hamner Training Progress", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "training_loss.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/training_loss.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_perplexity(metrics, save_dir=None, projection=None, anneal_metrics=None):
-    """Plot perplexity over training with optional projection.
-
-    If *anneal_metrics* is provided it is drawn as a teal segment after
-    the base data, with a vertical transition line.
-    """
-    if not metrics:
-        return
-
-    tokens_b = [m["tokens_billions"] for m in metrics]
     ppls = [m["perplexity"] for m in metrics]
-
-    def _smooth(data, window=20):
-        return [sum(data[max(0,i-window):i+1]) / len(data[max(0,i-window):i+1])
-                for i in range(len(data))]
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    ax.plot(tokens_b, ppls, color="#4CAF50", linewidth=0.8, alpha=0.4, label="Base (raw)")
-    if len(ppls) > 20:
-        ax.plot(tokens_b, _smooth(ppls), color="#FF9800", linewidth=2, label="Base (smooth)")
-    if projection:
-        ax.plot(projection["tokens"], projection["ppl"], color="#FF9800",
-                linewidth=2, linestyle="--", alpha=0.7, label=f"Projected (final {projection['final_ppl']:.0f})")
-        ax.axhline(y=projection["final_ppl"], color="gray", linestyle=":", alpha=0.3)
-
-    # Anneal overlay
-    if anneal_metrics:
-        a_tb = [m["tokens_billions"] for m in anneal_metrics]
-        a_ppls = [m["perplexity"] for m in anneal_metrics]
-        ax.plot(a_tb, a_ppls, color="#00BCD4", linewidth=0.8, alpha=0.4)
-        if len(a_ppls) > 20:
-            ax.plot(a_tb, _smooth(a_ppls), color="#00BCD4", linewidth=2, label="Anneal (smooth)")
-        else:
-            ax.plot(a_tb, a_ppls, color="#00BCD4", linewidth=2, label="Anneal")
-        if a_tb:
-            ax.axvline(x=a_tb[0], color="#FF9800", linestyle="--", linewidth=1.5, alpha=0.7)
-            ax.text(a_tb[0], ax.get_ylim()[1], " Anneal", rotation=45, fontsize=8,
-                    color="#FF9800", ha="left", va="top", fontweight="bold")
-
-    ax.set_xlabel("Tokens (Billions)")
-    ax.set_ylabel("Perplexity")
-    ax.set_title("Perplexity Over Training")
-    ax.set_yscale("log")
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
-    annotate_events(ax, metrics, x_key="tokens_billions")
-
-    plt.tight_layout()
-    if save_dir:
-        plt.savefig(os.path.join(save_dir, "perplexity.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/perplexity.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_learning_rate(metrics, save_dir=None):
-    """Plot learning rate schedule."""
-    if not metrics:
-        return
-
-    steps = [m["step"] for m in metrics]
-    lrs = [m["learning_rate"] for m in metrics]
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(steps, lrs, color="#9C27B0", linewidth=1.5)
-    ax.set_xlabel("Training Step")
-    ax.set_ylabel("Learning Rate")
-    ax.set_title("Learning Rate Schedule")
-    ax.grid(True, alpha=0.3)
-    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    plt.tight_layout()
-    if save_dir:
-        plt.savefig(os.path.join(save_dir, "learning_rate.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/learning_rate.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_throughput(metrics, save_dir=None):
-    """Plot tokens/sec throughput over training."""
-    if not metrics:
-        return
-
-    steps = [m["step"] for m in metrics]
-    tps = [m["tokens_per_sec"] for m in metrics]
-
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(steps, tps, color="#00BCD4", linewidth=0.8, alpha=0.5)
-    if len(tps) > 20:
-        window = 20
-        smoothed = [sum(tps[max(0,i-window):i+1]) / len(tps[max(0,i-window):i+1])
-                     for i in range(len(tps))]
-        ax.plot(steps, smoothed, color="#E91E63", linewidth=2, label="Smoothed")
-    avg_tps = sum(tps) / len(tps)
-    ax.axhline(y=avg_tps, color="gray", linestyle="--", alpha=0.5, label=f"Avg: {avg_tps:.0f} tok/s")
-    ax.set_xlabel("Training Step")
-    ax.set_ylabel("Tokens/sec")
-    ax.set_title("Training Throughput")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    annotate_events(ax, metrics, x_key="step")
-
-    plt.tight_layout()
-    if save_dir:
-        plt.savefig(os.path.join(save_dir, "throughput.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/throughput.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_tournament(tournament_data, save_dir=None):
-    """Plot tournament results across all rounds."""
-    if not tournament_data:
-        print("No tournament data to plot.")
-        return
-
-    # Group by variant
-    variants = {}
-    for row in tournament_data:
-        v = row["variant"]
-        if v not in variants:
-            variants[v] = {"steps": [], "losses": [], "rounds": []}
-        variants[v]["steps"].append(row["step"])
-        variants[v]["losses"].append(row["loss"])
-        variants[v]["rounds"].append(row["round"])
-
-    # Color map
-    colors = plt.cm.tab10(range(len(variants)))
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    for i, (name, data) in enumerate(sorted(variants.items())):
-        style = "-" if "medium" in name else "--" if "small" in name else ":"
-        lw = 2.5 if name == "v02_dense_medium" else 1.2
-        alpha = 1.0 if name == "v02_dense_medium" else 0.7
-        ax.plot(data["steps"], data["losses"], style, color=colors[i],
-                linewidth=lw, alpha=alpha, label=name, marker="o", markersize=2)
-
-    # Draw round boundaries
-    ax.axvline(x=500, color="gray", linestyle=":", alpha=0.4)
-    ax.axvline(x=1500, color="gray", linestyle=":", alpha=0.4)
-    ax.text(250, ax.get_ylim()[1], "Round 1", ha="center", va="top", fontsize=9, color="gray")
-    ax.text(1000, ax.get_ylim()[1], "Round 2", ha="center", va="top", fontsize=9, color="gray")
-    ax.text(2750, ax.get_ylim()[1], "Round 3", ha="center", va="top", fontsize=9, color="gray")
-
-    ax.set_xlabel("Training Step")
-    ax.set_ylabel("Loss")
-    ax.set_title("Tournament Architecture Search — 10 Variants, 3 Rounds")
-    ax.legend(loc="upper right", fontsize=8, ncol=2)
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "tournament.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/tournament.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_tournament_final(tournament_data, save_dir=None):
-    """Bar chart of final losses for each variant."""
-    if not tournament_data:
-        return
-
-    # Get final loss per variant
-    final = {}
-    for row in tournament_data:
-        v = row["variant"]
-        final[v] = row["loss"]  # last entry wins
-
-    # Sort by loss
-    sorted_variants = sorted(final.items(), key=lambda x: x[1])
-    names = [v[0] for v in sorted_variants]
-    losses = [v[1] for v in sorted_variants]
-
-    # Color the winner
-    colors = ["#4CAF50" if i == 0 else "#2196F3" for i in range(len(names))]
-    # Gray out OOM
-    for i, (name, loss) in enumerate(sorted_variants):
-        if loss > 50:
-            colors[i] = "#BDBDBD"
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    bars = ax.barh(names, losses, color=colors)
-    ax.set_xlabel("Final Loss (lower is better)")
-    ax.set_title("Tournament Final Rankings")
-    ax.invert_yaxis()
-
-    # Add labels
-    for bar, loss in zip(bars, losses):
-        if loss < 50:
-            ax.text(bar.get_width() + 0.02, bar.get_y() + bar.get_height()/2,
-                    f"{loss:.3f}", va="center", fontsize=9)
-        else:
-            ax.text(0.1, bar.get_y() + bar.get_height()/2,
-                    "OOM", va="center", fontsize=9, color="red")
-
-    plt.tight_layout()
-    if save_dir:
-        plt.savefig(os.path.join(save_dir, "tournament_rankings.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/tournament_rankings.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_sample_evolution(samples_data, save_dir=None):
-    """Show how sample quality evolves over training."""
-    if not samples_data:
-        print("No sample data to plot.")
-        return
-
-    # Create a text-based visualization
-    fig, ax = plt.subplots(figsize=(14, max(6, len(samples_data) * 0.8)))
-    ax.axis("off")
-
-    y = 0.98
-    dy = 0.9 / max(len(samples_data), 1)
-
-    ax.text(0.5, 1.0, "Sample Generation Evolution", ha="center", va="top",
-            fontsize=14, fontweight="bold", transform=ax.transAxes)
-
-    for entry in samples_data:
-        step = entry["step"]
-        tokens_b = entry.get("tokens_billions", 0)
-        samples = entry.get("samples", {})
-
-        # Pick one sample to show
-        sample_text = ""
-        for prompt, output in samples.items():
-            sample_text = output[:120]
-            break
-
-        color = "#333333"
-        ax.text(0.02, y, f"Step {step:,} ({tokens_b:.2f}B tokens):",
-                fontsize=9, fontweight="bold", color="#1565C0",
-                transform=ax.transAxes, verticalalignment="top")
-        ax.text(0.02, y - 0.02, sample_text,
-                fontsize=8, color=color, style="italic",
-                transform=ax.transAxes, verticalalignment="top",
-                wrap=True)
-        y -= dy
-
-    plt.tight_layout()
-    if save_dir:
-        plt.savefig(os.path.join(save_dir, "sample_evolution.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/sample_evolution.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_all_dashboard(metrics, tournament_data, samples_data, save_dir=None, projection=None):
-    """Single dashboard image with key metrics and projection."""
-    if not metrics:
-        print("No metrics for dashboard.")
-        return
-
-    fig = plt.figure(figsize=(16, 10))
-
-    steps = [m["step"] for m in metrics]
-    losses = [m["loss"] for m in metrics]
-    ppls = [m["perplexity"] for m in metrics]
-    tokens_b = [m["tokens_billions"] for m in metrics]
+    lrs = [m["lr"] for m in metrics]
     tps_list = [m["tokens_per_sec"] for m in metrics]
+    tokens_b = [m["tokens_billions"] for m in metrics]
 
-    # Smoothing helper
-    def smooth(data, window=20):
-        return [sum(data[max(0,i-window):i+1]) / len(data[max(0,i-window):i+1])
-                for i in range(len(data))]
+    # Val loss points
+    val_steps = [m["step"] for m in metrics if m.get("val_loss") is not None]
+    val_losses = [m["val_loss"] for m in metrics if m.get("val_loss") is not None]
 
-    # 1. Loss curve (top left) + projection
-    ax1 = fig.add_subplot(2, 2, 1)
-    ax1.plot(tokens_b, losses, color="#2196F3", linewidth=0.5, alpha=0.3)
+    # LinuxBench points
+    lb_steps = [m["step"] for m in metrics if m.get("linux_bench_acc") is not None]
+    lb_accs = [m["linux_bench_acc"] * 100 for m in metrics if m.get("linux_bench_acc") is not None]
+
+    cur = metrics[-1]
+
+    fig = plt.figure(figsize=(18, 12))
+    fig.patch.set_facecolor("#FAFAFA")
+
+    # --- Panel 1: Training Loss ---
+    ax1 = fig.add_subplot(2, 3, 1)
+    # Color points by stage
+    for i, (boundary, label) in enumerate(STAGE_BOUNDARIES):
+        next_boundary = STAGE_BOUNDARIES[i + 1][0] if i + 1 < len(STAGE_BOUNDARIES) else TARGET_STEPS + 1
+        mask = [(s >= boundary and s < next_boundary) for s in steps]
+        s_filtered = [s for s, m in zip(steps, mask) if m]
+        l_filtered = [l for l, m in zip(losses, mask) if m]
+        if s_filtered:
+            ax1.scatter(s_filtered, l_filtered, s=1, alpha=0.15, color=STAGE_COLORS[i])
+    # Smoothed line
     if len(losses) > 20:
-        ax1.plot(tokens_b, smooth(losses), color="#F44336", linewidth=2)
-    if projection:
-        ax1.plot(projection["tokens"], projection["loss"], color="#F44336",
-                 linewidth=2, linestyle="--", alpha=0.6)
-        ax1.axhline(y=projection["final_loss"], color="gray", linestyle=":", alpha=0.3)
-        ax1.text(TARGET_TOKENS_B, projection["final_loss"],
-                 f"  {projection['final_loss']:.2f}", fontsize=8, va="bottom", color="#888")
-    ax1.set_xlabel("Tokens (Billions)")
+        ax1.plot(steps, smooth(losses), color="#D32F2F", linewidth=2, label="Smoothed")
+    # Val loss
+    if val_losses:
+        ax1.scatter(val_steps, val_losses, color="#1565C0", s=30, zorder=5,
+                    marker="D", label=f"Val loss ({val_losses[-1]:.3f})")
+    # Stage boundaries
+    for boundary, label in STAGE_BOUNDARIES[1:]:
+        if boundary <= max(steps) * 1.5:
+            ax1.axvline(x=boundary, color="gray", linestyle="--", alpha=0.4)
+            ax1.text(boundary, max(losses) * 0.95, label, fontsize=7,
+                     rotation=90, va="top", ha="right", alpha=0.6)
+    ax1.set_xlabel("Step")
     ax1.set_ylabel("Loss")
-    ax1.set_title("Training Loss")
+    ax1.set_title(f"Training Loss (current: {cur['loss']:.3f})")
     ax1.grid(True, alpha=0.3)
-    annotate_events(ax1, metrics, x_key="tokens_billions")
+    ax1.legend(fontsize=8)
+    ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
 
-    # 2. Perplexity (top right) + projection
-    ax2 = fig.add_subplot(2, 2, 2)
-    ax2.plot(tokens_b, ppls, color="#4CAF50", linewidth=0.5, alpha=0.3)
-    if len(ppls) > 20:
-        ax2.plot(tokens_b, smooth(ppls), color="#FF9800", linewidth=2)
-    if projection:
-        ax2.plot(projection["tokens"], projection["ppl"], color="#FF9800",
-                 linewidth=2, linestyle="--", alpha=0.6)
-        ax2.axhline(y=projection["final_ppl"], color="gray", linestyle=":", alpha=0.3)
-        ax2.text(TARGET_TOKENS_B, projection["final_ppl"],
-                 f"  {projection['final_ppl']:.0f}", fontsize=8, va="bottom", color="#888")
-    ax2.set_xlabel("Tokens (Billions)")
-    ax2.set_ylabel("Perplexity")
-    ax2.set_title("Perplexity")
-    ax2.set_yscale("log")
-    ax2.grid(True, alpha=0.3)
-    annotate_events(ax2, metrics, x_key="tokens_billions")
+    # --- Panel 2: Loss vs Tokens (log-log scaling law) ---
+    ax2 = fig.add_subplot(2, 3, 2)
+    tb_filtered = [t for t in tokens_b if t > 0]
+    l_filtered = losses[-len(tb_filtered):]
+    if len(tb_filtered) > 20:
+        ax2.plot(tb_filtered, smooth(l_filtered, min(50, len(l_filtered) // 2)),
+                 color="#D32F2F", linewidth=2)
+    else:
+        ax2.plot(tb_filtered, l_filtered, color="#D32F2F", linewidth=2)
+    ax2.set_xlabel("Tokens (B)")
+    ax2.set_ylabel("Loss")
+    ax2.set_title("Loss vs Tokens Processed")
+    ax2.set_xscale("log")
+    ax2.grid(True, alpha=0.3, which="both")
+    # Mark target
+    ax2.axvline(x=TARGET_TOKENS_B, color="green", linestyle="--", alpha=0.5)
+    ax2.text(TARGET_TOKENS_B, max(l_filtered) * 0.9, f"Target\n{TARGET_TOKENS_B:.0f}B",
+             fontsize=8, ha="left", color="green")
 
-    # 3. Throughput (bottom left)
-    ax3 = fig.add_subplot(2, 2, 3)
-    ax3.plot(steps, tps_list, color="#00BCD4", linewidth=0.5, alpha=0.3)
+    # --- Panel 3: Throughput ---
+    ax3 = fig.add_subplot(2, 3, 3)
+    ax3.scatter(steps, tps_list, s=1, alpha=0.15, color="#00BCD4")
     if len(tps_list) > 20:
         ax3.plot(steps, smooth(tps_list), color="#E91E63", linewidth=2)
-    avg_tps = sum(tps_list) / len(tps_list)
+    avg_tps = sum(tps_list[-100:]) / len(tps_list[-100:])
     ax3.axhline(y=avg_tps, color="gray", linestyle="--", alpha=0.5)
     ax3.set_xlabel("Step")
     ax3.set_ylabel("Tokens/sec")
-    ax3.set_title(f"Throughput (avg: {avg_tps:.0f} tok/s)")
+    ax3.set_title(f"Throughput (recent avg: {avg_tps:,.0f} tok/s)")
     ax3.grid(True, alpha=0.3)
-    ax3.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    annotate_events(ax3, metrics, x_key="step")
+    ax3.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
 
-    # 4. Stats summary (bottom right)
-    ax4 = fig.add_subplot(2, 2, 4)
-    ax4.axis("off")
+    # --- Panel 4: LinuxBench + Learning Rate ---
+    ax4 = fig.add_subplot(2, 3, 4)
+    if lb_accs:
+        ax4.plot(lb_steps, lb_accs, "o-", color="#4CAF50", linewidth=2,
+                 markersize=6, label="LinuxBench")
+        ax4.axhline(y=25, color="gray", linestyle=":", alpha=0.5, label="Random (25%)")
+        ax4.axhline(y=42, color="orange", linestyle="--", alpha=0.5, label="SmolLM-135M (42%)")
+        ax4.set_ylabel("LinuxBench Accuracy (%)")
+        ax4.set_title(f"LinuxBench (latest: {lb_accs[-1]:.1f}%)")
+        ax4.legend(fontsize=8)
+        ax4.set_ylim(0, max(60, max(lb_accs) + 10))
+    else:
+        # Show LR schedule instead if no LinuxBench data yet
+        ax4.plot(steps, lrs, color="#9C27B0", linewidth=1.5)
+        ax4.set_ylabel("Learning Rate")
+        ax4.set_title("Learning Rate Schedule")
+        ax4.ticklabel_format(axis="y", style="scientific", scilimits=(-4, -4))
+    ax4.set_xlabel("Step")
+    ax4.grid(True, alpha=0.3)
+    ax4.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
 
-    current = metrics[-1]
-    pct = current['tokens_billions'] / TARGET_TOKENS_B * 100
-    stats_text = (
-        f"Model: Hamner Pretrain v2 (164M params)\n"
-        f"─────────────────────────────────\n"
-        f"Current Step:     {current['step']:,}\n"
-        f"Current Loss:     {current['loss']:.4f}\n"
-        f"Current PPL:      {current['perplexity']:.1f}\n"
-        f"Tokens Processed: {current['tokens_billions']:.2f}B\n"
-        f"Avg Throughput:   {avg_tps:.0f} tok/s\n"
-        f"─────────────────────────────────\n"
-        f"Target: {V2_TARGET_STEPS/1000:.0f}K steps / {TARGET_TOKENS_B:.1f}B tokens\n"
-        f"Progress: {pct:.1f}%\n"
-    )
+    # --- Panel 5: V1 vs V2 Comparison ---
+    ax5 = fig.add_subplot(2, 3, 5)
+    # V2 loss vs tokens
+    tb_v2 = [t for t in tokens_b if t > 0]
+    loss_v2 = losses[-len(tb_v2):]
+    if len(tb_v2) > 20:
+        ax5.plot(tb_v2, smooth(loss_v2, min(50, len(loss_v2) // 2)),
+                 color="#D32F2F", linewidth=2, label="V2 (493M)")
+    elif tb_v2:
+        ax5.plot(tb_v2, loss_v2, color="#D32F2F", linewidth=2, label="V2 (493M)")
+    # V1 loss vs tokens
+    if v1_metrics:
+        tb_v1 = [m["tokens_billions"] for m in v1_metrics if m["tokens_billions"] > 0]
+        loss_v1 = [m["loss"] for m in v1_metrics if m["tokens_billions"] > 0]
+        if len(tb_v1) > 20:
+            ax5.plot(tb_v1, smooth(loss_v1, min(50, len(loss_v1) // 2)),
+                     color="#78909C", linewidth=2, alpha=0.7, label="V1 (164M)")
+        elif tb_v1:
+            ax5.plot(tb_v1, loss_v1, color="#78909C", linewidth=2, alpha=0.7, label="V1 (164M)")
+    ax5.set_xlabel("Tokens (B)")
+    ax5.set_ylabel("Loss")
+    ax5.set_title("V1 vs V2 — Loss by Tokens")
+    ax5.grid(True, alpha=0.3)
+    ax5.legend(fontsize=9)
+    ax5.set_xlim(left=0)
 
-    if current['tokens_per_sec'] > 0:
-        remaining_tokens = TARGET_TOKENS_B * 1e9 - current['tokens_billions'] * 1e9
-        remaining_hours = remaining_tokens / current['tokens_per_sec'] / 3600
-        stats_text += f"ETA: ~{remaining_hours:.0f}h ({remaining_hours/24:.1f} days)\n"
+    # --- Panel 6: Stats Summary ---
+    ax6 = fig.add_subplot(2, 3, 6)
+    ax6.axis("off")
 
-    if projection:
-        stats_text += (
-            f"─────────────────────────────────\n"
-            f"Projected final loss: {projection['final_loss']:.2f}\n"
-            f"Projected final PPL:  {projection['final_ppl']:.0f}\n"
-            f"Scaling slope:        {projection['slope']:.3f}\n"
-        )
+    pct = cur["tokens_billions"] / TARGET_TOKENS_B * 100
+    elapsed_h = cur["elapsed_hours"]
 
-    ax4.text(0.1, 0.95, stats_text, transform=ax4.transAxes,
+    stats = [
+        "flm V2 Pretraining — 493M params",
+        "─" * 38,
+        f"Step:          {cur['step']:>10,} / {TARGET_STEPS:,}",
+        f"Loss:          {cur['loss']:>10.4f}",
+        f"Perplexity:    {cur['perplexity']:>10.1f}",
+        f"Tokens:        {cur['tokens_billions']:>7.2f}B / {TARGET_TOKENS_B:.0f}B",
+        f"Progress:      {pct:>9.1f}%",
+        f"Throughput:    {avg_tps:>7,.0f} tok/s",
+        f"Elapsed:       {elapsed_h:>7.1f}h ({elapsed_h/24:.1f} days)",
+    ]
+
+    if avg_tps > 0:
+        remaining_tokens = (TARGET_TOKENS_B - cur["tokens_billions"]) * 1e9
+        remaining_h = remaining_tokens / avg_tps / 3600
+        stats.append(f"ETA:           {remaining_h:>7.0f}h ({remaining_h/24:.1f} days)")
+
+    if val_losses:
+        stats.append(f"Val Loss:      {val_losses[-1]:>10.4f}")
+    if lb_accs:
+        stats.append(f"LinuxBench:    {lb_accs[-1]:>9.1f}%")
+
+    stats.append("─" * 38)
+
+    # Current stage
+    stage_name = STAGE_BOUNDARIES[0][1]
+    for boundary, label in STAGE_BOUNDARIES:
+        if cur["step"] >= boundary:
+            stage_name = label
+    stats.append(f"Stage:  {stage_name}")
+
+    # Progress bar
+    bar_len = 30
+    filled = int(bar_len * pct / 100)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    stats.append(f"[{bar}] {pct:.1f}%")
+
+    stats_text = "\n".join(stats)
+    ax6.text(0.05, 0.95, stats_text, transform=ax6.transAxes,
              fontsize=11, verticalalignment="top", fontfamily="monospace",
-             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5", edgecolor="#BDBDBD"))
-
-    plt.suptitle("Hamner Training Dashboard", fontsize=16, fontweight="bold", y=1.02)
-    plt.tight_layout()
-
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "dashboard.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/dashboard.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-# ---------------------------------------------------------------------------
-# V3 dashboard — stage-colored loss with plateau transitions
-# ---------------------------------------------------------------------------
-
-def _v3_stage_name(phase_str):
-    """Normalize V3 phase column to canonical stage name."""
-    if not phase_str:
-        return "structure"
-    base = phase_str.replace("_done", "")
-    if base in V3_STAGE_COLORS:
-        return base
-    return phase_str
-
-
-def _v3_stage_spans(metrics):
-    """Find step and tokens_billions ranges for each V3 stage."""
-    spans = {}
-    for m in metrics:
-        stage = _v3_stage_name(m.get("phase", ""))
-        tb = m["tokens_billions"]
-        step = m["step"]
-        if stage not in spans:
-            spans[stage] = {"tb_min": tb, "tb_max": tb, "s_min": step, "s_max": step}
-        else:
-            spans[stage]["tb_min"] = min(spans[stage]["tb_min"], tb)
-            spans[stage]["tb_max"] = max(spans[stage]["tb_max"], tb)
-            spans[stage]["s_min"] = min(spans[stage]["s_min"], step)
-            spans[stage]["s_max"] = max(spans[stage]["s_max"], step)
-    return spans
-
-
-def _v3_shade(ax, spans, x_key="tokens_billions"):
-    """Add colored background shading and transition lines for V3 stages."""
-    for stage in V3_STAGE_ORDER:
-        if stage not in spans:
-            continue
-        color = V3_STAGE_COLORS.get(stage, "#999")
-        if x_key == "tokens_billions":
-            s, e = spans[stage]["tb_min"], spans[stage]["tb_max"]
-        else:
-            s, e = spans[stage]["s_min"], spans[stage]["s_max"]
-        if s == e:
-            continue
-        ax.axvspan(s, e, alpha=0.08, color=color)
-        mid = (s + e) / 2
-        ymin, ymax = ax.get_ylim()
-        ax.text(mid, ymax - (ymax - ymin) * 0.03, stage,
-                ha="center", va="top", fontsize=8,
-                color=color, fontweight="bold", alpha=0.9)
-
-
-def _v3_transition_lines(ax, spans, x_key="tokens_billions", label=True):
-    """Draw vertical dashed lines at stage transitions."""
-    first = True
-    for stage in V3_STAGE_ORDER:
-        if stage not in spans:
-            continue
-        if x_key == "tokens_billions":
-            x = spans[stage]["tb_min"]
-        else:
-            x = spans[stage]["s_min"]
-        # Skip the very first stage start
-        if first:
-            first = False
-            continue
-        color = V3_STAGE_COLORS.get(stage, "#999")
-        ax.axvline(x=x, color=color, linestyle="--", alpha=0.6, linewidth=1.5)
-        if label:
-            ymin, ymax = ax.get_ylim()
-            ax.text(x, ymax, f" {stage}", rotation=45, fontsize=7,
-                    color=color, ha="left", va="top", fontweight="bold")
-
-
-def plot_v3_dashboard(metrics, samples_data, save_dir=None):
-    """V3.1 dashboard: stage-colored loss/ppl with transition lines, LR, stats."""
-    if not metrics:
-        print("No V3 metrics for dashboard.")
-        return
-
-    fig = plt.figure(figsize=(18, 12))
-
-    steps = [m["step"] for m in metrics]
-    losses = [m["loss"] for m in metrics]
-    ppls = [m["perplexity"] for m in metrics]
-    tokens_b = [m["tokens_billions"] for m in metrics]
-    tps_list = [m["tokens_per_sec"] for m in metrics]
-    lrs = [m["learning_rate"] for m in metrics]
-    stages = [_v3_stage_name(m.get("phase", "")) for m in metrics]
-
-    spans = _v3_stage_spans(metrics)
-
-    # ── 1. Loss vs Steps — stage-colored with transition lines ──
-    ax1 = fig.add_subplot(2, 3, 1)
-    for stage in V3_STAGE_ORDER:
-        idx = [i for i, s in enumerate(stages) if s == stage]
-        if not idx:
-            continue
-        st = [steps[i] for i in idx]
-        lo = [losses[i] for i in idx]
-        color = V3_STAGE_COLORS.get(stage, "#999")
-        ax1.plot(st, lo, color=color, linewidth=0.5, alpha=0.2)
-        if len(lo) > 15:
-            ax1.plot(st, smooth(lo, min(30, len(lo) // 4)),
-                     color=color, linewidth=2.5, label=stage)
-        else:
-            ax1.plot(st, lo, color=color, linewidth=2, label=stage)
-    ax1.set_xlabel("Step")
-    ax1.set_ylabel("Loss")
-    ax1.set_title("Training Loss by Stage")
-    ax1.legend(fontsize=7, loc="upper right", ncol=2)
-    ax1.grid(True, alpha=0.3)
-    ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    _v3_transition_lines(ax1, spans, x_key="step", label=False)
-
-    # ── 2. Loss vs Tokens — stage-colored with shading ──
-    ax2 = fig.add_subplot(2, 3, 2)
-    for stage in V3_STAGE_ORDER:
-        idx = [i for i, s in enumerate(stages) if s == stage]
-        if not idx:
-            continue
-        tb = [tokens_b[i] for i in idx]
-        lo = [losses[i] for i in idx]
-        color = V3_STAGE_COLORS.get(stage, "#999")
-        ax2.plot(tb, lo, color=color, linewidth=0.5, alpha=0.2)
-        if len(lo) > 15:
-            ax2.plot(tb, smooth(lo, min(30, len(lo) // 4)),
-                     color=color, linewidth=2.5, label=stage)
-        else:
-            ax2.plot(tb, lo, color=color, linewidth=2, label=stage)
-    ax2.set_xlabel("Tokens (Billions)")
-    ax2.set_ylabel("Loss")
-    ax2.set_title("Loss vs Tokens")
-    ax2.legend(fontsize=7, loc="upper right", ncol=2)
-    ax2.grid(True, alpha=0.3)
-    _v3_shade(ax2, spans, x_key="tokens_billions")
-    _v3_transition_lines(ax2, spans, x_key="tokens_billions", label=False)
-
-    # ── 3. Perplexity vs Steps — stage-colored ──
-    ax3 = fig.add_subplot(2, 3, 3)
-    for stage in V3_STAGE_ORDER:
-        idx = [i for i, s in enumerate(stages) if s == stage]
-        if not idx:
-            continue
-        st = [steps[i] for i in idx]
-        pp = [ppls[i] for i in idx]
-        color = V3_STAGE_COLORS.get(stage, "#999")
-        ax3.plot(st, pp, color=color, linewidth=0.5, alpha=0.2)
-        if len(pp) > 15:
-            ax3.plot(st, smooth(pp, min(30, len(pp) // 4)),
-                     color=color, linewidth=2.5, label=stage)
-        else:
-            ax3.plot(st, pp, color=color, linewidth=2, label=stage)
-    ax3.set_xlabel("Step")
-    ax3.set_ylabel("Perplexity")
-    ax3.set_title("Perplexity by Stage")
-    ax3.set_yscale("log")
-    ax3.legend(fontsize=7, loc="upper right", ncol=2)
-    ax3.grid(True, alpha=0.3)
-    ax3.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    _v3_transition_lines(ax3, spans, x_key="step", label=False)
-
-    # ── 4. Learning Rate — shows stage drops ──
-    ax4 = fig.add_subplot(2, 3, 4)
-    for stage in V3_STAGE_ORDER:
-        idx = [i for i, s in enumerate(stages) if s == stage]
-        if not idx:
-            continue
-        st = [steps[i] for i in idx]
-        lr = [lrs[i] for i in idx]
-        color = V3_STAGE_COLORS.get(stage, "#999")
-        ax4.plot(st, lr, color=color, linewidth=2, label=stage)
-    ax4.set_xlabel("Step")
-    ax4.set_ylabel("Learning Rate")
-    ax4.set_title("LR Schedule (per stage)")
-    ax4.legend(fontsize=7, loc="upper right", ncol=2)
-    ax4.grid(True, alpha=0.3)
-    ax4.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    # ── 5. Throughput ──
-    ax5 = fig.add_subplot(2, 3, 5)
-    ax5.plot(steps, tps_list, color="#78909C", linewidth=0.5, alpha=0.3)
-    if len(tps_list) > 20:
-        ax5.plot(steps, smooth(tps_list), color="#E91E63", linewidth=2)
-    avg_tps = sum(tps_list) / len(tps_list) if tps_list else 0
-    ax5.axhline(y=avg_tps, color="gray", linestyle="--", alpha=0.5)
-    ax5.set_xlabel("Step")
-    ax5.set_ylabel("Tokens/sec")
-    ax5.set_title(f"Throughput (avg: {avg_tps:,.0f} tok/s)")
-    ax5.grid(True, alpha=0.3)
-    ax5.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    _v3_shade(ax5, spans, x_key="step")
-
-    # ── 6. Stats panel ──
-    ax6 = fig.add_subplot(2, 3, 6)
-    ax6.axis("off")
-
-    cur = metrics[-1]
-    cur_stage = _v3_stage_name(cur.get("phase", ""))
-
-    # Per-stage summary
-    stage_summary = ""
-    for stage in V3_STAGE_ORDER:
-        if stage in spans:
-            s_losses = [losses[i] for i, s in enumerate(stages) if s == stage]
-            min_loss = min(s_losses) if s_losses else 0
-            n_steps = spans[stage]["s_max"] - spans[stage]["s_min"]
-            marker = ">" if stage == cur_stage else " "
-            stage_summary += f" {marker} {stage:<14s} {n_steps:>6,}st  {min_loss:.4f}\n"
-
-    elapsed = cur.get("elapsed_hours", 0)
-    stats_text = (
-        f"Hamner V3.1 — 50M, 8-Stage Curriculum\n"
-        f"{'='*42}\n"
-        f"Current Stage:  {cur_stage}\n"
-        f"Global Step:    {cur['step']:,}\n"
-        f"Loss:           {cur['loss']:.4f}\n"
-        f"PPL:            {cur['perplexity']:.1f}\n"
-        f"Tokens:         {cur['tokens_billions']:.3f}B\n"
-        f"Throughput:     {avg_tps:,.0f} tok/s\n"
-        f"Elapsed:        {elapsed:.1f}h\n"
-        f"{'='*42}\n"
-        f"{'Stage':<16s} {'Steps':>7s}  {'Best':>6s}\n"
-        f"{'-'*34}\n"
-        f"{stage_summary}"
-    )
-
-    # Latest sample
-    if samples_data:
-        latest = samples_data[-1]
-        stats_text += f"{'-'*34}\n"
-        stats_text += f"Sample (step {latest.get('step', '?')}):\n"
-        for prompt, output in latest.get("samples", {}).items():
-            stats_text += f"  \"{output[:120]}...\"\n"
-            break
-
-    ax6.text(0.02, 0.98, stats_text, transform=ax6.transAxes,
-             fontsize=9, verticalalignment="top", fontfamily="monospace",
-             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5", edgecolor="#BDBDBD"))
-
-    plt.suptitle("Hamner V3.1 Training Dashboard", fontsize=16, fontweight="bold", y=1.02)
-    plt.tight_layout()
-
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "v3_dashboard.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/v3_dashboard.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-def plot_v3_stages(metrics, save_dir=None):
-    """Detailed per-stage loss curves for V3 — one subplot per stage."""
-    if not metrics:
-        return
-
-    stages_present = []
-    for stage in V3_STAGE_ORDER:
-        if any(_v3_stage_name(m.get("phase", "")) == stage for m in metrics):
-            stages_present.append(stage)
-
-    if not stages_present:
-        return
-
-    n = len(stages_present)
-    # Use 2 rows if more than 4 stages
-    ncols = min(n, 4)
-    nrows = (n + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows), squeeze=False)
-
-    for i, stage in enumerate(stages_present):
-        row, col = divmod(i, ncols)
-        ax = axes[row][col]
-        idx = [j for j, m in enumerate(metrics) if _v3_stage_name(m.get("phase", "")) == stage]
-        if not idx:
-            continue
-        # Use step-in-stage (relative) for x-axis
-        step_offset = metrics[idx[0]]["step"]
-        local_steps = [metrics[j]["step"] - step_offset for j in idx]
-        lo = [metrics[j]["loss"] for j in idx]
-        color = V3_STAGE_COLORS.get(stage, "#999")
-
-        ax.plot(local_steps, lo, color=color, linewidth=0.5, alpha=0.3)
-        if len(lo) > 15:
-            ax.plot(local_steps, smooth(lo, min(20, len(lo) // 4)),
-                    color=color, linewidth=2.5)
-        n_steps = local_steps[-1] if local_steps else 0
-        ax.set_xlabel("Steps in Stage")
-        ax.set_ylabel("Loss")
-        ax.set_title(f"{stage} ({n_steps:,} steps, best {min(lo):.4f})")
-        ax.grid(True, alpha=0.3)
-        ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    # Hide empty subplots
-    for i in range(n, nrows * ncols):
-        row, col = divmod(i, ncols)
-        axes[row][col].axis("off")
-
-    plt.suptitle("V3.1 Per-Stage Loss", fontsize=14, fontweight="bold")
-    plt.tight_layout()
-
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "v3_stages.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/v3_stages.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-# ---------------------------------------------------------------------------
-# Full journey plot: pretraining + curriculum on unified timeline
-# ---------------------------------------------------------------------------
-
-# All training stages in order, with colors
-ALL_PHASES = [
-    ("pretrain",  "#78909C"),   # blue-grey — original pretraining
-    ("structure", "#2196F3"),   # blue
-    ("stories",   "#4CAF50"),   # green
-    ("voice",     "#FF9800"),   # orange
-    ("polish",    "#9C27B0"),   # purple
-]
-ALL_PHASE_COLORS = dict(ALL_PHASES)
-ALL_PHASE_ORDER = [p[0] for p in ALL_PHASES]
-
-
-def _classify_phase(row_phase):
-    """Map raw CSV phase labels to unified phase names."""
-    if row_phase in ("structure", "stories", "voice", "polish"):
-        return row_phase
-    return "pretrain"
-
-
-def _merge_metrics(pretrain_metrics, curriculum_metrics):
-    """Merge pretraining and curriculum metrics into one sorted list."""
-    combined = []
-    for m in pretrain_metrics:
-        m = dict(m)
-        m["unified_phase"] = _classify_phase(m.get("phase", ""))
-        combined.append(m)
-    for m in curriculum_metrics:
-        m = dict(m)
-        m["unified_phase"] = _classify_phase(m.get("phase", ""))
-        combined.append(m)
-    combined.sort(key=lambda m: m["tokens_billions"])
-    return combined
-
-
-def _phase_token_spans(metrics):
-    """Find tokens_billions ranges for each phase."""
-    spans = {}
-    for m in metrics:
-        phase = m["unified_phase"]
-        tb = m["tokens_billions"]
-        if phase not in spans:
-            spans[phase] = [tb, tb]
-        else:
-            spans[phase][0] = min(spans[phase][0], tb)
-            spans[phase][1] = max(spans[phase][1], tb)
-    return spans
-
-
-def _shade_token_phases(ax, spans):
-    """Add colored background shading by tokens_billions."""
-    for phase in ALL_PHASE_ORDER:
-        if phase in spans:
-            s, e = spans[phase]
-            ax.axvspan(s, e, alpha=0.10, color=ALL_PHASE_COLORS[phase])
-            mid = (s + e) / 2
-            ymin, ymax = ax.get_ylim()
-            ax.text(mid, ymax - (ymax - ymin) * 0.03, phase,
-                    ha="center", va="top", fontsize=9,
-                    color=ALL_PHASE_COLORS[phase], fontweight="bold", alpha=0.9)
-
-
-def smooth(data, window=20):
-    """Simple moving average."""
-    return [sum(data[max(0, i-window):i+1]) / len(data[max(0, i-window):i+1])
-            for i in range(len(data))]
-
-
-def plot_full_journey(pretrain_metrics, curriculum_metrics, curriculum_samples, save_dir=None):
-    """Plot the complete training journey: pretraining through curriculum phases."""
-    combined = _merge_metrics(pretrain_metrics, curriculum_metrics)
-    if not combined:
-        print("No metrics for full journey plot.")
-        return
-
-    spans = _phase_token_spans(combined)
-
-    fig = plt.figure(figsize=(18, 14))
-
-    # ── 1. Loss vs Tokens (full journey) ──────────────────────────
-    ax1 = fig.add_subplot(3, 2, 1)
-    for phase in ALL_PHASE_ORDER:
-        idx = [i for i, m in enumerate(combined) if m["unified_phase"] == phase]
-        if not idx:
-            continue
-        tb = [combined[i]["tokens_billions"] for i in idx]
-        lo = [combined[i]["loss"] for i in idx]
-        ax1.plot(tb, lo, color=ALL_PHASE_COLORS[phase], linewidth=0.5, alpha=0.25)
-        if len(lo) > 15:
-            ax1.plot(tb, smooth(lo, min(30, len(lo)//4)),
-                     color=ALL_PHASE_COLORS[phase], linewidth=2.5, label=phase)
-        else:
-            ax1.plot(tb, lo, color=ALL_PHASE_COLORS[phase], linewidth=2, label=phase)
-    _shade_token_phases(ax1, spans)
-    ax1.set_xlabel("Tokens (Billions)")
-    ax1.set_ylabel("Loss")
-    ax1.set_title("Training Loss — Full Journey")
-    ax1.legend(fontsize=9, loc="upper right")
-    ax1.grid(True, alpha=0.3)
-
-    # ── 2. Perplexity vs Tokens ───────────────────────────────────
-    ax2 = fig.add_subplot(3, 2, 2)
-    for phase in ALL_PHASE_ORDER:
-        idx = [i for i, m in enumerate(combined) if m["unified_phase"] == phase]
-        if not idx:
-            continue
-        tb = [combined[i]["tokens_billions"] for i in idx]
-        pp = [combined[i]["perplexity"] for i in idx]
-        ax2.plot(tb, pp, color=ALL_PHASE_COLORS[phase], linewidth=0.5, alpha=0.25)
-        if len(pp) > 15:
-            ax2.plot(tb, smooth(pp, min(30, len(pp)//4)),
-                     color=ALL_PHASE_COLORS[phase], linewidth=2.5, label=phase)
-        else:
-            ax2.plot(tb, pp, color=ALL_PHASE_COLORS[phase], linewidth=2, label=phase)
-    _shade_token_phases(ax2, spans)
-    ax2.set_xlabel("Tokens (Billions)")
-    ax2.set_ylabel("Perplexity")
-    ax2.set_title("Perplexity — Full Journey")
-    ax2.set_yscale("log")
-    ax2.legend(fontsize=9, loc="upper right")
-    ax2.grid(True, alpha=0.3)
-
-    # ── 3. Curriculum loss zoomed (step-based) ────────────────────
-    ax3 = fig.add_subplot(3, 2, 3)
-    if curriculum_metrics:
-        cur_phases = [m.get("phase", "") for m in curriculum_metrics]
-        for phase in ALL_PHASE_ORDER[1:]:  # skip pretrain
-            idx = [i for i, p in enumerate(cur_phases) if p == phase]
-            if not idx:
-                continue
-            s = [curriculum_metrics[i]["step"] for i in idx]
-            lo = [curriculum_metrics[i]["loss"] for i in idx]
-            ax3.plot(s, lo, color=ALL_PHASE_COLORS[phase], linewidth=0.5, alpha=0.25)
-            if len(lo) > 10:
-                ax3.plot(s, smooth(lo, min(20, len(lo)//3)),
-                         color=ALL_PHASE_COLORS[phase], linewidth=2.5, label=phase)
-            else:
-                ax3.plot(s, lo, color=ALL_PHASE_COLORS[phase], linewidth=2, label=phase)
-        ax3.legend(fontsize=9)
-    ax3.set_xlabel("Curriculum Step")
-    ax3.set_ylabel("Loss")
-    ax3.set_title("Curriculum Phases — Zoomed")
-    ax3.grid(True, alpha=0.3)
-    ax3.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    # ── 4. Learning rate (both runs) ──────────────────────────────
-    ax4 = fig.add_subplot(3, 2, 4)
-    for phase in ALL_PHASE_ORDER:
-        idx = [i for i, m in enumerate(combined) if m["unified_phase"] == phase]
-        if not idx:
-            continue
-        tb = [combined[i]["tokens_billions"] for i in idx]
-        lr = [combined[i]["learning_rate"] for i in idx]
-        ax4.plot(tb, lr, color=ALL_PHASE_COLORS[phase], linewidth=1.5, label=phase)
-    _shade_token_phases(ax4, spans)
-    ax4.set_xlabel("Tokens (Billions)")
-    ax4.set_ylabel("Learning Rate")
-    ax4.set_title("Learning Rate Schedule")
-    ax4.legend(fontsize=9, loc="upper right")
-    ax4.grid(True, alpha=0.3)
-
-    # ── 5. Throughput ─────────────────────────────────────────────
-    ax5 = fig.add_subplot(3, 2, 5)
-    for phase in ALL_PHASE_ORDER:
-        idx = [i for i, m in enumerate(combined) if m["unified_phase"] == phase]
-        if not idx:
-            continue
-        tb = [combined[i]["tokens_billions"] for i in idx]
-        tp = [combined[i]["tokens_per_sec"] for i in idx]
-        ax5.plot(tb, tp, color=ALL_PHASE_COLORS[phase], linewidth=0.5, alpha=0.25)
-        if len(tp) > 15:
-            ax5.plot(tb, smooth(tp, min(30, len(tp)//4)),
-                     color=ALL_PHASE_COLORS[phase], linewidth=2, label=phase)
-        else:
-            ax5.plot(tb, tp, color=ALL_PHASE_COLORS[phase], linewidth=1.5, label=phase)
-    _shade_token_phases(ax5, spans)
-    ax5.set_xlabel("Tokens (Billions)")
-    ax5.set_ylabel("Tokens/sec")
-    ax5.set_title("Throughput")
-    ax5.legend(fontsize=9, loc="lower right")
-    ax5.grid(True, alpha=0.3)
-
-    # ── 6. Stats + latest sample ──────────────────────────────────
-    ax6 = fig.add_subplot(3, 2, 6)
-    ax6.axis("off")
-
-    cur = combined[-1]
-    pretrain_end = [m for m in combined if m["unified_phase"] == "pretrain"]
-    pretrain_final = pretrain_end[-1] if pretrain_end else None
-
-    stats = f"Hamner Training Journey\n{'='*40}\n"
-    if pretrain_final:
-        stats += (
-            f"Pretrain:   {pretrain_final['tokens_billions']:.2f}B tok, "
-            f"loss {pretrain_final['loss']:.3f}\n"
-        )
-    stats += (
-        f"Current:    {cur['tokens_billions']:.2f}B tok, "
-        f"loss {cur['loss']:.3f}\n"
-        f"Phase:      {cur.get('unified_phase', '?')}\n"
-        f"PPL:        {cur['perplexity']:.1f}\n"
-        f"LR:         {cur['learning_rate']:.2e}\n"
-        f"Throughput: {cur['tokens_per_sec']:.0f} tok/s\n"
-        f"{'='*40}\n"
-    )
-
-    # Latest sample
-    if curriculum_samples:
-        latest = curriculum_samples[-1]
-        stats += f"\nPhase: {latest.get('phase', '?')}, step {latest.get('step', '?')}\n"
-        for prompt, output in latest.get("samples", {}).items():
-            stats += f"\n\"{output[:200]}...\"\n"
-            break
-
-    ax6.text(0.05, 0.95, stats, transform=ax6.transAxes,
-             fontsize=10, verticalalignment="top", fontfamily="monospace",
-             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5", edgecolor="#BDBDBD"))
-
-    plt.suptitle("Hamner — Full Training Journey", fontsize=18, fontweight="bold", y=1.01)
-    plt.tight_layout()
-
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "full_journey.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/full_journey.png")
-    else:
-        plt.show()
-    plt.close()
-
-
-# ---------------------------------------------------------------------------
-# V4: 5-stage pipeline dashboard
-# ---------------------------------------------------------------------------
-
-def load_v4_metrics():
-    """Load all V4 stage metrics, adding a 'stage' column."""
-    all_metrics = {}
-    for stage_name, color, path in V4_STAGES:
-        raw = load_metrics(path)
-        if raw:
-            for m in raw:
-                m["stage"] = stage_name
-                # Ensure tokens_billions exists
-                if "tokens_billions" not in m and "tokens_total" in m:
-                    m["tokens_billions"] = m["tokens_total"] / 1e9
-            all_metrics[stage_name] = raw
-    return all_metrics
-
-
-def _v4_step_offset(stage_name, stage_data):
-    """Return the step offset for a stage so anneal steps continue from base.
-
-    pretrain_anneal steps are shifted by the max base step so the
-    dashboard x-axes show a continuous timeline.  All other stages use 0.
-    """
-    if stage_name != "pretrain_anneal":
-        return 0
-    base = stage_data.get("pretrain_base", [])
-    if not base:
-        return 0
-    return max(m["step"] for m in base)
-
-
-def plot_v4_dashboard(save_dir=None):
-    """V4 dashboard: all 5 training stages on one figure."""
-    stage_data = load_v4_metrics()
-    if not stage_data:
-        print("No V4 metrics found.")
-        return
-
-    fig = plt.figure(figsize=(18, 12))
-
-    # ── 1. Loss vs Steps (all stages, anneal offset by base max step) ──
-    ax1 = fig.add_subplot(2, 3, 1)
-    anneal_transition_step = None
-    for stage_name, color, _ in V4_STAGES:
-        metrics = stage_data.get(stage_name, [])
-        if not metrics:
-            continue
-        offset = _v4_step_offset(stage_name, stage_data)
-        steps = [m["step"] + offset for m in metrics]
-        losses = [m["loss"] for m in metrics]
-        ax1.plot(steps, losses, color=color, linewidth=0.5, alpha=0.3)
-        if len(losses) > 15:
-            ax1.plot(steps, smooth(losses, min(30, len(losses) // 4)),
-                     color=color, linewidth=2.5, label=stage_name)
-        else:
-            ax1.plot(steps, losses, color=color, linewidth=2, label=stage_name)
-        if stage_name == "pretrain_anneal" and offset > 0:
-            anneal_transition_step = offset
-    if anneal_transition_step is not None:
-        ax1.axvline(x=anneal_transition_step, color="#FF9800", linestyle="--",
-                    linewidth=1.5, alpha=0.7)
-        ax1.text(anneal_transition_step, ax1.get_ylim()[1], " Anneal",
-                 rotation=45, fontsize=7, color="#FF9800", ha="left",
-                 va="top", fontweight="bold")
-    ax1.set_xlabel("Step")
-    ax1.set_ylabel("Loss")
-    ax1.set_title("Training Loss — All Stages")
-    ax1.legend(fontsize=8, loc="upper right")
-    ax1.grid(True, alpha=0.3)
-    ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    # ── 2. Loss vs Tokens (pretrain stages concatenated) ──
-    ax2 = fig.add_subplot(2, 3, 2)
-    anneal_token_start = None
-    for stage_name, color, _ in V4_STAGES[:2]:  # pretrain_base + anneal
-        metrics = stage_data.get(stage_name, [])
-        if not metrics:
-            continue
-        tokens_b = [m.get("tokens_billions", 0) for m in metrics]
-        losses = [m["loss"] for m in metrics]
-        if not any(t > 0 for t in tokens_b):
-            continue
-        ax2.plot(tokens_b, losses, color=color, linewidth=0.5, alpha=0.3)
-        if len(losses) > 15:
-            ax2.plot(tokens_b, smooth(losses, min(30, len(losses) // 4)),
-                     color=color, linewidth=2.5, label=stage_name)
-        else:
-            ax2.plot(tokens_b, losses, color=color, linewidth=2, label=stage_name)
-        if stage_name == "pretrain_anneal" and tokens_b:
-            anneal_token_start = tokens_b[0]
-    if anneal_token_start is not None:
-        ax2.axvline(x=anneal_token_start, color="#FF9800", linestyle="--",
-                    linewidth=1.5, alpha=0.7)
-        ax2.text(anneal_token_start, ax2.get_ylim()[1], " Anneal",
-                 rotation=45, fontsize=7, color="#FF9800", ha="left",
-                 va="top", fontweight="bold")
-    ax2.set_xlabel("Tokens (Billions)")
-    ax2.set_ylabel("Loss")
-    ax2.set_title("Pretrain Loss vs Tokens")
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.3)
-
-    # ── 3. Val Loss (if available, anneal steps offset) ──
-    ax3 = fig.add_subplot(2, 3, 3)
-    has_val = False
-    for stage_name, color, _ in V4_STAGES:
-        metrics = stage_data.get(stage_name, [])
-        offset = _v4_step_offset(stage_name, stage_data)
-        val_points = [(m["step"] + offset, float(m["val_loss"]))
-                      for m in metrics
-                      if m.get("val_loss") and m["val_loss"] != ""]
-        if val_points:
-            has_val = True
-            vs, vl = zip(*val_points)
-            ax3.plot(vs, vl, color=color, linewidth=2, marker="o",
-                     markersize=3, label=f"{stage_name} val")
-    if has_val:
-        ax3.set_xlabel("Step")
-        ax3.set_ylabel("Validation Loss")
-        ax3.set_title("Validation Loss")
-        ax3.legend(fontsize=8)
-        ax3.grid(True, alpha=0.3)
-        ax3.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-    else:
-        ax3.text(0.5, 0.5, "No validation data yet", ha="center", va="center",
-                 transform=ax3.transAxes, fontsize=12, color="gray")
-        ax3.set_title("Validation Loss")
-
-    # ── 4. Learning Rate (anneal steps offset) ──
-    ax4 = fig.add_subplot(2, 3, 4)
-    for stage_name, color, _ in V4_STAGES:
-        metrics = stage_data.get(stage_name, [])
-        if not metrics:
-            continue
-        offset = _v4_step_offset(stage_name, stage_data)
-        steps = [m["step"] + offset for m in metrics]
-        lrs = [m.get("learning_rate", 0) for m in metrics]
-        if any(lr > 0 for lr in lrs):
-            ax4.plot(steps, lrs, color=color, linewidth=2, label=stage_name)
-    ax4.set_xlabel("Step")
-    ax4.set_ylabel("Learning Rate")
-    ax4.set_title("LR Schedule")
-    ax4.legend(fontsize=8)
-    ax4.grid(True, alpha=0.3)
-    ax4.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    # ── 5. Throughput (anneal steps offset) ──
-    ax5 = fig.add_subplot(2, 3, 5)
-    for stage_name, color, _ in V4_STAGES:
-        metrics = stage_data.get(stage_name, [])
-        if not metrics:
-            continue
-        offset = _v4_step_offset(stage_name, stage_data)
-        steps = [m["step"] + offset for m in metrics]
-        tps = [m.get("tokens_per_sec", 0) for m in metrics]
-        if any(t > 0 for t in tps):
-            ax5.plot(steps, tps, color=color, linewidth=0.5, alpha=0.3)
-            if len(tps) > 15:
-                ax5.plot(steps, smooth(tps, min(30, len(tps) // 4)),
-                         color=color, linewidth=2, label=stage_name)
-    ax5.set_xlabel("Step")
-    ax5.set_ylabel("Tokens/sec")
-    ax5.set_title("Throughput")
-    ax5.legend(fontsize=8)
-    ax5.grid(True, alpha=0.3)
-    ax5.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}k"))
-
-    # ── 6. Stats Panel ──
-    ax6 = fig.add_subplot(2, 3, 6)
-    ax6.axis("off")
-
-    stats = "Hamner V4 — 5-Stage Pipeline\n"
-    stats += "=" * 44 + "\n"
-    stats += f"{'Stage':<18s} {'Steps':>7s} {'Loss':>8s} {'Tokens':>8s}\n"
-    stats += "-" * 44 + "\n"
-
-    total_tokens = 0
-    for stage_name, color, _ in V4_STAGES:
-        metrics = stage_data.get(stage_name, [])
-        if not metrics:
-            stats += f"  {stage_name:<16s} {'—':>7s} {'—':>8s} {'—':>8s}\n"
-            continue
-        cur = metrics[-1]
-        n_steps = cur["step"]
-        loss = cur["loss"]
-        tb = cur.get("tokens_billions", cur.get("tokens_total", 0) / 1e9)
-        if stage_name in ("pretrain_base", "pretrain_anneal"):
-            total_tokens = max(total_tokens, tb)
-        stats += f"> {stage_name:<16s} {n_steps:>7,} {loss:>8.4f} {tb:>7.2f}B\n"
-
-    stats += "-" * 44 + "\n"
-
-    # DPO-specific stats
-    dpo_data = stage_data.get("dpo", [])
-    if dpo_data:
-        cur = dpo_data[-1]
-        acc = cur.get("accuracy", "?")
-        stats += f"DPO accuracy: {acc}\n"
-
-    # Samples
-    samples = load_samples(V4_PRETRAIN_BASE_SAMPLES)
-    if samples:
-        latest = samples[-1]
-        stats += f"\nLatest sample (step {latest.get('step', '?')}):\n"
-        for prompt, output in latest.get("samples", {}).items():
-            stats += f'  "{output[:150]}..."\n'
-            break
-
-    ax6.text(0.02, 0.98, stats, transform=ax6.transAxes,
-             fontsize=9, verticalalignment="top", fontfamily="monospace",
-             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5", edgecolor="#BDBDBD"))
-
-    plt.suptitle("Hamner V4 Training Dashboard", fontsize=16, fontweight="bold", y=1.02)
-    plt.tight_layout()
-
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        plt.savefig(os.path.join(save_dir, "v4_dashboard.png"), dpi=150, bbox_inches="tight")
-        print(f"Saved: {save_dir}/v4_dashboard.png")
-    else:
+             bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5",
+                       edgecolor="#BDBDBD"))
+
+    plt.suptitle("flm V2 Training Dashboard", fontsize=16, fontweight="bold", y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if save:
+        os.makedirs(PLOT_DIR, exist_ok=True)
+        path = os.path.join(PLOT_DIR, "v2_dashboard.png")
+        plt.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        print(f"Saved: {path}")
+    if show:
         plt.show()
     plt.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot Hamner training metrics")
-    parser.add_argument("--save", action="store_true", help="Save plots to logs/plots/")
-    parser.add_argument("--tournament", action="store_true", help="Include legacy tournament plots")
+    parser = argparse.ArgumentParser(description="flm V2 training dashboard")
+    parser.add_argument("--show", action="store_true", help="Show plot interactively")
     parser.add_argument("--live", action="store_true", help="Auto-refresh every 60s")
-    parser.add_argument("--dashboard", action="store_true", help="Single dashboard image only")
-    parser.add_argument("--v4", action="store_true", help="Force V4 metrics")
-    parser.add_argument("--v3", action="store_true", help="Force V3 metrics")
-    parser.add_argument("--v2", action="store_true", help="Force V2 metrics")
+    parser.add_argument("--interval", type=int, default=60, help="Refresh interval for --live")
     args = parser.parse_args()
 
-    save_dir = PLOT_DIR if args.save or args.dashboard else None
+    if args.show:
+        matplotlib.use("TkAgg")
 
-    # Auto-detect which run to plot (prefer newest)
-    if args.v4:
-        mode = "v4"
-    elif args.v3:
-        mode = "v3"
-    elif args.v2:
-        mode = "v2"
-    elif os.path.exists(V4_PRETRAIN_BASE_METRICS) and os.path.getsize(V4_PRETRAIN_BASE_METRICS) > 0:
-        mode = "v4"
-    elif os.path.exists(V3_METRICS_FILE) and os.path.getsize(V3_METRICS_FILE) > 0:
-        mode = "v3"
+    v1_metrics = load_v1_metrics()
+    if v1_metrics:
+        print(f"Loaded V1 metrics: {len(v1_metrics)} entries ({v1_metrics[-1]['tokens_billions']:.1f}B tokens)")
+
+    if args.live:
+        print(f"Live mode — refreshing every {args.interval}s. Ctrl+C to stop.")
+        while True:
+            try:
+                metrics = load_metrics()
+                if metrics:
+                    plot_dashboard(metrics, v1_metrics=v1_metrics, save=True, show=False)
+                    cur = metrics[-1]
+                    pct = cur["tokens_billions"] / TARGET_TOKENS_B * 100
+                    print(f"  Step {cur['step']:,} | Loss {cur['loss']:.3f} | "
+                          f"{cur['tokens_billions']:.2f}B tokens ({pct:.1f}%)")
+                time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\nStopped.")
+                break
     else:
-        mode = "v2"
-
-    while True:
-        if mode == "v4":
-            # ── V4 plotting ──
-            print("Plotting V4 (5-stage pipeline)...")
-            stage_data = load_v4_metrics()
-            for name, data in stage_data.items():
-                if data:
-                    cur = data[-1]
-                    print(f"  {name}: {len(data)} points, "
-                          f"step {cur['step']:,}, loss {cur['loss']:.4f}")
-
-            plot_v4_dashboard(save_dir or PLOT_DIR)
-
-            # Also plot individual pretrain curves if data exists
-            base_metrics = stage_data.get("pretrain_base", [])
-            anneal_metrics = stage_data.get("pretrain_anneal", [])
-            if base_metrics and not args.dashboard:
-                clean_base = clean_metrics(base_metrics)
-                projection = fit_projection(clean_base)
-                # Pass anneal data so it appears as a separate segment
-                plot_training_loss(clean_base, save_dir, projection,
-                                   anneal_metrics=anneal_metrics or None)
-                plot_perplexity(clean_base, save_dir, projection,
-                                anneal_metrics=anneal_metrics or None)
-
-        elif mode == "v3":
-            # ── V3 plotting ──
-            raw_metrics = load_metrics(V3_METRICS_FILE)
-            samples_data = load_samples(V3_SAMPLES_FILE)
-            metrics = clean_v3_metrics(raw_metrics)
-
-            print(f"V3.1: {len(raw_metrics)} raw, cleaned to {len(metrics)}")
-            if metrics:
-                cur = metrics[-1]
-                stage = _v3_stage_name(cur.get("phase", ""))
-                stages_seen = set(_v3_stage_name(m.get("phase", "")) for m in metrics)
-                print(f"  Stage: {stage} | Step: {cur['step']:,} | "
-                      f"Loss: {cur['loss']:.4f} | Tokens: {cur['tokens_billions']:.3f}B")
-                print(f"  Stages seen: {', '.join(s for s in V3_STAGE_ORDER if s in stages_seen)}")
-
-            if args.dashboard:
-                plot_v3_dashboard(metrics, samples_data, save_dir)
-                break
-
-            # Full V3 plot suite
-            plot_v3_dashboard(metrics, samples_data, save_dir or PLOT_DIR)
-            plot_v3_stages(metrics, save_dir)
-            plot_training_loss(metrics, save_dir)
-            plot_perplexity(metrics, save_dir)
-            plot_learning_rate(metrics, save_dir)
-            plot_throughput(metrics, save_dir)
-
-            if samples_data:
-                plot_sample_evolution(samples_data, save_dir)
-
-        else:
-            # ── V2 plotting (original behavior) ──
-            raw_metrics = load_metrics(V2_METRICS_FILE)
-            samples_data = load_samples(V2_SAMPLES_FILE)
-            tournament_data = load_tournament(TOURNAMENT_FILE) if args.tournament else []
-
-            metrics = clean_metrics(raw_metrics)
-            projection = fit_projection(metrics)
-
-            print(f"Pretrain v2: {len(raw_metrics)} raw, cleaned to {len(metrics)} (from last spike)")
-            if projection:
-                print(f"Projection: final loss {projection['final_loss']:.2f}, "
-                      f"final PPL {projection['final_ppl']:.0f} at {V2_TARGET_TOKENS_B:.1f}B tokens")
-
-            if args.dashboard:
-                plot_all_dashboard(metrics, tournament_data, samples_data, save_dir, projection)
-                break
-
-            plot_training_loss(metrics, save_dir, projection)
-            plot_perplexity(metrics, save_dir, projection)
-            plot_learning_rate(metrics, save_dir)
-            plot_throughput(metrics, save_dir)
-
-            if args.tournament and tournament_data:
-                plot_tournament(tournament_data, save_dir)
-                plot_tournament_final(tournament_data, save_dir)
-
-            if samples_data:
-                plot_sample_evolution(samples_data, save_dir)
-
-            plot_all_dashboard(metrics, tournament_data, samples_data, save_dir or PLOT_DIR, projection)
-
-        if not args.live:
-            break
-
-        print(f"\nRefreshing in 60s... (Ctrl+C to stop)")
-        import time
-        time.sleep(60)
+        metrics = load_metrics()
+        plot_dashboard(metrics, v1_metrics=v1_metrics, save=not args.show, show=args.show)
 
 
 if __name__ == "__main__":
