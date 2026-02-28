@@ -229,7 +229,7 @@ def plot_dashboard(metrics, v1_metrics=None, save=True, show=False):
     ax1.legend(fontsize=8)
     ax1.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
 
-    # --- Panel 2: Loss vs Tokens (log-log scaling law) ---
+    # --- Panel 2: Loss vs Tokens ---
     ax2 = fig.add_subplot(2, 3, 2)
     tb_filtered = [t for t in tokens_b if t > 0]
     l_filtered = losses[-len(tb_filtered):]
@@ -241,12 +241,12 @@ def plot_dashboard(metrics, v1_metrics=None, save=True, show=False):
     ax2.set_xlabel("Tokens (B)")
     ax2.set_ylabel("Loss")
     ax2.set_title("Loss vs Tokens Processed")
-    ax2.set_xscale("log")
-    ax2.grid(True, alpha=0.3, which="both")
+    ax2.set_xlim(left=0, right=max(TARGET_TOKENS_B, max(tb_filtered) * 1.05))
+    ax2.grid(True, alpha=0.3)
     # Mark target
     ax2.axvline(x=TARGET_TOKENS_B, color="green", linestyle="--", alpha=0.5)
-    ax2.text(TARGET_TOKENS_B, max(l_filtered) * 0.9, f"Target\n{TARGET_TOKENS_B:.0f}B",
-             fontsize=8, ha="left", color="green")
+    ax2.text(TARGET_TOKENS_B * 0.95, max(l_filtered) * 0.9, f"Target\n{TARGET_TOKENS_B:.0f}B",
+             fontsize=8, ha="right", color="green")
 
     # --- Panel 3: Throughput ---
     ax3 = fig.add_subplot(2, 3, 3)
