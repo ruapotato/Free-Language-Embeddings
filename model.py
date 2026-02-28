@@ -21,21 +21,21 @@ from typing import Optional, Tuple
 @dataclass
 class HamnerConfig:
     vocab_size: int = 32000
-    hidden_size: int = 768
-    num_layers: int = 20
-    num_attention_heads: int = 12
+    hidden_size: int = 1280
+    num_layers: int = 26
+    num_attention_heads: int = 16
     num_kv_heads: int = 4
-    num_experts: int = 8
-    num_active_experts: int = 2
-    expert_intermediate_size: int = 1536
+    num_experts: int = 1
+    num_active_experts: int = 1
+    expert_intermediate_size: int = 3456
     max_seq_len: int = 2048
     rope_theta: float = 10000.0
     rms_norm_eps: float = 1e-5
     router_aux_loss_coef: float = 0.01
     dropout: float = 0.0
     tie_word_embeddings: bool = True
-    gradient_checkpointing: bool = False
-    use_differential_attention: bool = True  # toggle attention type
+    gradient_checkpointing: bool = True
+    use_differential_attention: bool = False  # standard GQA for V2
 
     # Architecture selector: transformer, mamba, rwkv, xlstm, hawk, griffin,
     #                        retnet, liquid, emotional, mamba_attn

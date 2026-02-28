@@ -1,14 +1,14 @@
 # flm — The Free Language Model
 
-A fully free AI assistant trained from scratch on a single RTX 3090. 164M parameters, every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
+A fully free AI assistant trained from scratch on a single RTX 3090. 493M parameters, every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
 **Free as in freedom** — the name is a direct reference to the Free Software Foundation's philosophy that software freedom is a matter of liberty, not price. flm proves that a fully free, fully reproducible language model can exist and be useful.
 
 ## What flm Is
 
 - **An OS-aware assistant** that becomes an expert on whatever operating system it's built on
-- **164M parameters** — small, honest about its limits, focused on being useful
-- **Trained on a single GPU** from random weights — no pretrained models, no distillation
+- **493M parameters** — trained on a single GPU from random weights
+- **100% DFSG-compliant data** — no Common Crawl, no AI-generated content, every source explicitly licensed
 - **Fully reproducible** — one person, one RTX 3090, from zero to working model
 - **GPL-3.0** for weights, training code, and all custom data
 
@@ -16,102 +16,58 @@ flm is NOT a general-purpose chatbot competing with GPT-4. It's a focused, knowl
 
 ## Architecture
 
-164M parameter dense transformer, selected through a [tournament of 10 competing designs](#tournament-architecture-search):
+493M parameter dense transformer (V2), scaled up from the V1 164M winner of a [tournament of 10 competing designs](#tournament-architecture-search):
 
 | Parameter | Value |
 |-----------|-------|
-| Hidden size | 768 |
-| Layers | 20 |
-| Attention heads | 12 (4 KV, GQA 3:1) |
+| Hidden size | 1280 |
+| Layers | 26 |
+| Attention heads | 16 (4 KV, GQA 4:1) |
 | MLP | Dense SwiGLU |
-| Intermediate size | 2048 |
-| Parameters | 163.6M |
-| Sequence length | 1024 |
-| Tokenizer | cosmo2-tokenizer (49,152 vocab) |
+| Intermediate size | 3456 |
+| Parameters | 493M |
+| Sequence length | 2048 |
+| Tokenizer | cosmo2-tokenizer (32,000 vocab) |
 
-Key components: RMSNorm, SwiGLU, RoPE, GQA, fp16 mixed precision, torch.compile, gradient checkpointing.
+Key components: RMSNorm, SwiGLU, RoPE, GQA, fp16 mixed precision, torch.compile, gradient checkpointing. Fits on RTX 3090 at batch 8-10 with ~18 GB peak VRAM.
 
 ## Training Pipeline
 
-Inspired by [SmolLM2](https://huggingface.co/HuggingFaceTB/SmolLM2-135M): multi-stage curriculum on a single RTX 3090 with exclusively DFSG-compliant data.
+3-phase pipeline inspired by [SmolLM2](https://arxiv.org/abs/2502.02737), trained on a single RTX 3090 with exclusively DFSG-compliant, human-written data.
 
-### Stage 1: Base Pretraining (~4.5 days)
+### Phase 1: Pretraining (~12B tokens, multi-stage data mix)
 
-Foundational English comprehension, general knowledge, basic reasoning.
+One continuous pretraining run with the data mix evolving across 4 internal stages, following SmolLM2's curriculum approach. Linux/Unix knowledge is included from the start.
 
 ```bash
+python build_dataset_v2.py   # download, process, tokenize all sources
 python train_pretrain.py --fresh
 ```
 
-- **Data**: [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) 60% + [DCLM](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) 40%
-- **Steps**: 400,000 (~10B tokens)
-- **LR**: 2e-4 with Warmup-Stable-Decay schedule
-- **Output**: `checkpoints/pretrain_v4/latest.pt`
+**Hyperparameters**: LR 5e-4, WSD schedule (warmup-stable-decay), seq length 2048, gradient checkpointing ON.
 
-### Stage 2: Annealing (~32 hours)
+**Internal stages (evolving data mix):**
 
-SmolLM2-style annealing with curated high-quality data including OS-specific knowledge. Decaying LR settles the model while injecting domain expertise.
+| Stage | Tokens | General Text | Linux/Unix Docs | Code |
+|-------|--------|-------------|-----------------|------|
+| 1 (0-6B) | 6B | 80% | 10% | 10% |
+| 2 (6-8B) | 2B | 65% | 20% | 15% |
+| 3 (8-10B) | 2B | 55% | 25% | 20% |
+| 4 (10-12B) | 2B | 45% | 30% | 25% |
 
-```bash
-python train_pretrain.py --stage anneal
-```
-
-- **Base**: Stage 1 checkpoint
-- **Data**: Curated mix of documentation, code, math, troubleshooting, and general retention:
-
-| Source | Share | License | Description |
-|--------|-------|---------|-------------|
-| [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) | 20% | ODC-BY | High-quality educational web text |
-| [Cosmopedia v2](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia) | 10% | Apache-2.0 | Synthetic textbooks |
-| [Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia) | 10% | CC-BY-SA-4.0 | Factual knowledge |
-| [FineMath](https://huggingface.co/datasets/HuggingFaceTB/finemath) | 10% | ODC-BY | Math reasoning |
-| [Ubuntu Dialogue Corpus](https://huggingface.co/datasets/ubuntu-dialogs-corpus/ubuntu_dialogs_corpus) | 10% | CC-BY | 1M Linux troubleshooting conversations |
-| Debian documentation | 20% | DFSG-free | Man pages, Policy Manual, packaging metadata |
-| Debian source code | 10% | DFSG-free | dpkg, apt, systemd, coreutils (Shell/Python/C/Make) |
-| [DCLM](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | 10% | ODC-BY | General web text retention |
-
-- **Steps**: ~122,000 (~3B tokens)
-- **Output**: `checkpoints/pretrain_v4_anneal/latest.pt`
-
-### Stage 3: Chat Pretraining (~11 hours)
-
-Teach conversational structure with OS-relevant dialogue patterns.
-
-```bash
-python train_chat_pretrain.py
-```
-
-- **Base**: Stage 2 checkpoint
-- **Data**: [SmolTalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) 30% + [OpenAssistant](https://huggingface.co/datasets/OpenAssistant/oasst2) 15% + Custom OS Q&A 15% + [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) 15% + [DCLM](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) 10% + [Ubuntu Dialogue](https://huggingface.co/datasets/ubuntu-dialogs-corpus/ubuntu_dialogs_corpus) 10% + Synthetic tasks 5%
-- **Steps**: 40,000 (~1B tokens) — **COMPLETE** (10.5h, final loss 1.5311)
-- **Output**: `checkpoints/chat_pretrain/latest.pt`
-
-### Stage 4: Supervised Fine-Tuning (~3 hours)
+### Phase 2: Supervised Fine-Tuning
 
 Teach flm who it is and how to behave as a helpful OS assistant.
 
 ```bash
-python generate_sft_v5.py    # generate flm identity + OS conversations
 python train_sft.py
 ```
 
-- **Base**: Stage 3 checkpoint
-- **Data**: 10,403 conversations with flm identity, weighted sampling for custom data:
-
-| Source | Count | License | Description |
-|--------|-------|---------|-------------|
-| Custom flm data | 5,333 | GPL-3.0 | Identity, OS admin, packaging, troubleshooting, tool use |
-| [OpenAssistant](https://huggingface.co/datasets/OpenAssistant/oasst2) adapted | 5,070 | Apache-2.0 | Human-written conversations adapted to flm format |
-
-SmolTalk was removed — ~25% of it contains GPT-4/GPT-3.5 outputs (OpenHermes, MetaMathQA, NuminaMath-CoT),
-which violates OpenAI's ToS prohibition on using outputs to train competing models. OASST2 is clean
-(human-generated by 13,500 crowdsource volunteers, no OpenAI model involvement).
-
-- **Epochs**: 2, no early stopping (SmolLM2 recipe)
-- **LR**: 2e-4 with cosine decay
+- **Data**: OASST2 (human-written) + custom flm identity/Linux data + Ubuntu Dialogue Corpus
+- **LR**: 3e-4, 2 epochs (SmolLM2 recipe)
 - **Output**: `checkpoints/sft/best.pt`
 
-### Stage 5: DPO Alignment (~1-2 hours)
+### Phase 3: DPO Alignment
 
 Direct Preference Optimization using human preference data.
 
@@ -119,34 +75,58 @@ Direct Preference Optimization using human preference data.
 python train_dpo.py
 ```
 
-- **Base**: Stage 4 checkpoint
-- **Data**: [HelpSteer2](https://huggingface.co/datasets/nvidia/HelpSteer2) (~7-10k preference pairs, CC-BY-4.0)
+- **Data**: Audited preference pairs (CC-BY-4.0)
+- **LR**: 1e-6, beta 0.5, 2 epochs (SmolLM2 recipe)
 - **Output**: `checkpoints/dpo/best.pt` — the final model
 
-## Training Data
+## Training Data — 100% DFSG-Compliant, 100% Human-Written
 
-Every dataset is DFSG-compliant. No NonCommercial clauses. No OpenAI-generated synthetic data. No unclear provenance.
+Every source is explicitly licensed for redistribution and derivative works. No Common Crawl derivatives (FineWeb, DCLM, C4, etc.) — web scraping doesn't respect page-level licenses. No AI-generated content — model output provenance is always ambiguous.
 
-SmolTalk was removed from SFT (Stage 4) after discovering ~25% of it contains GPT-4/GPT-3.5 outputs
-(OpenHermes, MetaMathQA, NuminaMath-CoT, Explore-Instruct-Rewriting). OpenAI's ToS prohibits using
-outputs to train competing models. SmolTalk remains in Stage 3 (chat pretraining) where it teaches
-conversational structure from the clean subsets only.
+### General Knowledge (~10B tokens)
 
-| Dataset | License | Stage | Description |
-|---------|---------|-------|-------------|
-| [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) | ODC-BY | 1, 2, 3 | Educational web text |
-| [DCLM](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | ODC-BY | 1, 2, 3 | General web text |
-| [Cosmopedia v2](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia) | Apache-2.0 | 2 | Synthetic textbooks |
-| [Wikipedia (en)](https://huggingface.co/datasets/wikimedia/wikipedia) | CC-BY-SA-4.0 | 2 | Encyclopedic knowledge |
-| [Ubuntu Dialogue Corpus](https://huggingface.co/datasets/ubuntu-dialogs-corpus/ubuntu_dialogs_corpus) | CC-BY | 2, 3 | 1M Linux troubleshooting conversations |
-| [FineMath](https://huggingface.co/datasets/HuggingFaceTB/finemath) | ODC-BY | 2 | Math reasoning |
-| Debian documentation | DFSG-free (various) | 2 | Man pages, Policy Manual, packaging metadata, copyright |
-| Debian source code | DFSG-free (various) | 2 | dpkg, apt, systemd, coreutils (Shell/Python/C/Make) |
-| [SmolTalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) | Apache-2.0 | 3 | Conversational structure (chat pretrain only) |
-| [HelpSteer2](https://huggingface.co/datasets/nvidia/HelpSteer2) | CC-BY-4.0 | 5 | Human-annotated preferences |
-| [OpenAssistant](https://huggingface.co/datasets/OpenAssistant/oasst2) | Apache-2.0 | 3, 4 | Human-written conversations |
-| Custom SFT data (flm identity, OS Q&A) | GPL-3.0 | 4 | Identity, packaging, sysadmin help |
-| Synthetic tasks | GPL-3.0 | 3 | Arithmetic, sorting, reasoning |
+| Source | License | Est. Tokens | Description |
+|--------|---------|-------------|-------------|
+| [Wikipedia English](https://dumps.wikimedia.org/) | CC-BY-SA | 4.7B | General knowledge anchor |
+| [Stack Exchange](https://archive.org/details/stackexchange) (all sites, score>=3) | CC-BY-SA | 4.0B | Technical Q&A, reasoning |
+| [Project Gutenberg](https://www.gutenberg.org/) | Public Domain | 1.5B | Language quality, long-form text |
+
+### Linux/Unix Specialization (~1.5B tokens)
+
+| Source | License | Est. Tokens | Description |
+|--------|---------|-------------|-------------|
+| SE Unix/Linux + Ask Ubuntu + Server Fault | CC-BY-SA | 400M | Linux troubleshooting (boosted weight) |
+| Debian man pages (all packages) | GPL/BSD | 500M | Command reference |
+| [TLDP](https://tldp.org/) guides | GFDL | 300M | Classic Linux instruction |
+| [Arch Wiki](https://wiki.archlinux.org/) + Debian/Ubuntu/Gentoo wikis | CC-BY-SA | 80M | Practical configuration |
+| [RFC documents](https://www.rfc-editor.org/) | IETF | 75M | Networking standards |
+| Linux kernel docs + GNU manuals + FreeBSD docs | GPL/BSD | 50M | Core system documentation |
+| Debian package docs | DFSG | 100M | Package ecosystem |
+
+### Code (~1.5B tokens)
+
+| Source | License | Est. Tokens | Description |
+|--------|---------|-------------|-------------|
+| [The Stack v1](https://huggingface.co/datasets/bigcode/the-stack-dedup) permissive (Shell/Python/C/Go/Rust) | MIT/Apache/BSD | 1.0B | Code understanding |
+| Linux kernel source | GPL v2 | 300M | Systems code |
+| Debian core source (apt, dpkg, systemd, coreutils) | GPL | 200M | Debian internals |
+
+### Post-Training
+
+| Source | License | Stage | Description |
+|--------|---------|-------|-------------|
+| [OpenAssistant OASST2](https://huggingface.co/datasets/OpenAssistant/oasst2) | Apache-2.0 | SFT | Human-written conversations |
+| Custom flm data | GPL-3.0 | SFT | Identity, packaging, sysadmin help |
+| [Ubuntu Dialogue Corpus](https://huggingface.co/datasets/ubuntu-dialogs-corpus/ubuntu_dialogs_corpus) | Apache-2.0 | SFT | Linux IRC troubleshooting |
+| Audited preference data | CC-BY-4.0 | DPO | Human-annotated preferences |
+
+### Why no Common Crawl?
+
+Datasets like FineWeb-Edu, DCLM, C4, and RedPajama are filtered versions of Common Crawl. Common Crawl scrapes the web without per-page license verification. Most web pages are "all rights reserved" by default. For Debian's DFSG standard — which requires explicit permission to redistribute and create derivative works — this is insufficient. We use only sources where the license explicitly grants these rights.
+
+### Why no AI-generated content?
+
+Datasets like COSMOPEDIA (Mixtral-generated) and SmolTalk subsets (GPT-4, Llama) have ambiguous provenance. Even when the generating model has a permissive license, its training data may not. OpenAI's ToS explicitly prohibits using outputs to train competing models. For Debian's bar, the chain of provenance needs to be clean all the way down.
 
 ## Reproduce from Scratch
 
@@ -156,62 +136,27 @@ git clone https://github.com/ruapotato/chat_hamner.git
 cd chat_hamner
 pip install -r requirements.txt
 
-# 2. Prepare OS-specific data (detects OS from /etc/os-release)
-python prepare_debian_data.py     # documentation, man pages, packaging metadata
+# 2. Build dataset (downloads, processes, tokenizes all DFSG sources)
+python build_dataset_v2.py
 
-# 3. Prepare other training data
-python prepare_sft_data.py        # downloads SmolTalk, generates flm SFT data
-python prepare_dpo_data.py        # downloads HelpSteer2 preference pairs
-
-# 4. Stage 1: Base pretrain (~4.5 days on RTX 3090)
+# 3. Phase 1: Pretrain (~12-17 days on RTX 3090)
 python train_pretrain.py --fresh
 
-# 5. Stage 2: Anneal with OS knowledge + curated mix (~32 hours)
-python train_pretrain.py --stage anneal
-
-# 6. Stage 3: Chat pretrain (~11 hours)
-python train_chat_pretrain.py
-
-# 7. Stage 4: SFT — teach flm who it is (~3 hours)
+# 4. Phase 2: SFT
 python train_sft.py
 
-# 8. Stage 5: DPO alignment (~1-2 hours)
+# 5. Phase 3: DPO alignment
 python train_dpo.py
 
-# 9. Chat!
+# 6. Chat!
 python chat.py
 ```
 
-**Prerequisites**: NVIDIA GPU with 24GB+ VRAM, 32GB+ RAM, Python 3.10+, CUDA 12.x, ~50GB disk.
-
-## The Bug That Changed Everything
-
-The original pretraining ran for 122k steps (~2 days, 4.4B tokens) but **never produced coherent text**.
-
-**Root cause**: A double-shift label bug. The model's `forward()` shifts labels internally, but every training script ALSO pre-shifted — so the model learned to predict **2 tokens ahead** instead of 1.
-
-```python
-# BUG — every training script had this:
-input_ids = tokens[:-1]   # shifted once in data prep
-labels = tokens[1:]       # shifted again → model predicts 2-ahead!
-
-# FIX — model.forward() handles the shift internally:
-input_ids = tokens[:seq_len]
-labels = tokens[:seq_len]  # same tensor, no pre-shifting
-```
-
-## Key Lessons Learned
-
-1. **SFT data must be diverse** — Tech-only conversations produce a model that can only talk about programming. Diversity is essential.
-2. **Chat pretraining bridges the gap** — Going straight from base pretrain to SFT doesn't work well. An intermediate dialogue-format stage teaches conversational structure.
-3. **Audit adapted data for identity contamination** — Adapting OASST2/SmolTalk by changing system prompts isn't enough. Assistant responses still say "I am Open Assistant" or "developed by OpenAI". These must be scrubbed or the model learns the wrong identity.
-4. **Check dataset provenance, not just licenses** — SmolTalk is labeled Apache-2.0 but ~25% contains GPT-4/GPT-3.5 outputs (OpenHermes, MetaMathQA). OpenAI's ToS prohibits using outputs to train competing models. License labels can be misleading.
-5. **Math requires exhaustive examples** — The model memorizes number pairs, not arithmetic. ALL multiplication tables 2-12 were necessary.
-6. **Documentation > source code** — For an OS assistant, man pages and packaging metadata are far more valuable per token than bulk source code.
+**Prerequisites**: NVIDIA GPU with 24GB+ VRAM, 32GB+ RAM, Python 3.10+, CUDA 12.x, ~100GB disk for data + checkpoints.
 
 ## Evaluation
 
-Multi-model benchmark comparison across 6 benchmarks — 1 domain-specific (LinuxBench) and 5 general (ARC-Easy, HellaSwag, PIQA, WinoGrande, BoolQ). The hypothesis: flm is comparable to similarly-sized models on general tasks but significantly stronger on Linux.
+LinuxBench is evaluated periodically during pretraining to track Linux knowledge acquisition.
 
 ### Benchmarks
 
@@ -224,43 +169,30 @@ Multi-model benchmark comparison across 6 benchmarks — 1 domain-specific (Linu
 | WinoGrande | `allenai/winogrande` | 1,267 | Completion MCQ | 50% |
 | BoolQ | `google/boolq` | 3,270 | Token MCQ | 50% |
 
-**Token MCQ**: Log-probability of the answer token (A/B/C/D or Yes/No) at the last position.
-**Completion MCQ**: Mean log-probability of each completion's tokens given the prompt; highest wins.
+### V1 Results (164M, for reference)
 
-### Comparison Models
+| Benchmark | flm V1 (best stage) | SmolLM-135M | Target V2 |
+|-----------|---------------------|-------------|-----------|
+| LinuxBench | 19.0% | 42.0% | >35% |
+| ARC-Easy | 25.3% | 31.0% | >30% |
+| HellaSwag | 31.0% | 36.0% | >35% |
+| PIQA | 63.6% | 74.0% | >65% |
+| WinoGrande | 49.0% | 50.0% | >52% |
+| BoolQ | 62.0% | 33.0%* | >62% |
 
-| Model | Params | Description |
-|-------|--------|-------------|
-| flm | 164M | This project (Linux-focused) |
-| GPT-2 | 124M | OpenAI's classic baseline |
-| SmolLM-135M | 135M | HuggingFace's efficient small LM |
-| Pythia-160M | 160M | EleutherAI's research model |
+*SmolLM BoolQ tested on 100 samples only.
 
-### Running Evaluations
+## V1 History
 
-```bash
-# Single model, single benchmark
-python eval/run_eval.py --hf gpt2 --bench linux_bench
+V1 (164M params) completed all 5 training stages but underperformed SmolLM-135M on most benchmarks. Key issues:
+- Pretraining used Common Crawl derivatives (FineWeb-Edu, DCLM) — not truly DFSG-compliant
+- Linux knowledge never materialized (LinuxBench 19% vs SmolLM's 42%)
+- 5-stage pipeline caused cumulative degradation (PIQA: 63.6% → 57.1%)
+- SFT data contained identity contamination from OASST2 and SmolTalk
 
-# Single model, all benchmarks (with question cap for large benchmarks)
-python eval/run_eval.py --hf gpt2 --bench all --limit 200
+V1 checkpoints preserved in `checkpoints/archive_v1/`.
 
-# flm checkpoint
-python eval/run_eval.py --model checkpoints/sft/best.pt --bench all
-
-# All comparison models at once
-bash eval/run_all_models.sh
-
-# Print comparison table from saved results
-python eval/run_eval.py --compare
-
-# Generate comparison plots
-python eval/plot_results.py --save
-```
-
-Results are saved to `eval/results/` and plots to `eval/results/plots/`.
-
-## Tournament Architecture Search
+## Tournament Architecture Search (V1)
 
 We trained **10 different architectures** in a 3-round elimination tournament to pick the best design:
 
@@ -277,34 +209,34 @@ We trained **10 different architectures** in a 3-round elimination tournament to
 | 9 | Deep narrow | 70.8M | 32 layers, narrow | Eliminated R3 |
 | 10 | Wide shallow | 121.7M | 8 layers, wide | OOM |
 
+V2 scales the winner (Dense GQA) from 164M → 493M: wider (1280 vs 768), deeper (26 vs 20 layers), same architecture.
+
+## Key Lessons Learned
+
+1. **Data provenance matters more than data volume** — FineWeb-Edu gave us 10B tokens but Linux knowledge never materialized. Quality, domain-specific data beats generic web scrapes.
+2. **Fewer training stages = less degradation** — V1's 5 stages eroded PIQA by 6.5 points. V2 uses 3 phases (SmolLM2 approach).
+3. **Audit everything for contamination** — OASST2 had Open Assistant identity leaks. SmolTalk had GPT-4 outputs. License labels can be misleading.
+4. **Common Crawl is not DFSG-compliant** — Web pages are "all rights reserved" by default. Scraping without consent doesn't create a license.
+5. **Linux knowledge needs Linux data in pretraining** — Adding domain data only in later stages doesn't work. The model needs it from step 1.
+
 ## Project Structure
 
 ```
 flm/
-├── model.py                  # Core transformer architecture (164M)
+├── model.py                  # Core transformer architecture (493M)
 ├── chat.py                   # Interactive CLI chat
-├── train_pretrain.py         # Stages 1-2: Base pretraining + annealing
-├── train_chat_pretrain.py    # Stage 3: Chat pretraining (dialogue mix)
-├── train_sft.py              # Stage 4: Supervised fine-tuning
-├── train_dpo.py              # Stage 5: DPO alignment
-├── prepare_debian_data.py    # Collect OS documentation, man pages, packaging metadata
-├── prepare_sft_data.py       # Download/prepare SFT data
-├── prepare_dpo_data.py       # Download/prepare HelpSteer2 DPO pairs
-├── generate_sft_data.py      # Generate flm identity + OS Q&A SFT data
-├── synthetic_tasks.py        # Synthetic task generators
-├── plot_training.py          # Training metrics visualization
+├── build_dataset_v2.py       # Download, process, tokenize all DFSG data sources
+├── train_pretrain.py         # Phase 1: Multi-stage pretraining
+├── train_sft.py              # Phase 2: Supervised fine-tuning
+├── train_dpo.py              # Phase 3: DPO alignment
 ├── eval/
 │   ├── run_eval.py           # Multi-benchmark evaluation harness
 │   ├── benchmarks.py         # Benchmark registry + loaders (6 benchmarks)
-│   ├── plot_results.py       # Comparison plots (bar, radar, delta charts)
-│   ├── run_all_models.sh     # Run all comparison models
 │   ├── linux_bench.json      # LinuxBench: 315 Linux MCQ questions
 │   └── results/              # Evaluation results + plots
-├── data/
-│   ├── os_specific/          # Debian docs, man pages, packaging metadata
-│   ├── ubuntu_dialogue.jsonl # Ubuntu IRC troubleshooting conversations
-│   └── sft/                  # SFT conversation data
-├── checkpoints/              # Model checkpoints for each stage
+├── data/                     # Processed training data (built by build_dataset_v2.py)
+├── checkpoints/              # Model checkpoints
+│   └── archive_v1/           # V1 (164M) checkpoints for reference
 └── logs/                     # Training logs, metrics, sample generations
 ```
 
