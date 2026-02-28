@@ -61,7 +61,7 @@ def load_metrics():
                  "tokens_per_sec", "tokens_total", "tokens_billions",
                  "elapsed_hours", "val_loss", "linux_bench_acc", "stage"]
 
-    metrics = []
+    all_rows = []
     with open(METRICS_FILE) as f:
         for line in f:
             line = line.strip()
@@ -84,20 +84,37 @@ def load_metrics():
                     row["val_loss"] = float(parts[9]) if parts[9] else None
                     row["linux_bench_acc"] = float(parts[10]) if parts[10] else None
                     row["stage"] = int(parts[11]) if parts[11] else 1
-                # Handle 10-column format (phase)
-                elif len(parts) >= 10:
-                    row["val_loss"] = None
-                    row["linux_bench_acc"] = None
-                    row["stage"] = 1
                 else:
                     row["val_loss"] = None
                     row["linux_bench_acc"] = None
                     row["stage"] = 1
-                metrics.append(row)
+                all_rows.append(row)
             except (ValueError, IndexError):
                 continue
 
-    return metrics
+    # Detect restarts (step decreases) and keep only the latest run
+    last_restart = 0
+    for i in range(1, len(all_rows)):
+        if all_rows[i]["step"] < all_rows[i - 1]["step"]:
+            last_restart = i
+    if last_restart > 0:
+        print(f"  Detected restart at index {last_restart}, using latest run "
+              f"({len(all_rows) - last_restart} entries)")
+    metrics = all_rows[last_restart:]
+
+    # Deduplicate steps (keep last entry per step for val_loss/linux_bench rows)
+    seen = {}
+    for m in metrics:
+        s = m["step"]
+        if s not in seen:
+            seen[s] = m
+        else:
+            # Merge: keep non-None val_loss/linux_bench from either
+            if m.get("val_loss") is not None:
+                seen[s]["val_loss"] = m["val_loss"]
+            if m.get("linux_bench_acc") is not None:
+                seen[s]["linux_bench_acc"] = m["linux_bench_acc"]
+    return list(seen.values())
 
 
 def load_v1_metrics():
