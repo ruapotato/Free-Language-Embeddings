@@ -154,11 +154,14 @@ def load_samples():
 
 
 def smooth(values, window=50):
-    """Simple moving average."""
-    if len(values) < window:
+    """Exponential moving average — no edge artifacts."""
+    if len(values) < 2:
         return values
-    kernel = np.ones(window) / window
-    return np.convolve(values, kernel, mode="same")
+    alpha = 2.0 / (window + 1)
+    result = [values[0]]
+    for v in values[1:]:
+        result.append(alpha * v + (1 - alpha) * result[-1])
+    return result
 
 
 def get_stage_color(step):
