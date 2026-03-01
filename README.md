@@ -35,6 +35,8 @@ Key components: RMSNorm, SwiGLU, RoPE, GQA, fp16 mixed precision, torch.compile,
 
 3-phase pipeline inspired by [SmolLM2](https://arxiv.org/abs/2502.02737), trained on a single RTX 3090 with exclusively DFSG-compliant, human-written data.
 
+![Training Dashboard](logs/plots/v2_dashboard.png)
+
 ### Phase 1: Pretraining (~10B tokens, multi-stage data mix)
 
 One continuous pretraining run with the data mix evolving across 4 internal stages, following SmolLM2's curriculum approach. Linux/Unix knowledge is included from step 1.
