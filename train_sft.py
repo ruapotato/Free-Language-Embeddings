@@ -40,8 +40,8 @@ BASE_CHECKPOINT_FALLBACKS = [
     "checkpoints/pretrain_v2/latest.pt",
 ]
 SFT_CHECKPOINT_DIR = "checkpoints/sft"
-SFT_DATA = "data/sft/flm_combined_v7_clean.jsonl"
-SFT_DATA_FALLBACK = "data/sft/flm_combined.jsonl"
+SFT_DATA = "data/sft/flm_sft_v2_reviewed.jsonl"
+SFT_DATA_FALLBACK = "data/sft/flm_sft_v2.jsonl"
 VOICE_SAMPLES_FILE = None  # Use SYSTEM_PROMPT for sample generation
 LOG_FILE = "logs/sft_v6.log"
 METRICS_FILE = "logs/sft_v6_metrics.csv"
@@ -52,7 +52,7 @@ SAMPLES_FILE = "logs/sft_v6_samples.jsonl"
 # SmolLM2 uses NO early stopping — fixed 2 epochs. We follow suit.
 NUM_EPOCHS = 2
 BATCH_SIZE = 8
-SEQ_LEN = 1024
+SEQ_LEN = 2048           # Increased for V2: SE/Ubuntu conversations can be longer
 LR = 2e-4            # 2x the V5 LR; 3e-4 was too aggressive for 20k samples
 WARMUP_STEPS = 100
 WEIGHT_DECAY = 0.1

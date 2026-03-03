@@ -11,7 +11,7 @@ build/
 venv/
 .venv/
 
-# Training data (too large for git)
+# Training data (too large for git — regenerate with scripts)
 data/youtube/*.vtt
 data/youtube/video_list.txt
 data/sft_smoltalk.jsonl
@@ -22,6 +22,17 @@ data/debian_docs.jsonl
 data/ubuntu_dialogue.jsonl
 data/ubuntu_work/
 data/dpo_helpsteer2.jsonl
+
+# SFT data (regenerate: generate_sft_v2.py → build_review_dataset.py → compile_reviews.py)
+data/sft/*.jsonl
+data/pretrain/
+data/raw/
+
+# Review artifacts (large intermediate files, regenerable)
+data/sft/review/auto_approved.jsonl
+data/sft/review/auto_rejected.jsonl
+data/sft/review/needs_review/
+data/sft/review/compact/
 
 # Checkpoints (too large for git)
 checkpoints/
