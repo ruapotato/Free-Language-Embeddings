@@ -1,5 +1,7 @@
 # flm — The Free Language Model
 
+> **Status: Mothballed.** V2 pretraining reached step 211K/610K (34.5%, 3.5B tokens) with loss 2.70 but sample quality was still poor — the model produces grammatical but incoherent text at this stage. The architecture, data pipeline, and SFT data (217K human-written samples) are solid and reusable, but the pretraining approach needs rethinking before resuming. Contributions and ideas welcome.
+
 A fully free AI assistant trained from scratch on a single RTX 3090. 493M parameters, every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
 **Free as in freedom** — the name is a direct reference to the Free Software Foundation's philosophy that software freedom is a matter of liberty, not price. flm proves that a fully free, fully reproducible language model can exist and be useful.
