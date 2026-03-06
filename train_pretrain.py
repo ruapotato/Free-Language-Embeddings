@@ -54,13 +54,13 @@ MODEL_CONFIG = dict(
 )
 
 # --- Hyperparameters (SmolLM recipe for 135M) ---
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 SEQ_LEN = 2048
 PEAK_LR = 1e-3
 MIN_LR_RATIO = 0.1            # min LR = peak * 0.1
 WARMUP_STEPS = 2000
 DECAY_FRACTION = 0.10          # cosine decay in last 10%
-MAX_STEPS = 152_588            # ~10B tokens at batch 32 * seq 2048
+MAX_STEPS = 305_176            # ~10B tokens at batch 16 * seq 2048
 
 # AdamW
 BETAS = (0.9, 0.95)

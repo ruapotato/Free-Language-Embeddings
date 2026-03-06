@@ -91,36 +91,53 @@ python train_dpo.py
 
 ## Training Data — 100% DFSG-Compliant, 100% Human-Written
 
-~10B tokens from Common Pile (safe subset) + existing Linux specialization data. All explicitly licensed for redistribution and derivative works. No Common Crawl derivatives. No AI-generated content.
+~12B tokens across 14 sources, all explicitly licensed for redistribution and derivative works. No Common Crawl derivatives. No AI-generated content.
 
-### Common Pile Sources (EleutherAI, June 2025)
+The build pipeline (`build_dataset.py`) can source data from Common Pile or direct downloads — currently using a mix of both. Future rebuilds will use Common Pile throughout for better deduplication.
 
-| Source | License | Description |
-|--------|---------|-------------|
-| [Wikipedia](https://huggingface.co/datasets/common-pile/wikimedia) (wikimedia) | CC-BY-SA | General knowledge anchor |
-| [Project Gutenberg](https://huggingface.co/datasets/common-pile/gutenberg) | Public Domain | Language quality, long-form text |
-| [Stack Exchange](https://huggingface.co/datasets/common-pile/stackexchange) | CC-BY-SA | Technical Q&A, reasoning |
-| [The Stack V2](https://huggingface.co/datasets/common-pile/the_stack_v2) | FOSS (per-file) | Code with Blue Oak approved licenses |
-| [peS2o](https://huggingface.co/datasets/common-pile/peS2o) | CC (per-paper) | Scientific papers |
-| [arXiv](https://huggingface.co/datasets/common-pile/arxiv_papers) | CC (per-paper) | Scientific preprints |
-| [USGPO](https://huggingface.co/datasets/common-pile/usgpo) | Public Domain | US government documents |
+### General Text (~10.3B tokens, 50% mix weight)
 
-**SKIPPED** (not DFSG-safe enough):
-- **CCCC** — Web scrape with regex-based license detection. 46% of top 1000 domains failed manual verification.
-- **Creative Commons YouTube** — Relies on uploader self-declaration of CC BY.
-
-### Linux/Unix Specialization (~365M tokens, existing V2 data)
-
-| Source | License | Est. Tokens | Description |
+| Source | License | Size on Disk | Description |
 |--------|---------|-------------|-------------|
-| [RFC documents](https://www.rfc-editor.org/) | IETF | ~164M | Networking standards |
-| Debian man pages | GPL/BSD | ~30M | Command reference |
-| [GNU Info manuals](https://www.gnu.org/manual/) | GFDL | ~14M | Core tool documentation |
-| Linux kernel docs | GPL-2.0 | ~10M | Kernel internals |
-| [TLDP](https://tldp.org/) guides | GFDL | ~10M | Classic Linux instruction |
-| [Arch Wiki](https://wiki.archlinux.org/) | GFDL | ~9M | Practical configuration |
-| Linux kernel source | GPL-2.0 | ~91M | Systems code |
-| Curated FOSS repos | MIT/GPL/Apache | ~37M | Code understanding |
+| [Wikipedia English](https://dumps.wikimedia.org/) | CC-BY-SA | 19 GB | 5.9M articles, direct HF download |
+| [Project Gutenberg](https://www.gutenberg.org/) | Public Domain | 14 GB | ~35K books, HF download |
+
+### Technical Q&A (~1B tokens, 20% mix weight)
+
+| Source | License | Size on Disk | Description |
+|--------|---------|-------------|-------------|
+| [Stack Exchange](https://archive.org/details/stackexchange) (all sites, score>=3) | CC-BY-SA | 3.2 GB | 2.9M posts, archive.org dumps |
+
+### Code (~50M tokens, 10% mix weight)
+
+| Source | License | Size on Disk | Description |
+|--------|---------|-------------|-------------|
+| Curated FOSS repos (coreutils, git, curl, etc.) | MIT/GPL/Apache | 162 MB | ~15K files from 27 repos |
+
+### Scientific (~750M tokens, 10% mix weight)
+
+| Source | License | Size on Disk | Description |
+|--------|---------|-------------|-------------|
+| [peS2o](https://huggingface.co/datasets/common-pile/peS2o) | CC (per-paper) | 1.2 GB | Scientific papers (Common Pile) |
+| [arXiv papers](https://huggingface.co/datasets/common-pile/arxiv_papers) | CC (per-paper) | 1.3 GB | Scientific preprints (Common Pile) |
+
+### Linux/Unix Specialization (~365M tokens, 3.6% mix weight)
+
+| Source | License | Size on Disk | Description |
+|--------|---------|-------------|-------------|
+| [RFC documents](https://www.rfc-editor.org/) | IETF | 521 MB | 9,716 networking standards |
+| Linux kernel source | GPL-2.0 | 289 MB | 16,690 files (key subsystems) |
+| Debian man pages | GPL/BSD | 96 MB | 8,339 pages |
+| [GNU Info manuals](https://www.gnu.org/manual/) | GFDL | 46 MB | 46 manuals |
+| Linux kernel docs | GPL-2.0 | 34 MB | 4,721 documentation files |
+| [TLDP](https://tldp.org/) guides | GFDL | 32 MB | 422 HOWTOs and guides |
+| [Arch Wiki](https://wiki.archlinux.org/) | GFDL | 29 MB | 2,109 articles |
+
+### Government/Legal (~390M tokens, 6.4% mix weight)
+
+| Source | License | Size on Disk | Description |
+|--------|---------|-------------|-------------|
+| [USGPO](https://huggingface.co/datasets/common-pile/usgpo) | Public Domain | 1.3 GB | US government documents (Common Pile) |
 
 ### Why no Common Crawl?
 
