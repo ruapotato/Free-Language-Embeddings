@@ -93,10 +93,11 @@ def load_metrics(filepath):
             except (ValueError, IndexError):
                 continue
 
-    # Detect restarts (step decreases) and keep only the latest run
+    # Detect full restarts (large step decreases) and keep only the latest run
+    # Small step decreases (< 1000) are just checkpoint resume jitter, not restarts
     last_restart = 0
     for i in range(1, len(all_rows)):
-        if all_rows[i]["step"] < all_rows[i - 1]["step"]:
+        if all_rows[i]["step"] < all_rows[i - 1]["step"] - 1000:
             last_restart = i
     metrics = all_rows[last_restart:]
 
@@ -123,6 +124,80 @@ def smooth(values, window=50):
     for v in values[1:]:
         result.append(alpha * v + (1 - alpha) * result[-1])
     return result
+
+
+def project_loss(metrics, target_tokens_b=10.0, min_points=30):
+    """Project final loss using power-law fit: loss = a * tokens^(-b) + c.
+
+    This models the typical LLM scaling curve where loss drops fast early
+    then squeezes out diminishing gains — the last 10% of training still
+    helps but less dramatically.
+
+    Returns (projected_loss, fit_tokens, fit_losses) or None if not enough data.
+    """
+    if len(metrics) < min_points:
+        return None
+
+    # Use smoothed data from second half of training (more stable fit)
+    halfway = len(metrics) // 2
+    tb = [m["tokens_billions"] for m in metrics[halfway:] if m["tokens_billions"] > 0.001]
+    lo = smooth([m["loss"] for m in metrics[halfway:] if m["tokens_billions"] > 0.001], 20)
+
+    if len(tb) < 10:
+        return None
+
+    # Fit log(loss - c) = log(a) - b * log(tokens)
+    # Estimate c (asymptotic floor) as slightly below current best
+    import math
+    min_loss = min(lo)
+    # Try a few floor values and pick best fit
+    best_fit = None
+    best_err = float("inf")
+
+    for c_frac in [0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90]:
+        c = min_loss * c_frac
+        try:
+            log_t = [math.log(t) for t in tb]
+            log_l = [math.log(l - c) for l in lo if l > c]
+            if len(log_l) < len(log_t):
+                log_t = log_t[:len(log_l)]
+
+            # Simple linear regression on log-log
+            n = len(log_t)
+            sx = sum(log_t)
+            sy = sum(log_l)
+            sxx = sum(x * x for x in log_t)
+            sxy = sum(x * y for x, y in zip(log_t, log_l))
+            denom = n * sxx - sx * sx
+            if abs(denom) < 1e-12:
+                continue
+            b = -(n * sxy - sx * sy) / denom  # negative slope = positive b
+            log_a = (sy + b * sx) / n  # since log_l = log_a - b*log_t
+            a = math.exp(log_a)
+
+            # Check fit quality
+            err = sum((a * t ** (-b) + c - l) ** 2 for t, l in zip(tb, lo))
+            if err < best_err and b > 0:
+                best_err = err
+                best_fit = (a, b, c)
+        except (ValueError, ZeroDivisionError):
+            continue
+
+    if best_fit is None:
+        return None
+
+    a, b, c = best_fit
+
+    # Generate projection curve from current position to target
+    cur_tok = tb[-1]
+    n_points = 50
+    proj_tokens = [cur_tok + (target_tokens_b - cur_tok) * i / n_points
+                   for i in range(n_points + 1)]
+    proj_losses = [a * t ** (-b) + c for t in proj_tokens]
+
+    projected_final = a * target_tokens_b ** (-b) + c
+
+    return projected_final, proj_tokens, proj_losses
 
 
 def plot_dashboard(all_data, save=True, show=False):
@@ -165,6 +240,7 @@ def plot_dashboard(all_data, save=True, show=False):
         ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
 
     # --- Panel 2: Loss vs Tokens (the real comparison) ---
+    projections = {}  # name -> projected_final_loss
     for name, metrics in all_data.items():
         if not metrics:
             continue
@@ -180,12 +256,25 @@ def plot_dashboard(all_data, save=True, show=False):
         else:
             ax_loss_tok.plot(tb, lo, color=cfg["color"], linewidth=2.5, label=name)
 
+        # Add projection for V3
+        if name == "V3 (135M)":
+            proj = project_loss(metrics, target_tokens_b=10.0)
+            if proj:
+                proj_loss, proj_tb, proj_lo = proj
+                ax_loss_tok.plot(proj_tb, proj_lo, color=cfg["color"],
+                                 linewidth=2.5, linestyle="--", alpha=0.7,
+                                 label=f"V3 projected → {proj_loss:.2f}")
+                ax_loss_tok.scatter([10.0], [proj_loss], color=cfg["color"],
+                                    s=150, marker="*", zorder=10,
+                                    edgecolors="black", linewidths=0.5)
+                projections[name] = proj_loss
+
     ax_loss_tok.set_xlabel("Tokens (B)")
     ax_loss_tok.set_ylabel("Loss")
     ax_loss_tok.set_title("Training Loss vs Tokens Processed")
     ax_loss_tok.grid(True, alpha=0.3)
     ax_loss_tok.legend(fontsize=10)
-    ax_loss_tok.set_xlim(left=0)
+    ax_loss_tok.set_xlim(left=0, right=11)
 
     # --- Panel 3: Throughput ---
     for name, metrics in all_data.items():
@@ -209,39 +298,77 @@ def plot_dashboard(all_data, save=True, show=False):
     ax_throughput.xaxis.set_major_formatter(
         ticker.FuncFormatter(lambda x, _: f"{x/1000:.0f}K"))
 
-    # --- Panel 4: Stats Summary ---
+    # --- Panel 4: Stats Summary (apples-to-apples by step AND token) ---
     ax_stats.axis("off")
 
-    lines = ["flm Training Comparison", "─" * 45]
+    v3_metrics = all_data.get("V3 (135M)", [])
+    v3_cur = v3_metrics[-1] if v3_metrics else None
 
-    for name, metrics in all_data.items():
+    def find_nearest(metrics, key, target):
+        """Find entry closest to target value for given key."""
         if not metrics:
-            lines.append(f"\n{name}: no data")
-            continue
-        cfg = RUNS[name]
-        cur = metrics[-1]
-        avg_tps = sum(m["tokens_per_sec"] for m in metrics[-100:]) / len(metrics[-100:])
+            return None
+        best = None
+        for m in metrics:
+            if m[key] <= target * 1.05:
+                best = m
+        return best
 
-        lines.append(f"\n{name} ({cfg['params']} params)")
-        lines.append(f"  Steps:      {cur['step']:>10,}")
-        lines.append(f"  Loss:       {cur['loss']:>10.4f}")
-        lines.append(f"  Tokens:     {cur['tokens_billions']:>7.2f}B")
-        lines.append(f"  Throughput: {avg_tps:>7,.0f} tok/s")
-        lines.append(f"  Time:       {cur['elapsed_hours']:>7.1f}h")
+    def fmt(val, fmt_str=".3f"):
+        return f"{val:{fmt_str}}" if val is not None else "—"
 
-        # Val loss
-        val = [m for m in metrics if m.get("val_loss") is not None]
-        if val:
-            lines.append(f"  Val Loss:   {val[-1]['val_loss']:>10.4f}")
+    def get_loss(entry):
+        return entry["loss"] if entry else None
 
-        # LinuxBench
-        lb = [m for m in metrics if m.get("linux_bench_acc") is not None]
-        if lb:
-            lines.append(f"  LinuxBench: {lb[-1]['linux_bench_acc']*100:>9.1f}%")
+    names = ["V1 (164M)", "V2 (493M)", "V3 (135M)"]
+    header = f"  {'':>12s} {'V1(164M)':>10s} {'V2(493M)':>10s} {'V3(135M)':>10s}"
+    sep = f"  {'─'*44}"
+
+    lines = ["flm Training Comparison", "═" * 46]
+
+    if v3_cur and v3_cur["tokens_billions"] > 0.001:
+        # --- Compare at same TOKENS (the fair comparison) ---
+        v3_tok = v3_cur["tokens_billions"]
+        lines.append(f"\n  @ {v3_tok:.3f}B tokens")
+        lines.append(header)
+        lines.append(sep)
+
+        at_tok = [
+            find_nearest(all_data.get(n, []), "tokens_billions", v3_tok)
+            for n in names
+        ]
+        vals = [fmt(get_loss(a)) for a in at_tok]
+        lines.append(f"  {'Loss':>12s} {vals[0]:>10s} {vals[1]:>10s} {vals[2]:>10s}")
+        vals = [f"{a['step']:>9,d}" if a else "        —" for a in at_tok]
+        lines.append(f"  {'Step':>12s} {vals[0]:>10s} {vals[1]:>10s} {vals[2]:>10s}")
+        vals = [fmt(a["elapsed_hours"], ".1f") + "h" if a else "    —" for a in at_tok]
+        lines.append(f"  {'Time':>12s} {vals[0]:>10s} {vals[1]:>10s} {vals[2]:>10s}")
+
+    # --- V3 Projection ---
+    if "V3 (135M)" in projections:
+        proj = projections["V3 (135M)"]
+        lines.append(f"\n  V3 projected @ 10B: loss {proj:.2f}")
+
+    # --- Overall totals ---
+    lines.append(f"\n  Overall (latest)")
+    lines.append(header)
+    lines.append(sep)
+
+    row_data = {
+        "Tokens": lambda m: f"{m[-1]['tokens_billions']:.2f}B",
+        "Loss": lambda m: f"{m[-1]['loss']:.4f}",
+        "Time": lambda m: f"{m[-1]['elapsed_hours']:.1f}h",
+    }
+    for label, fn in row_data.items():
+        vals = []
+        for n in names:
+            m = all_data.get(n, [])
+            vals.append(fn(m) if m else "—")
+        lines.append(f"  {label:>12s} {vals[0]:>10s} {vals[1]:>10s} {vals[2]:>10s}")
 
     stats_text = "\n".join(lines)
-    ax_stats.text(0.05, 0.95, stats_text, transform=ax_stats.transAxes,
-                  fontsize=10, verticalalignment="top", fontfamily="monospace",
+    ax_stats.text(0.02, 0.98, stats_text, transform=ax_stats.transAxes,
+                  fontsize=8.5, verticalalignment="top", fontfamily="monospace",
                   bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5",
                             edgecolor="#BDBDBD"))
 
