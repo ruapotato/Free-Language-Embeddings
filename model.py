@@ -20,14 +20,14 @@ from typing import Optional, Tuple
 
 @dataclass
 class HamnerConfig:
-    vocab_size: int = 32000
-    hidden_size: int = 1280
-    num_layers: int = 26
-    num_attention_heads: int = 16
-    num_kv_heads: int = 4
+    vocab_size: int = 49152
+    hidden_size: int = 576
+    num_layers: int = 30
+    num_attention_heads: int = 9
+    num_kv_heads: int = 3
     num_experts: int = 1
     num_active_experts: int = 1
-    expert_intermediate_size: int = 3456
+    expert_intermediate_size: int = 1536
     max_seq_len: int = 2048
     rope_theta: float = 10000.0
     rms_norm_eps: float = 1e-5
@@ -35,7 +35,7 @@ class HamnerConfig:
     dropout: float = 0.0
     tie_word_embeddings: bool = True
     gradient_checkpointing: bool = True
-    use_differential_attention: bool = False  # standard GQA for V2
+    use_differential_attention: bool = False
 
     # Architecture selector: transformer, mamba, rwkv, xlstm, hawk, griffin,
     #                        retnet, liquid, emotional, mamba_attn

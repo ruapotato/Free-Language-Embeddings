@@ -3,26 +3,34 @@
 Build Dataset — Download, process, and prepare all DFSG-compliant training data.
 ================================================================================
 
+V3: Common Pile (safe subset) + existing Linux specialization data.
 All sources are human-written with explicit licenses permitting redistribution
 and derivative works. No Common Crawl derivatives. No AI-generated content.
 
-Sources:
-  General Knowledge (~10B tokens):
-    - Wikipedia English (CC-BY-SA)
-    - Stack Exchange all sites, score>=3 (CC-BY-SA)
-    - Project Gutenberg (Public Domain)
+Sources (10B token target):
+  General Text (~5B tokens, 50%):
+    - Wikipedia (Common Pile wikimedia, CC-BY-SA)
+    - Project Gutenberg (Common Pile gutenberg, Public Domain)
 
-  Linux/Unix Specialization (~1.5B tokens):
-    - Debian man pages (GPL/BSD)
-    - Arch Wiki (GFDL)
-    - TLDP guides (GFDL)
-    - RFC documents (IETF)
-    - Linux kernel Documentation/ (GPL v2)
-    - GNU manuals (GFDL)
+  Technical Q&A (~2B tokens, 20%):
+    - Stack Exchange (Common Pile stackexchange, CC-BY-SA)
 
-  Code (~1.5B tokens):
-    - The Stack v1 dedup, permissive licenses (MIT/Apache/BSD)
-    - Linux kernel source (GPL v2)
+  Code (~1B tokens, 10%):
+    - The Stack V2 FOSS subset (Common Pile the_stack_v2, per-file FOSS)
+
+  Scientific (~1B tokens, 10%):
+    - peS2o (Common Pile peS2o, CC licenses)
+    - arXiv papers (Common Pile arxiv_papers, CC licenses)
+
+  Linux Specialization (~365M tokens, 3.6%):
+    - Existing V2 Linux data (man pages, kernel docs, RFCs, etc.)
+
+  Government/Legal (~635M tokens, 6.4%):
+    - USGPO (Common Pile usgpo, Public Domain)
+
+  SKIPPED Common Pile sources (not DFSG-safe enough):
+    - CCCC (web scrape with unreliable license detection)
+    - Creative Commons YouTube (uploader self-declaration unreliable)
 
 Output: data/pretrain/*.jsonl — one file per source, ready for train_pretrain.py
 
@@ -110,279 +118,88 @@ def strip_html(text):
 
 
 # ---------------------------------------------------------------------------
-# Source: Wikipedia English
+# Common Pile helper
+# ---------------------------------------------------------------------------
+
+def _build_common_pile_source(cp_name, out_path, source_label, license_tag):
+    """Download and process a Common Pile source via HuggingFace datasets.
+
+    Common Pile sources are available as common-pile/{cp_name} on HuggingFace.
+    Each provides streaming access to pre-processed, deduplicated documents.
+    """
+    from datasets import load_dataset
+
+    log(f"  Downloading common-pile/{cp_name} (streaming)...")
+
+    try:
+        ds = load_dataset(f"common-pile/{cp_name}", split="train", streaming=True)
+    except Exception as e:
+        log(f"  ERROR: Could not load common-pile/{cp_name}: {e}")
+        log("  Make sure 'datasets' is installed: pip install datasets")
+        return
+
+    count = 0
+    with open(out_path, "w") as f:
+        for sample in ds:
+            text = sample.get("text", "")
+            if len(text) < MIN_DOC_LENGTH:
+                continue
+
+            if write_doc(f, text, source_label, license_tag):
+                count += 1
+
+            if count % 100_000 == 0 and count > 0:
+                log(f"  Processed {count:,} documents...")
+
+    log(f"  {source_label} complete: {count:,} documents → {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Source: Wikipedia (Common Pile wikimedia)
 # ---------------------------------------------------------------------------
 
 def build_wikipedia():
-    """Download and process Wikipedia English dump via HuggingFace."""
+    """Download Wikipedia from Common Pile (better deduplication than raw dumps)."""
     out_path = DATA_DIR / "wikipedia.jsonl"
     if out_path.exists():
         n = count_lines(out_path)
         log(f"Wikipedia already exists ({n:,} docs), skipping. Delete to rebuild.")
         return
 
-    log("Building Wikipedia English...")
-    log("  Downloading via HuggingFace datasets (streaming)...")
-
-    from datasets import load_dataset
-
-    ds = load_dataset("wikimedia/wikipedia", "20231101.en",
-                       split="train", streaming=True)
-
-    count = 0
-    with open(out_path, "w") as f:
-        for i, sample in enumerate(ds):
-            text = sample.get("text", "")
-            # Skip very short articles and disambiguation pages
-            if len(text) < 200:
-                continue
-            if "may refer to:" in text[:500]:
-                continue
-
-            if write_doc(f, text, "wikipedia", "CC-BY-SA-4.0"):
-                count += 1
-
-            if count % 100_000 == 0 and count > 0:
-                log(f"  Processed {count:,} articles...")
-
-    log(f"  Wikipedia complete: {count:,} articles → {out_path}")
+    log("Building Wikipedia from Common Pile...")
+    _build_common_pile_source("wikimedia", out_path, "wikipedia", "CC-BY-SA-4.0")
 
 
 # ---------------------------------------------------------------------------
-# Source: Stack Exchange
+# Source: Stack Exchange (Common Pile stackexchange)
 # ---------------------------------------------------------------------------
 
 def build_stackexchange():
-    """Download and process Stack Exchange data dump.
-
-    Downloads 7z dumps from archive.org, extracts Posts.xml, filters score >= 3.
-    Main sites (askubuntu, serverfault, superuser) use {site}.com.7z format.
-    Sub-sites (unix, math, etc.) use {site}.stackexchange.com.7z format.
-    StackOverflow is skipped (23GB compressed — too large, overlaps with code data).
-    """
+    """Download Stack Exchange from Common Pile."""
     out_path = DATA_DIR / "stackexchange.jsonl"
     if out_path.exists() and out_path.stat().st_size > 0:
         n = count_lines(out_path)
         log(f"Stack Exchange already exists ({n:,} docs), skipping.")
         return
 
-    log("Building Stack Exchange (all sites, score >= 3)...")
-    log("  This downloads SE dumps from archive.org — may take a while...")
-
-    # Sites with {site}.com.7z format (main trilogy + askubuntu)
-    MAIN_SITES = {"askubuntu", "serverfault", "superuser", "stackoverflow", "mathoverflow"}
-
-    # Priority sites for Linux-focused model
-    priority_sites = [
-        "unix", "askubuntu", "serverfault", "superuser",
-    ]
-
-    # Additional sites for general knowledge (skip stackoverflow — 23GB, overlaps with code)
-    general_sites = [
-        "math", "physics", "biology", "chemistry", "english",
-        "electronics", "dba", "security", "networkengineering",
-        "codereview", "softwareengineering", "devops",
-        "cs", "datascience", "stats",
-    ]
-
-    all_sites = priority_sites + general_sites
-
-    count = 0
-    with open(out_path, "w") as f:
-        for site in all_sites:
-            log(f"  Loading {site}...")
-
-            # Determine correct archive.org URL
-            if site in MAIN_SITES:
-                archive_name = f"{site}.com"
-            else:
-                archive_name = f"{site}.stackexchange.com"
-
-            site_count = _build_se_from_archive(site, archive_name, f)
-            count += site_count
-            if site_count > 0:
-                log(f"    {site}: {site_count:,} posts")
-            else:
-                log(f"    {site}: failed or empty")
-
-    log(f"  Stack Exchange complete: {count:,} posts → {out_path}")
-
-
-def _build_se_from_archive(site, archive_name, out_file):
-    """Download SE site 7z dump from archive.org and extract Posts.xml."""
-    import urllib.request
-    import xml.etree.ElementTree as ET
-
-    url = f"https://archive.org/download/stackexchange/{archive_name}.7z"
-    raw_path = RAW_DIR / f"se_{site}.7z"
-
-    if not raw_path.exists():
-        try:
-            log(f"      Downloading {url}...")
-            urllib.request.urlretrieve(url, raw_path)
-        except Exception as e:
-            log(f"      Download failed: {e}")
-            return 0
-
-    # Verify download isn't truncated by checking 7z can list contents
-    try:
-        result = subprocess.run(
-            ["7z", "l", str(raw_path)], capture_output=True, timeout=30
-        )
-        if result.returncode != 0:
-            log(f"      {raw_path} appears corrupt, re-downloading...")
-            raw_path.unlink()
-            try:
-                urllib.request.urlretrieve(url, raw_path)
-            except Exception as e:
-                log(f"      Re-download failed: {e}")
-                return 0
-    except Exception:
-        pass
-
-    # Extract Posts.xml from 7z
-    posts_path = RAW_DIR / f"se_{site}_Posts.xml"
-    if not posts_path.exists():
-        extract_dir = RAW_DIR / f"se_{site}_extracted"
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.run(
-                ["7z", "e", str(raw_path), "Posts.xml", f"-o{extract_dir}", "-y"],
-                check=True, capture_output=True, timeout=300
-            )
-            extracted = extract_dir / "Posts.xml"
-            if extracted.exists():
-                extracted.rename(posts_path)
-            else:
-                log(f"      Posts.xml not found in {raw_path}")
-                return 0
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            log(f"      Extraction failed for {raw_path}: {e}")
-            return 0
-
-    # Parse Posts.xml
-    count = 0
-    try:
-        for event, elem in ET.iterparse(str(posts_path), events=("end",)):
-            if elem.tag != "row":
-                continue
-
-            score = int(elem.get("Score", 0))
-            if score < SE_MIN_SCORE:
-                elem.clear()
-                continue
-
-            post_type = elem.get("PostTypeId", "")
-            title = elem.get("Title", "")
-            body = strip_html(elem.get("Body", ""))
-
-            if post_type == "1" and title:  # Question
-                text = f"# {title}\n\n{body}"
-            else:
-                text = body
-
-            if write_doc(out_file, text, f"stackexchange/{site}", "CC-BY-SA-4.0"):
-                count += 1
-
-            elem.clear()
-
-            if count % 100_000 == 0 and count > 0:
-                log(f"      {site}: {count:,} posts so far...")
-
-    except ET.ParseError as e:
-        log(f"      XML parse error: {e}")
-
-    # Clean up extracted XML to save disk space
-    if posts_path.exists():
-        posts_path.unlink()
-
-    return count
+    log("Building Stack Exchange from Common Pile...")
+    _build_common_pile_source("stackexchange", out_path, "stackexchange", "CC-BY-SA-4.0")
 
 
 # ---------------------------------------------------------------------------
-# Source: Project Gutenberg
+# Source: Project Gutenberg (Common Pile gutenberg)
 # ---------------------------------------------------------------------------
 
 def build_gutenberg():
-    """Download Project Gutenberg texts via HuggingFace."""
+    """Download Project Gutenberg from Common Pile."""
     out_path = DATA_DIR / "gutenberg.jsonl"
     if out_path.exists():
         n = count_lines(out_path)
         log(f"Project Gutenberg already exists ({n:,} docs), skipping.")
         return
 
-    log("Building Project Gutenberg...")
-
-    from datasets import load_dataset
-
-    count = 0
-    seen_hashes = set()
-
-    with open(out_path, "w") as f:
-        try:
-            ds = load_dataset("manu/project_gutenberg", split="en",
-                              streaming=True)
-            for sample in ds:
-                text = sample.get("text", "")
-
-                # Deduplicate (Gutenberg has many duplicate editions)
-                text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
-                if text_hash in seen_hashes:
-                    continue
-                seen_hashes.add(text_hash)
-
-                # Skip very short texts
-                if len(text) < 500:
-                    continue
-
-                # Strip Gutenberg header/footer boilerplate
-                text = _strip_gutenberg_boilerplate(text)
-
-                if write_doc(f, text, "gutenberg", "Public Domain"):
-                    count += 1
-
-                if count % 10_000 == 0 and count > 0:
-                    log(f"  Processed {count:,} books...")
-
-        except Exception as e:
-            log(f"  Error loading Gutenberg from HF: {e}")
-            log("  Try: pip install datasets")
-
-    log(f"  Project Gutenberg complete: {count:,} books → {out_path}")
-
-
-def _strip_gutenberg_boilerplate(text):
-    """Remove Project Gutenberg header and footer."""
-    # Common start markers
-    start_markers = [
-        "*** START OF THIS PROJECT GUTENBERG",
-        "*** START OF THE PROJECT GUTENBERG",
-        "***START OF THE PROJECT GUTENBERG",
-    ]
-    for marker in start_markers:
-        idx = text.find(marker)
-        if idx != -1:
-            # Find end of the marker line
-            nl = text.find("\n", idx)
-            if nl != -1:
-                text = text[nl + 1:]
-            break
-
-    # Common end markers
-    end_markers = [
-        "*** END OF THIS PROJECT GUTENBERG",
-        "*** END OF THE PROJECT GUTENBERG",
-        "***END OF THE PROJECT GUTENBERG",
-        "End of the Project Gutenberg",
-        "End of Project Gutenberg",
-    ]
-    for marker in end_markers:
-        idx = text.find(marker)
-        if idx != -1:
-            text = text[:idx]
-            break
-
-    return text.strip()
+    log("Building Project Gutenberg from Common Pile...")
+    _build_common_pile_source("gutenberg", out_path, "gutenberg", "Public Domain")
 
 
 # ---------------------------------------------------------------------------
@@ -851,196 +668,84 @@ def build_gnu_manuals():
 
 
 # ---------------------------------------------------------------------------
-# Source: The Stack v1 (permissive licenses only)
+# Source: FOSS Code (Common Pile the_stack_v2)
 # ---------------------------------------------------------------------------
 
 def build_thestack():
-    """Download curated FOSS source code from GitHub.
-
-    Instead of The Stack (requires HF auth), we clone important open-source
-    projects directly. This gives us high-quality, verified-license code
-    that's highly relevant for a Linux-focused model.
-    """
+    """Download FOSS code from Common Pile's The Stack V2 subset."""
     out_path = DATA_DIR / "thestack.jsonl"
     if out_path.exists() and out_path.stat().st_size > 0:
         n = count_lines(out_path)
         log(f"FOSS code already exists ({n:,} docs), skipping.")
         return
 
-    log("Building FOSS code from curated GitHub repos...")
-
-    # Curated list of important Linux/FOSS projects with verified licenses
-    # Format: (repo_url, project_name, license, languages_extensions)
-    REPOS = [
-        # Core system tools
-        ("https://github.com/coreutils/coreutils", "coreutils", "GPL-3.0",
-         [".c", ".h", ".sh"]),
-        ("https://github.com/util-linux/util-linux", "util-linux", "GPL-2.0",
-         [".c", ".h", ".sh"]),
-        ("https://github.com/shadow-maint/shadow", "shadow", "BSD-3-Clause",
-         [".c", ".h"]),
-        # Shell / scripting
-        ("https://github.com/bminor/bash", "bash", "GPL-3.0",
-         [".c", ".h", ".sh", ".def"]),
-        ("https://github.com/zsh-users/zsh", "zsh", "MIT",
-         [".c", ".h", ".zsh"]),
-        # Init / service management
-        ("https://github.com/systemd/systemd", "systemd", "LGPL-2.1",
-         [".c", ".h", ".py", ".sh"]),
-        # Package management
-        ("https://github.com/Debian/apt", "apt", "GPL-2.0",
-         [".cc", ".h", ".py", ".sh"]),
-        ("https://github.com/Debian/dpkg", "dpkg", "GPL-2.0",
-         [".c", ".h", ".pl", ".sh"]),
-        # Networking
-        ("https://github.com/openssh/openssh-portable", "openssh", "BSD-2-Clause",
-         [".c", ".h", ".sh"]),
-        ("https://github.com/iproute2/iproute2", "iproute2", "GPL-2.0",
-         [".c", ".h", ".sh"]),
-        ("https://github.com/curl/curl", "curl", "MIT",
-         [".c", ".h", ".sh"]),
-        ("https://github.com/mirror/wget", "wget", "GPL-3.0",
-         [".c", ".h"]),
-        # Text processing
-        ("https://github.com/westes/flex", "flex", "BSD-2-Clause",
-         [".c", ".h", ".l"]),
-        # Build tools
-        ("https://github.com/westes/flex", "flex", "BSD-2-Clause",
-         [".c", ".h"]),
-        # Version control
-        ("https://github.com/git/git", "git", "GPL-2.0",
-         [".c", ".h", ".sh", ".py"]),
-        # Web/proxy
-        ("https://github.com/nginx/nginx", "nginx", "BSD-2-Clause",
-         [".c", ".h"]),
-        # Containers
-        ("https://github.com/containers/podman", "podman", "Apache-2.0",
-         [".go"]),
-        ("https://github.com/containers/buildah", "buildah", "Apache-2.0",
-         [".go"]),
-        # Monitoring/admin
-        ("https://github.com/htop-dev/htop", "htop", "GPL-2.0",
-         [".c", ".h"]),
-        ("https://github.com/aristocratos/btop", "btop", "Apache-2.0",
-         [".cpp", ".hpp"]),
-        # Python systems tools
-        ("https://github.com/ansible/ansible", "ansible", "GPL-3.0",
-         [".py"]),
-        ("https://github.com/saltstack/salt", "salt", "Apache-2.0",
-         [".py"]),
-        # Firewall / security
-        ("https://github.com/fail2ban/fail2ban", "fail2ban", "GPL-2.0",
-         [".py", ".conf"]),
-        # Database
-        ("https://github.com/sqlite/sqlite", "sqlite", "Public Domain",
-         [".c", ".h"]),
-        ("https://github.com/redis/redis", "redis", "BSD-3-Clause",
-         [".c", ".h"]),
-        # Compression
-        ("https://github.com/gzip-hp/gzip", "gzip", "GPL-3.0",
-         [".c", ".h"]),
-        # Rust CLI tools
-        ("https://github.com/BurntSushi/ripgrep", "ripgrep", "MIT",
-         [".rs"]),
-        ("https://github.com/sharkdp/fd", "fd", "MIT/Apache-2.0",
-         [".rs"]),
-        ("https://github.com/sharkdp/bat", "bat", "MIT/Apache-2.0",
-         [".rs"]),
-    ]
-
-    repos_dir = RAW_DIR / "foss_repos"
-    repos_dir.mkdir(parents=True, exist_ok=True)
-
-    # Also include common config file types
-    CONFIG_EXTS = {".conf", ".cfg", ".ini", ".yaml", ".yml", ".toml",
-                   ".json", ".service", ".timer", ".socket", ".target",
-                   ".mount", ".path", ".slice", ".scope"}
-
-    count = 0
-    with open(out_path, "w") as f:
-        seen_repos = set()
-        for repo_url, name, license_tag, extensions in REPOS:
-            if name in seen_repos:
-                continue
-            seen_repos.add(name)
-
-            repo_dir = repos_dir / name
-            log(f"  {name} ({license_tag})...")
-
-            if not repo_dir.exists():
-                try:
-                    subprocess.run(
-                        ["git", "config", "--global", "--add",
-                         "safe.directory", str(repo_dir)],
-                        capture_output=True, timeout=10
-                    )
-                    subprocess.run(
-                        ["git", "clone", "--depth=1", repo_url, str(repo_dir)],
-                        check=True, capture_output=True, timeout=180
-                    )
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                    log(f"    Clone failed: {e}")
-                    continue
-
-            repo_count = 0
-            all_exts = set(extensions) | CONFIG_EXTS
-            for root, dirs, files in os.walk(repo_dir):
-                # Skip .git, tests, vendor, node_modules
-                dirs[:] = [d for d in dirs if d not in
-                           {".git", "test", "tests", "vendor", "node_modules",
-                            ".github", "contrib", "po", "m4"}]
-
-                for fname in files:
-                    ext = os.path.splitext(fname)[1].lower()
-                    if ext not in all_exts and fname not in {"Makefile", "Dockerfile",
-                                                              "CMakeLists.txt", "meson.build"}:
-                        continue
-
-                    filepath = os.path.join(root, fname)
-                    try:
-                        with open(filepath, "r", errors="replace") as src:
-                            content = src.read()
-
-                        if len(content) < 50 or len(content) > 500_000:
-                            continue
-
-                        rel_path = os.path.relpath(filepath, repo_dir)
-                        lang = _ext_to_lang(ext, fname)
-                        text = f"```{lang}\n// {name}: {rel_path}\n{content}\n```"
-
-                        if write_doc(f, text, f"foss_code/{name}", license_tag):
-                            count += 1
-                            repo_count += 1
-                    except Exception:
-                        continue
-
-            log(f"    {name}: {repo_count:,} files")
-
-    log(f"  FOSS code complete: {count:,} files → {out_path}")
+    log("Building FOSS code from Common Pile (the_stack_v2)...")
+    _build_common_pile_source("the_stack_v2", out_path, "thestack", "FOSS (per-file)")
 
 
-def _ext_to_lang(ext, fname):
-    """Map file extension to language identifier."""
-    mapping = {
-        ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp",
-        ".py": "python", ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
-        ".go": "go", ".rs": "rust", ".pl": "perl", ".rb": "ruby",
-        ".js": "javascript", ".ts": "typescript",
-        ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".json": "json",
-        ".conf": "ini", ".cfg": "ini", ".ini": "ini",
-        ".service": "ini", ".timer": "ini", ".socket": "ini",
-        ".target": "ini", ".mount": "ini",
-        ".l": "lex", ".def": "c",
-    }
-    if fname == "Makefile":
-        return "makefile"
-    if fname == "Dockerfile":
-        return "dockerfile"
-    if fname == "CMakeLists.txt":
-        return "cmake"
-    if fname == "meson.build":
-        return "meson"
-    return mapping.get(ext, "text")
+# ---------------------------------------------------------------------------
+# Source: peS2o (Common Pile — scientific papers)
+# ---------------------------------------------------------------------------
+
+def build_peS2o():
+    """Download peS2o scientific papers from Common Pile."""
+    out_path = DATA_DIR / "peS2o.jsonl"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        n = count_lines(out_path)
+        log(f"peS2o already exists ({n:,} docs), skipping.")
+        return
+
+    log("Building peS2o from Common Pile...")
+    _build_common_pile_source("peS2o", out_path, "peS2o", "CC (per-paper)")
+
+
+# ---------------------------------------------------------------------------
+# Source: arXiv papers (Common Pile)
+# ---------------------------------------------------------------------------
+
+def build_arxiv():
+    """Download arXiv papers from Common Pile."""
+    out_path = DATA_DIR / "arxiv.jsonl"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        n = count_lines(out_path)
+        log(f"arXiv already exists ({n:,} docs), skipping.")
+        return
+
+    log("Building arXiv papers from Common Pile...")
+    _build_common_pile_source("arxiv_papers", out_path, "arxiv", "CC (per-paper)")
+
+
+# ---------------------------------------------------------------------------
+# Source: USGPO (Common Pile — US Government Publishing Office)
+# ---------------------------------------------------------------------------
+
+def build_usgpo():
+    """Download USGPO documents from Common Pile (Public Domain)."""
+    out_path = DATA_DIR / "usgpo.jsonl"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        n = count_lines(out_path)
+        log(f"USGPO already exists ({n:,} docs), skipping.")
+        return
+
+    log("Building USGPO from Common Pile...")
+    _build_common_pile_source("usgpo", out_path, "usgpo", "Public Domain")
+
+
+# ---------------------------------------------------------------------------
+# Source: Curated FOSS repos (existing V2 Linux data)
+# ---------------------------------------------------------------------------
+
+def build_foss_repos():
+    """Use existing curated FOSS repos from V2 (already in data/pretrain/)."""
+    # This is the old thestack data renamed — kept for backward compatibility
+    # with V2 data that's already been built. If not present, skip silently.
+    out_path = DATA_DIR / "foss_repos.jsonl"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        n = count_lines(out_path)
+        log(f"FOSS repos already exists ({n:,} docs), skipping.")
+        return
+
+    log("FOSS repos: not built (optional — use Common Pile thestack instead)")
 
 
 # ---------------------------------------------------------------------------
@@ -1106,17 +811,27 @@ def build_kernel_source():
 # ---------------------------------------------------------------------------
 
 SOURCES = {
-    "wikipedia":     ("Wikipedia English",      "CC-BY-SA-4.0",  build_wikipedia),
-    "stackexchange": ("Stack Exchange (all)",    "CC-BY-SA-4.0",  build_stackexchange),
-    "gutenberg":     ("Project Gutenberg",       "Public Domain", build_gutenberg),
+    # General text (Common Pile)
+    "wikipedia":     ("Wikipedia (Common Pile)", "CC-BY-SA-4.0",  build_wikipedia),
+    "gutenberg":     ("Gutenberg (Common Pile)", "Public Domain", build_gutenberg),
+    # Technical Q&A (Common Pile)
+    "stackexchange": ("StackExchange (Common Pile)", "CC-BY-SA-4.0", build_stackexchange),
+    # Code (Common Pile)
+    "thestack":      ("The Stack V2 FOSS (Common Pile)", "FOSS (per-file)", build_thestack),
+    # Scientific (Common Pile)
+    "peS2o":         ("peS2o (Common Pile)",     "CC (per-paper)", build_peS2o),
+    "arxiv":         ("arXiv (Common Pile)",     "CC (per-paper)", build_arxiv),
+    # Government (Common Pile)
+    "usgpo":         ("USGPO (Common Pile)",     "Public Domain", build_usgpo),
+    # Linux specialization (existing V2 data)
     "manpages":      ("Debian Man Pages",        "GPL/BSD",       build_manpages),
     "kernel_docs":   ("Linux Kernel Docs",       "GPL-2.0",       build_kernel_docs),
     "rfcs":          ("RFC Documents",           "IETF",          build_rfcs),
     "archwiki":      ("Arch Wiki",               "GFDL",          build_archwiki),
     "tldp":          ("TLDP Guides",             "GFDL",          build_tldp),
     "gnu_manuals":   ("GNU Info Manuals",        "GFDL",          build_gnu_manuals),
-    "thestack":      ("FOSS Code (curated repos)","MIT/GPL/Apache",build_thestack),
     "kernel_source": ("Linux Kernel Source",     "GPL-2.0",       build_kernel_source),
+    "foss_repos":    ("Curated FOSS Repos",      "MIT/GPL/Apache", build_foss_repos),
 }
 
 
@@ -1146,7 +861,7 @@ def show_status():
 
     log("  " + "-" * 85)
     log(f"  {'TOTAL':<30s} {'':<15s} {'':<10s} {total_docs:>10,d} {total_tokens/1e6:>10.1f}M")
-    log(f"\n  Chinchilla-optimal for 493M params: ~10B tokens")
+    log(f"\n  Chinchilla-optimal for 135M params: ~2.7B tokens (10B = ~74× Chinchilla)")
 
 
 # ---------------------------------------------------------------------------

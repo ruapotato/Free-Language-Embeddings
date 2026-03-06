@@ -1,13 +1,10 @@
 """
-Hamner V2 Pretraining Script — DFSG-Compatible, Linux-Focused
+Hamner V3 Pretraining Script — DFSG-Compatible, Linux-Focused
 =============================================================
-SmolLM2-inspired pretraining with 100% DFSG-compliant, human-written data.
+SmolLM-135M architecture (30 layers × 576 hidden) with DFSG-compliant data
+from Common Pile + existing Linux specialization data.
 
-Single continuous run with 4 internal stages (evolving data mix):
-  Stage 1 (0-50%):    80% general, 10% linux, 10% code
-  Stage 2 (50-67%):   65% general, 20% linux, 15% code
-  Stage 3 (67-83%):   55% general, 25% linux, 20% code
-  Stage 4 (83-100%):  45% general, 30% linux, 25% code
+10B token test run with flat data mix (no staged ramp).
 
 All data from data/pretrain/*.jsonl — no HuggingFace streaming.
 
@@ -37,31 +34,33 @@ from model import HamnerModel, HamnerConfig
 # Config
 # ---------------------------------------------------------------------------
 
-CHECKPOINT_DIR = "checkpoints/pretrain_v2"
+CHECKPOINT_DIR = "checkpoints/pretrain_v3"
 LOG_DIR = "logs"
 
-# Model config — 493M params
+# Model config — SmolLM-135M architecture
 MODEL_CONFIG = dict(
-    hidden_size=1280,
-    num_layers=26,
-    num_attention_heads=16,
-    num_kv_heads=4,
+    vocab_size=49152,
+    hidden_size=576,
+    num_layers=30,
+    num_attention_heads=9,
+    num_kv_heads=3,
     num_experts=1,
     num_active_experts=1,
-    expert_intermediate_size=3456,
+    expert_intermediate_size=1536,
     use_differential_attention=False,
     gradient_checkpointing=True,
     max_seq_len=2048,
+    tie_word_embeddings=True,
 )
 
-# --- Hyperparameters (SmolLM2 recipe) ---
-BATCH_SIZE = 8
+# --- Hyperparameters (SmolLM recipe for 135M) ---
+BATCH_SIZE = 32
 SEQ_LEN = 2048
-PEAK_LR = 5e-4
+PEAK_LR = 1e-3
 MIN_LR_RATIO = 0.1            # min LR = peak * 0.1
 WARMUP_STEPS = 2000
 DECAY_FRACTION = 0.10          # cosine decay in last 10%
-MAX_STEPS = 610_000            # ~10B tokens at batch 8 * seq 2048
+MAX_STEPS = 152_588            # ~10B tokens at batch 32 * seq 2048
 
 # AdamW
 BETAS = (0.9, 0.95)
@@ -91,30 +90,33 @@ SAMPLE_PROMPTS = [
 
 # Category assignments for each source file
 DATA_CATEGORIES = {
-    # General knowledge
+    # General text (50%)
     "wikipedia":     "general",
-    "stackexchange": "general",
     "gutenberg":     "general",
-    # Linux/Unix specialization
+    # Technical Q&A (20%)
+    "stackexchange": "technical",
+    # Code (10%)
+    "thestack":      "code",
+    # Scientific (10%)
+    "peS2o":         "science",
+    "arxiv":         "science",
+    # Linux specialization (3.6%)
     "manpages":      "linux",
     "kernel_docs":   "linux",
     "rfcs":          "linux",
     "archwiki":      "linux",
     "tldp":          "linux",
     "gnu_manuals":   "linux",
-    # Code
-    "thestack":      "code",
-    "kernel_source": "code",
+    "kernel_source": "linux",
+    "foss_repos":    "linux",
+    # Government/Legal (6.4%)
+    "usgpo":         "government",
 }
 
-# Multi-stage data mix ratios (category → ratio at each stage)
-# Stages are defined by fraction of total training completed
+# Flat data mix ratios for 10B test run (no staged ramp)
 STAGE_RATIOS = [
-    # (start_fraction, general, linux, code)
-    (0.00, 0.80, 0.10, 0.10),  # Stage 1: foundation
-    (0.50, 0.65, 0.20, 0.15),  # Stage 2: introduce more Linux
-    (0.67, 0.55, 0.25, 0.20),  # Stage 3: push specialization
-    (0.83, 0.45, 0.30, 0.25),  # Stage 4: final push
+    # (start_fraction, general, technical, code, science, linux, government)
+    (0.00, 0.50, 0.20, 0.10, 0.10, 0.036, 0.064),
 ]
 
 
@@ -123,9 +125,9 @@ STAGE_RATIOS = [
 # ---------------------------------------------------------------------------
 
 LOG_PATHS = {
-    "log": f"{LOG_DIR}/pretrain_v2.log",
-    "metrics": f"{LOG_DIR}/pretrain_v2_metrics.csv",
-    "samples": f"{LOG_DIR}/pretrain_v2_samples.jsonl",
+    "log": f"{LOG_DIR}/pretrain_v3.log",
+    "metrics": f"{LOG_DIR}/pretrain_v3_metrics.csv",
+    "samples": f"{LOG_DIR}/pretrain_v3_samples.jsonl",
 }
 
 
@@ -222,7 +224,7 @@ class LocalDataStreamer:
             raise RuntimeError("No data sources found in data/pretrain/!")
 
         # Show category totals
-        for cat in ["general", "linux", "code"]:
+        for cat in ["general", "technical", "code", "science", "linux", "government"]:
             cat_sources = [n for n, c in DATA_CATEGORIES.items()
                            if c == cat and n in self.source_files]
             cat_size = sum(self.source_sizes.get(n, 0) for n in cat_sources)
@@ -284,18 +286,24 @@ class LocalDataStreamer:
 
         # Find which stage we're in
         stage_idx = 0
-        for i, (start_frac, _, _, _) in enumerate(STAGE_RATIOS):
+        for i, (start_frac, *_) in enumerate(STAGE_RATIOS):
             if progress >= start_frac:
                 stage_idx = i
 
-        _, general_r, linux_r, code_r = STAGE_RATIOS[stage_idx]
+        ratios = STAGE_RATIOS[stage_idx]
+        _, general_r, technical_r, code_r, science_r, linux_r, government_r = ratios
 
         if stage_idx != self.current_stage:
             self.current_stage = stage_idx
-            log(f"  DATA MIX STAGE {stage_idx + 1}: "
-                f"general={general_r:.0%} linux={linux_r:.0%} code={code_r:.0%}")
+            log(f"  DATA MIX: general={general_r:.0%} technical={technical_r:.0%} "
+                f"code={code_r:.0%} science={science_r:.0%} "
+                f"linux={linux_r:.1%} government={government_r:.1%}")
 
-        return {"general": general_r, "linux": linux_r, "code": code_r}, stage_idx + 1
+        return {
+            "general": general_r, "technical": technical_r,
+            "code": code_r, "science": science_r,
+            "linux": linux_r, "government": government_r,
+        }, stage_idx + 1
 
     def _choose_source(self, category_ratios):
         """Choose a data source based on category ratios and source sizes."""
@@ -544,7 +552,7 @@ def save_checkpoint(model, optimizer, scaler, config, step, loss,
         "avg_loss": loss,
         "tokens_total": tokens_total,
         "timestamp": datetime.datetime.now().isoformat(),
-        "training_type": "pretrain_v2",
+        "training_type": "pretrain_v3",
         "torch_rng_state": torch.random.get_rng_state(),
         "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
     }
@@ -672,7 +680,7 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
     max_steps = max_steps_override or MAX_STEPS
 
     log("=" * 70)
-    log("HAMNER V2 PRETRAINING — DFSG-Compatible, Linux-Focused")
+    log("HAMNER V3 PRETRAINING — SmolLM-135M Architecture, Common Pile Data")
     log("=" * 70)
 
     # Load tokenizer
@@ -696,7 +704,7 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
         config.vocab_size = tokenizer.vocab_size
     else:
         log("Starting fresh training...")
-        config = HamnerConfig(**MODEL_CONFIG, vocab_size=tokenizer.vocab_size)
+        config = HamnerConfig(**MODEL_CONFIG)
         model = HamnerModel(config).to(device)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=PEAK_LR, betas=BETAS, weight_decay=WEIGHT_DECAY
@@ -766,10 +774,11 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
     log(f"  Steps: {start_step} → {max_steps}")
     log(f"  Target: ~{total_tokens_target / 1e9:.1f}B new tokens")
     log(f"  Tokens so far: {tokens_total:,} ({tokens_total/1e9:.2f}B)")
-    for i, (start_frac, gen, linux, code) in enumerate(STAGE_RATIOS):
+    for i, (start_frac, gen, tech, code, sci, linux, gov) in enumerate(STAGE_RATIOS):
         step_start = int(start_frac * max_steps)
         log(f"  Stage {i+1} (step {step_start:,}): "
-            f"general={gen:.0%} linux={linux:.0%} code={code:.0%}")
+            f"gen={gen:.0%} tech={tech:.0%} code={code:.0%} "
+            f"sci={sci:.0%} linux={linux:.1%} gov={gov:.1%}")
     log("-" * 70)
 
     for step in range(start_step, max_steps):
@@ -895,7 +904,7 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
 
     elapsed = time.time() - start_time
     log("=" * 70)
-    log(f"PRETRAINING V2 {'STOPPED' if shutdown_requested else 'COMPLETE'}")
+    log(f"PRETRAINING V3 {'STOPPED' if shutdown_requested else 'COMPLETE'}")
     log(f"Final step: {step + 1} | Loss: {avg_loss:.4f} | Time: {elapsed/3600:.1f}h")
     log(f"Total tokens: {tokens_total:,} ({tokens_total/1e9:.2f}B)")
     log(f"Best val loss: {best_val_loss:.4f}")
@@ -906,7 +915,7 @@ def train(resume_from=None, fresh=False, max_steps_override=None,
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Hamner V2 Pretraining")
+    parser = argparse.ArgumentParser(description="Hamner V3 Pretraining")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint")
     parser.add_argument("--checkpoint", type=str, default=None,
