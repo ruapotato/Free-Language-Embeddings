@@ -7,7 +7,7 @@ import numpy as np
 from transformers import BertTokenizerFast
 from concept_model import ConceptAutoencoder, ConceptConfig
 
-CKPT = "checkpoints/concept_v3/step_140000.pt"
+CKPT = "checkpoints/concept_v4/latest.pt"
 DEVICE = "cpu"
 
 def load_model():
@@ -204,8 +204,7 @@ def main():
         diffs = []
         for s in range(8):
             slot_sim = F.cosine_similarity(
-                base[s:s+1].unsqueeze(0),
-                concepts[j, s:s+1].unsqueeze(0)
+                base[s:s+1], concepts[j, s:s+1], dim=-1
             ).item()
             diffs.append(slot_sim)
         changed = [i for i, d in enumerate(diffs) if d < 0.95]

@@ -1,7 +1,7 @@
 """
 FLM V4 — Train Concept Autoencoder V4
 =======================================
-Hard negatives + spectral spread + smooth weight scheduling.
+Hard negatives + per-dimension variance + smooth weight scheduling.
 
 Key changes from V3:
   - Uses ALL pair data: positives, hard negatives (NLI contradictions, PAWS),
@@ -79,7 +79,7 @@ HARD_NEG_WEIGHT = 0.5
 WO_WEIGHT = 0.5
 DECORR_WEIGHT = 1.0
 STS_WEIGHT = 0.5
-SPECTRAL_WEIGHT = 0.5         # spectral spread loss
+DIMVAR_WEIGHT = 1.0           # per-dimension variance loss (rank pusher)
 
 # Logging
 LOG_EVERY = 50
@@ -464,35 +464,21 @@ def sts_loss(concepts_a, concepts_b, target_scores):
     return loss, pred_sim.mean().item()
 
 
-def spectral_spread_loss(concepts):
+def dimension_variance_loss(concepts):
     """
-    Encourage the concept vectors to use ALL dimensions evenly.
+    Push the model to use ALL dimensions by penalizing low per-dimension variance.
 
-    Computes SVD of the batch of concept vectors and penalizes uneven
-    singular value distribution. Maximizes effective rank directly.
-
-    The ideal distribution is uniform singular values (all dimensions
-    equally used). We minimize the KL divergence from uniform.
+    For each dimension in the flattened concept vector, compute variance across
+    the batch. Penalize dimensions with low variance via -log(var). No sample
+    cap — works on full batch, O(B*D), and can push all 1024 dims.
 
     concepts: (B, K, D) — will be flattened to (B, K*D)
     """
-    flat = concepts.view(concepts.shape[0], -1).float()  # (B, K*D) — SVD needs float32
-    flat = flat - flat.mean(dim=0, keepdim=True)  # center
-
-    # SVD — only need singular values
-    # Use a smaller subset if batch is large to save compute
-    if flat.shape[0] > 64:
-        flat = flat[:64]
-
-    _, s, _ = torch.linalg.svd(flat, full_matrices=False)
-
-    # Normalize singular values to a probability distribution
-    s = s.clamp(min=1e-8)
-    p = s / s.sum()
-
-    # Uniform target
-    n = p.shape[0]
-    uniform = torch.ones_like(p) / n
+    flat = concepts.view(concepts.shape[0], -1).float()  # (B, K*D)
+    var = flat.var(dim=0)  # (K*D,) variance per dimension
+    # -log(var) penalizes low-variance dims heavily, diminishing return on high-var
+    loss = -torch.log(var.clamp(min=1e-8)).mean()
+    return loss
 
     # KL divergence from uniform (want to minimize)
     # KL(uniform || p) = sum(uniform * log(uniform/p))
@@ -744,7 +730,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     log(f"  Peak LR: {PEAK_LR} | Steps: {start_step} -> {TOTAL_STEPS}")
     log(f"  Recon weight: smooth decay (floor={RECON_FLOOR})")
     log(f"  Geometry: nce={NCE_WEIGHT} wo={WO_WEIGHT} decorr={DECORR_WEIGHT} "
-        f"spectral={SPECTRAL_WEIGHT} sts={STS_WEIGHT}")
+        f"dimvar={DIMVAR_WEIGHT} sts={STS_WEIGHT}")
     log(f"  Data: {len(pair_dataset.pos_pairs):,} pos + "
         f"{len(pair_dataset.hard_neg_pairs):,} hard neg + "
         f"{len(pair_dataset.sts_pairs):,} STS")
@@ -795,13 +781,13 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 concepts, concepts_shuf, temperature=NCE_TEMPERATURE)
             total_loss = total_loss + geo_w * WO_WEIGHT * wo_loss
 
-        # Spectral spread (needs float32, outside autocast)
-        spec = spectral_spread_loss(concepts)
-        total_loss = total_loss + geo_w * SPECTRAL_WEIGHT * spec
+        # Per-dimension variance loss (needs float32, outside autocast)
+        dimvar = dimension_variance_loss(concepts)
+        total_loss = total_loss + geo_w * DIMVAR_WEIGHT * dimvar
 
         wo_loss_val = wo_loss.item()
         decorr_val = decorr.item()
-        spec_val = spec.item()
+        dimvar_val = dimvar.item()
 
         # --- Paraphrase InfoNCE with hard negatives ---
         nce_loss_val = 0.0
@@ -873,7 +859,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             log(f"step {step+1:>7d} | loss {avg_loss:.4f} "
                 f"(recon={r_loss_val:.3f} nce={nce_loss_val:.3f} "
                 f"wo={wo_loss_val:.3f} decorr={decorr_val:.3f} "
-                f"spec={spec_val:.3f} sts={sts_loss_val:.3f}) "
+                f"dimvar={dimvar_val:.3f} sts={sts_loss_val:.3f}) "
                 f"[rw={recon_w:.2f} gw={geo_w:.2f}] | "
                 f"p_sim={p_sim_val:.3f} n_sim={n_sim_val:.3f} "
                 f"wo_sim={wo_sim_val:.3f} | "

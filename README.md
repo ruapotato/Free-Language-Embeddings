@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: Active training (Concept Autoencoder V2).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
+> **Status: Active training (Concept Autoencoder V4).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -23,9 +23,9 @@ Encoder (bidirectional) -> 8x128 Bottleneck -> Decoder (autoregressive)
 
 | Component | Details |
 |-----------|---------|
-| Encoder | 6 layers, 512 hidden, 8 heads, SwiGLU FFN |
+| Encoder | 6 layers, 384 hidden, 6 heads, SwiGLU FFN |
 | Bottleneck | 8 learned queries cross-attend to encoder, project to 128-dim each |
-| Decoder | 6 layers, 512 hidden, 8 heads, cross-attends to concept stack |
+| Decoder | 6 layers, 384 hidden, 6 heads, cross-attends to concept stack |
 | Concept space | 8 slots x 128 dims = 1024-dim representation |
 | Tokenizer | BERT base uncased (30,522 vocab) |
 | Max sequence | 128 tokens |
@@ -34,17 +34,18 @@ Encoder (bidirectional) -> 8x128 Bottleneck -> Decoder (autoregressive)
 
 ### Training Losses
 
-Four losses trained jointly with scheduled weights:
+Six losses trained jointly with smooth weight scheduling:
 
-1. **Reconstruction** (cross-entropy): Decode concept vectors back to original tokens. Forces the bottleneck to encode ALL meaning.
-2. **Paraphrase** (contrastive): Pull paraphrase pairs closer in concept space.
-3. **Negative** (contrastive): Push unrelated pairs apart.
-4. **Word-order** (contrastive): Swap 2 random content tokens, push original and swapped apart. Teaches positional sensitivity without the shortcut of detecting "scrambled mess" n-grams.
+1. **Reconstruction** (cross-entropy): Decode concept vectors back to original tokens. Forces the bottleneck to encode ALL meaning — critical for word-order-dependent semantics.
+2. **Paraphrase InfoNCE** (contrastive): Pull paraphrase/entailment pairs closer. Uses hard negatives (NLI contradictions, PAWS adversarial pairs) in the negative pool.
+3. **Word-order InfoNCE** (contrastive): Swap 2 random content tokens, push original and swapped apart.
+4. **Slot decorrelation**: Penalizes correlation between concept slots to prevent redundancy.
+5. **Per-dimension variance**: Penalizes low-variance dimensions via `-log(var)`. Pushes the model to spread information across all 1024 dimensions, maximizing effective rank.
+6. **STS graded similarity**: MSE between predicted and human-rated similarity scores for graded discrimination.
 
-**Scheduled weights** prevent geometry loss collapse:
-- Phase 1 (recon > 2.0): Heavy reconstruction, light geometry
-- Phase 2 (recon 1.0-2.0): Balanced
-- Phase 3 (recon < 1.0): Heavy geometry, light reconstruction
+**Smooth weight scheduling** (no hard phases):
+- `recon_weight = clamp(recon_loss, 0.2, 2.0)` — high when recon is bad, decays as it improves
+- `geometry_weight = 1 / (1 + recon_loss)` — ramps up as reconstruction improves
 
 ### Training Data (DFSG-compliant)
 
@@ -55,33 +56,13 @@ Four losses trained jointly with scheduled weights:
 | QQP | CC | 400K | Question paraphrases |
 | Tatoeba | CC-BY | 350K | Cross-lingual pairs |
 
-### Training Progress (V2, step ~35K / 200K)
+### Training Progress (Concept Autoencoder V4)
 
-Concept autoencoder V2 uses minimal 2-token swap for word-order training and scheduled loss weights. Currently at ~17% through training.
+V4 adds hard negative mining, per-dimension variance loss, and graded STS. Currently training.
 
-**Training Dashboard (V2)**
+**Training Dashboard (V4)**
 
-![V2 Training Dashboard](logs/plots/concept_v2_dashboard.png)
-
-**Concept Space Visualization (Step 35K)**
-
-158 sentences from 13 semantic categories projected to 2D with UMAP. Lines connect special pairs (word-order, paraphrase, unrelated) with cosine similarity labels.
-
-![Concept Clusters](logs/plots/concept_clusters.png)
-
-**V1 vs V2 Comparison**
-
-V1 had no word-order loss and static weights. V2 added minimal 2-token swap contrastive loss and scheduled weight phases.
-
-![V1 vs V2 Comparison](logs/plots/concept_comparison.png)
-
-### Key Observations So Far
-
-- **Reconstruction**: 5/5 perfect on diagnostic sentences at best evals
-- **Unrelated separation**: Working well (cosine sim near 0 or negative)
-- **Word-order sensitivity**: Improving but bouncy on specific diagnostic pairs
-- **Paraphrase recognition**: Weakest signal — batch similarities improving but diagnostic pairs still noisy
-- **Geometry equilibrium**: Para loss ~0.35, neg loss ~0.15, WO loss just above neg — healthy competing-forces balance
+![V4 Training Dashboard](logs/plots/concept_v4_dashboard.png)
 
 ### Quick Start
 
@@ -97,25 +78,30 @@ python plot_concepts.py                    # static plot (latest checkpoint)
 python plot_concepts.py --animate          # video across all checkpoints
 
 # 4. Training dashboard
+python plot_training.py                    # V4 dashboard (auto-detects latest)
 python plot_training.py --run v2           # V2 dashboard
-python plot_training.py --compare          # V1 vs V2 comparison
 ```
 
 ## Version History
 
-### Concept Autoencoder V2 (current) — Scheduled Weights + Word-Order Loss
+### Concept Autoencoder V4 (current) — Hard Negatives + Per-Dim Variance
 - 54.8M param encoder-decoder with 8x128 concept bottleneck
+- Hard negative InfoNCE with NLI contradictions and PAWS adversarial pairs
+- Per-dimension variance loss to maximize effective rank (no sample cap)
+- Graded STS similarity loss for fine-grained discrimination
+- Smooth weight scheduling (no hard phase boundaries)
+
+### Concept Autoencoder V3 (archived) — Decorrelation Focus
+- Added slot decorrelation loss and spectral spread
+- Rank plateaued at 57-58; geometry probing showed lookup-table behavior
+- Logs preserved in `logs/concept_v3_final.log`
+
+### Concept Autoencoder V2 (archived) — Scheduled Weights + Word-Order
 - Minimal 2-token swap word-order contrastive loss
-- Scheduled loss weights (3 phases based on reconstruction quality)
-- Encode-only similarity passes save ~40% compute
+- Hard phase-based loss scheduling
 
 ### Concept Autoencoder V1 (archived) — Baseline
 - Same architecture, no word-order loss, static weights
-- Logs preserved in `logs/concept_v1.log`
-
-### V4 Encoder (archived) — Contrastive Only
-- 31M param bidirectional encoder, contrastive training only
-- No decoder/reconstruction — couldn't verify what the bottleneck actually captured
 
 ### V3 (stopped) — SmolLM-135M, Common Pile Data
 - 135M params, reached loss 2.67 at 1.23B tokens
@@ -132,19 +118,21 @@ python plot_training.py --compare          # V1 vs V2 comparison
 ## Key Lessons Learned
 
 1. **Next-token prediction at small scale needs enormous data** — 100B+ tokens for coherent output from a 135M model.
-2. **Bottleneck forces information encoding** — reconstruction loss ensures the concept vectors actually capture meaning, not just cluster statistics.
-3. **Competing losses reach equilibrium** — para/neg/wo losses stabilize where each represents the "tax" for satisfying opposing objectives.
-4. **Full-shuffle word-order is too easy** — random token permutation is trivially detectable via broken n-grams. Minimal 2-token swap provides sustained gradient.
-5. **Loss weight scheduling prevents collapse** — fixed geometry-heavy weights cause reconstruction to stall and representations to go random.
+2. **Bottleneck forces information encoding** — reconstruction loss ensures the concept vectors actually capture meaning, not just cluster statistics. Critical for word-order semantics ("he punched her" vs "she punched him").
+3. **Hard negatives beat random negatives** — NLI contradictions and PAWS adversarial pairs force finer semantic discrimination than random in-batch negatives.
+4. **SVD-based rank loss has a sample cap problem** — spectral spread loss capped at 64 SVD samples can't push rank beyond ~83. Per-dimension variance (`-log(var)`) has no cap and directly targets all 1024 dims.
+5. **Smooth weight scheduling beats hard phases** — V3's phase boundaries caused instability; V4's continuous `1/(1+recon_loss)` ramp is smoother.
+6. **Full-shuffle word-order is too easy** — minimal 2-token swap provides sustained gradient vs trivially-detectable scrambled n-grams.
 
 ## Project Structure
 
 ```
 flm/
 ├── concept_model.py          # Concept autoencoder (54.8M, encoder-decoder)
-├── train_concept.py          # Autoencoder training with 4-loss system
+├── train_concept.py          # Autoencoder training with 6-loss system
 ├── plot_concepts.py          # UMAP concept space visualization + animation
 ├── plot_training.py          # Training dashboard (V1/V2 comparison)
+├── probe_geometry.py          # Probe concept space geometry (clustering, directions, analogies)
 ├── probe_concepts.py         # Probe concept geometry interactively
 ├── probe_pretrained.py       # Probe pretrained sentence encoders
 ├── build_pairs.py            # Download DFSG paraphrase pair datasets
@@ -155,8 +143,9 @@ flm/
 ├── data/                     # Training data
 ├── checkpoints/              # Model checkpoints (gitignored)
 └── logs/                     # Training logs and plots
-    ├── concept_v2.log        # Current training log
-    ├── concept_v1.log        # V1 baseline log
+    ├── concept_v4.log        # Current training log
+    ├── concept_v3_final.log  # V3 archived log
+    ├── concept_v2.log        # V2 archived log
     └── plots/                # Generated dashboards and visualizations
 ```
 
