@@ -465,8 +465,7 @@ def reconstruction_loss(logits, targets):
 def paraphrase_loss(concepts_a, concepts_b, target_sim=0.95):
     """
     Paraphrase pairs should produce similar concept stacks.
-
-    Flattens the concept stacks and compares with cosine similarity.
+    (V2 margin-based, kept for compatibility)
     """
     flat_a = concepts_a.view(concepts_a.shape[0], -1)
     flat_b = concepts_b.view(concepts_b.shape[0], -1)
@@ -481,6 +480,7 @@ def paraphrase_loss(concepts_a, concepts_b, target_sim=0.95):
 def negative_loss(concepts_a, concepts_b, target_sim=0.3):
     """
     Non-paraphrase pairs should produce distant concept stacks.
+    (V2 margin-based, kept for compatibility)
     """
     flat_a = concepts_a.view(concepts_a.shape[0], -1)
     flat_b = concepts_b.view(concepts_b.shape[0], -1)
@@ -495,7 +495,7 @@ def negative_loss(concepts_a, concepts_b, target_sim=0.3):
 def word_order_loss(concepts_orig, concepts_shuffled, target_sim=0.3):
     """
     Original and word-shuffled versions should have different concept stacks.
-    Same tokens in different order = different meaning.
+    (V2 margin-based, kept for compatibility)
     """
     flat_a = concepts_orig.view(concepts_orig.shape[0], -1)
     flat_b = concepts_shuffled.view(concepts_shuffled.shape[0], -1)
@@ -505,3 +505,103 @@ def word_order_loss(concepts_orig, concepts_shuffled, target_sim=0.3):
     sim = F.cosine_similarity(flat_a, flat_b)
     loss = F.relu(sim - target_sim).mean()
     return loss, sim.mean().item()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V3 Losses — InfoNCE + Decorrelation
+# ═══════════════════════════════════════════════════════════════════════
+
+def info_nce_loss(concepts_a, concepts_b, temperature=0.07):
+    """
+    Symmetric InfoNCE contrastive loss with in-batch negatives.
+
+    concepts_a[i] and concepts_b[i] are positive pairs.
+    All other combinations are negatives. Symmetric: both a→b and b→a
+    matching, doubling gradient signal.
+
+    Returns: (loss, pos_sim_mean, neg_sim_mean)
+    """
+    flat_a = concepts_a.view(concepts_a.shape[0], -1)
+    flat_b = concepts_b.view(concepts_b.shape[0], -1)
+    flat_a = F.normalize(flat_a, p=2, dim=-1)
+    flat_b = F.normalize(flat_b, p=2, dim=-1)
+
+    # Similarity matrix: (B, B)
+    sim_matrix = flat_a @ flat_b.T / temperature
+    labels = torch.arange(sim_matrix.shape[0], device=sim_matrix.device)
+
+    # Symmetric: a→b and b→a
+    loss = (F.cross_entropy(sim_matrix, labels) +
+            F.cross_entropy(sim_matrix.T, labels)) / 2
+
+    with torch.no_grad():
+        pos_sim = (flat_a * flat_b).sum(dim=-1).mean().item()
+        mask = ~torch.eye(sim_matrix.shape[0], dtype=torch.bool,
+                          device=sim_matrix.device)
+        neg_sim = (flat_a @ flat_b.T)[mask].mean().item()
+
+    return loss, pos_sim, neg_sim
+
+
+def word_order_info_nce(concepts_orig, concepts_shuffled, temperature=0.07):
+    """
+    InfoNCE for word-order: original should be closer to itself than to
+    any shuffled version. Uses the same in-batch negative structure.
+
+    The "positive" for each original is itself (identity), and the shuffled
+    versions of all sentences in the batch are negatives.
+
+    Returns: (loss, wo_sim_mean)
+    """
+    flat_orig = concepts_orig.view(concepts_orig.shape[0], -1)
+    flat_shuf = concepts_shuffled.view(concepts_shuffled.shape[0], -1)
+    flat_orig = F.normalize(flat_orig, p=2, dim=-1)
+    flat_shuf = F.normalize(flat_shuf, p=2, dim=-1)
+
+    B = flat_orig.shape[0]
+
+    # Build (B, 2B) similarity: [orig_vs_orig, orig_vs_shuffled]
+    sim_orig = flat_orig @ flat_orig.T / temperature   # (B, B)
+    sim_shuf = flat_orig @ flat_shuf.T / temperature   # (B, B)
+    sim_all = torch.cat([sim_orig, sim_shuf], dim=1)   # (B, 2B)
+
+    # Positives are on the diagonal of sim_orig (i.e., column i for row i)
+    labels = torch.arange(B, device=sim_all.device)
+
+    # Mask out self-similarity from sim_orig diagonal (would be trivial 1.0)
+    # Replace with large negative so it doesn't count as the positive
+    # Actually: the positive IS the self-similarity. The negatives are
+    # everything else (other originals + all shuffled). This pushes the model
+    # to make each sentence unique AND different from its shuffled version.
+    loss = F.cross_entropy(sim_all, labels)
+
+    with torch.no_grad():
+        wo_sim = (flat_orig * flat_shuf).sum(dim=-1).mean().item()
+
+    return loss, wo_sim
+
+
+def slot_decorrelation_loss(concepts):
+    """
+    Encourage the K concept slots to encode different information per sample.
+
+    concepts: (batch, K, D)
+
+    For each sample, computes cosine similarity between all slot pairs
+    and penalizes high similarity. This forces each slot to capture a
+    different aspect of the input, increasing effective rank.
+
+    Returns: loss scalar
+    """
+    B, K, D = concepts.shape
+    # Normalize each slot: (B, K, D)
+    normed = F.normalize(concepts, p=2, dim=-1)
+
+    # Per-sample slot correlation: (B, K, K)
+    corr = torch.bmm(normed, normed.transpose(1, 2))
+
+    # Penalize off-diagonal entries (want each slot different within each sample)
+    mask = ~torch.eye(K, dtype=torch.bool, device=corr.device).unsqueeze(0)
+    loss = corr[mask.expand(B, -1, -1)].pow(2).mean()
+
+    return loss

@@ -1,8 +1,13 @@
 """
-FLM V4 — Train Concept Autoencoder
-=====================================
-Reconstruction + paraphrase training. The concept stack must encode enough
-information to reconstruct text AND produce similar vectors for paraphrases.
+FLM V4 — Train Concept Autoencoder V3
+=======================================
+InfoNCE contrastive loss + slot decorrelation + reconstruction.
+
+Changes from V2:
+  - InfoNCE replaces margin-based contrastive (continuous gradient, in-batch negatives)
+  - Slot decorrelation loss encourages using all 8 concept slots differently
+  - Effective rank monitored via PCA at eval time
+  - Simplified loss weighting (scheduled by recon quality)
 
 Usage:
     python train_concept.py --fresh          # fresh training
@@ -23,14 +28,14 @@ import torch
 import torch.nn.functional as F
 from pathlib import Path
 from concept_model import (ConceptConfig, ConceptAutoencoder,
-                           reconstruction_loss, paraphrase_loss, negative_loss,
-                           word_order_loss)
+                           reconstruction_loss, info_nce_loss,
+                           word_order_info_nce, slot_decorrelation_loss)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-CHECKPOINT_DIR = "checkpoints/concept_v2"
+CHECKPOINT_DIR = "checkpoints/concept_v3"
 LOG_DIR = "logs"
 
 MODEL_CONFIG = dict(
@@ -51,8 +56,7 @@ MODEL_CONFIG = dict(
 
 # Training hyperparameters
 BATCH_SIZE = 64               # reconstruction batch
-PARA_BATCH_SIZE = 64          # paraphrase pair batch
-NEG_BATCH_SIZE = 64           # negative pair batch
+PARA_BATCH_SIZE = 128         # paraphrase pair batch (127 in-batch negatives per positive)
 PEAK_LR = 3e-4
 WARMUP_STEPS = 2000
 TOTAL_STEPS = 200_000
@@ -60,22 +64,21 @@ WEIGHT_DECAY = 0.01
 BETAS = (0.9, 0.999)
 GRAD_CLIP = 1.0
 
-# Loss weights — scheduled dynamically in training loop
-# Phase 1 (recon_loss > 2.0): recon=2.0, geometry=0.25 each — learn to reconstruct first
-# Phase 2 (recon_loss < 2.0): recon=1.0, geometry=0.5 each — balance
-# Phase 3 (recon_loss < 1.0): recon=0.5, geometry=1.0 each — focus on geometry
-POS_TARGET = 0.9
-NEG_TARGET = 0.3
-WO_TARGET = 0.3               # shuffled sentences should be far from original
+# InfoNCE temperature — lower = sharper discrimination
+NCE_TEMPERATURE = 0.07
 
+# Loss weights — scheduled dynamically
+# Phase 1 (recon > 2.0): recon-heavy, let model learn to encode/decode
+# Phase 2 (recon 1.0-2.0): balanced
+# Phase 3 (recon < 1.0): geometry-heavy, shape the space
 def get_loss_weights(recon_loss_val):
     """Schedule loss weights based on reconstruction quality."""
     if recon_loss_val > 2.0:
-        return 2.0, 0.25, 0.25, 0.25  # recon, para, neg, wo
+        return 2.0, 0.25, 0.25, 0.5   # recon, nce, wo, decorr
     elif recon_loss_val > 1.0:
-        return 1.0, 0.5, 0.5, 0.5
+        return 1.0, 0.5, 0.5, 1.0
     else:
-        return 0.5, 1.0, 1.0, 1.0
+        return 0.5, 1.0, 1.0, 2.0
 
 # Logging
 LOG_EVERY = 50
@@ -84,8 +87,8 @@ SAMPLE_EVERY = 1000
 CHECKPOINT_EVERY = 5000
 
 LOG_PATHS = {
-    "log": f"{LOG_DIR}/concept_v2.log",
-    "metrics": f"{LOG_DIR}/concept_v2_metrics.csv",
+    "log": f"{LOG_DIR}/concept_v3.log",
+    "metrics": f"{LOG_DIR}/concept_v3_metrics.csv",
 }
 
 # Diagnostic pairs
@@ -114,25 +117,17 @@ DIAGNOSTIC_PAIRS = [
 # ---------------------------------------------------------------------------
 
 def shuffle_tokens(input_ids, attention_mask, pad_id=0, cls_id=101, sep_id=102):
-    """
-    Swap 2 random content tokens per sequence to create word-order negatives.
-
-    Minimal swap forces the model to encode every word's position, since any
-    single swap must produce a different concept vector. Full permutation is
-    too easy to detect (broken n-grams) and teaches the wrong lesson.
-    """
+    """Swap 2 random content tokens per sequence."""
     shuffled = input_ids.clone()
     for i in range(input_ids.shape[0]):
         mask = attention_mask[i].bool()
         ids = input_ids[i]
-        # Find content token positions (not CLS, SEP, or PAD)
         content_pos = []
         for j in range(ids.shape[0]):
             if mask[j] and ids[j].item() not in (pad_id, cls_id, sep_id):
                 content_pos.append(j)
         if len(content_pos) <= 2:
             continue
-        # Pick 2 distinct positions with different tokens (so swap is visible)
         for _ in range(10):
             idx = torch.randperm(len(content_pos))[:2]
             p1, p2 = content_pos[idx[0]], content_pos[idx[1]]
@@ -158,8 +153,8 @@ def log(msg):
             f.write(line + "\n")
 
 
-def log_metrics(step, recon_loss, para_sim, neg_sim, word_order_sim,
-                lr, elapsed_hours):
+def log_metrics(step, recon_loss, pos_sim, neg_sim, wo_sim,
+                eff_rank, lr, elapsed_hours):
     metrics_file = LOG_PATHS.get("metrics")
     if not metrics_file:
         return
@@ -167,11 +162,11 @@ def log_metrics(step, recon_loss, para_sim, neg_sim, word_order_sim,
     write_header = not os.path.exists(metrics_file)
     with open(metrics_file, "a") as f:
         if write_header:
-            f.write("timestamp,step,recon_loss,para_sim,neg_sim,"
-                    "word_order_sim,lr,elapsed_hours\n")
+            f.write("timestamp,step,recon_loss,pos_sim,neg_sim,"
+                    "wo_sim,eff_rank,lr,elapsed_hours\n")
         ts = datetime.datetime.now().isoformat()
-        f.write(f"{ts},{step},{recon_loss:.6f},{para_sim:.4f},{neg_sim:.4f},"
-                f"{word_order_sim:.4f},{lr:.6e},{elapsed_hours:.4f}\n")
+        f.write(f"{ts},{step},{recon_loss:.6f},{pos_sim:.4f},{neg_sim:.4f},"
+                f"{wo_sim:.4f},{eff_rank},{lr:.6e},{elapsed_hours:.4f}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +174,6 @@ def log_metrics(step, recon_loss, para_sim, neg_sim, word_order_sim,
 # ---------------------------------------------------------------------------
 
 class ReconstructionDataset:
-    """Loads raw text for reconstruction training.
-
-    Sources: pair data (text_a and text_b separately), raw text files.
-    """
-
     def __init__(self, tokenizer, max_len=128):
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -196,7 +186,6 @@ class ReconstructionDataset:
         data_dir = Path("data/pairs")
         if not data_dir.exists():
             return
-
         for path in sorted(data_dir.glob("*.jsonl")):
             if path.name.startswith("eval_"):
                 continue
@@ -212,7 +201,6 @@ class ReconstructionDataset:
                             self.texts.append(b)
                     except (json.JSONDecodeError, KeyError):
                         continue
-
         log(f"  Reconstruction texts: {len(self.texts):,}")
 
     def get_batch(self, batch_size):
@@ -223,7 +211,6 @@ class ReconstructionDataset:
                 self.idx = 0
             texts.append(self.texts[self.idx])
             self.idx += 1
-
         enc = self.tokenizer(texts, max_length=self.max_len,
                              padding=True, truncation=True,
                              return_tensors="pt")
@@ -231,24 +218,18 @@ class ReconstructionDataset:
 
 
 class PairDataset:
-    """Loads positive and negative pairs for paraphrase/negative training."""
-
     def __init__(self, tokenizer, max_len=128):
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.pos_pairs = []
-        self.neg_pairs = []
         self._load_pairs()
         random.shuffle(self.pos_pairs)
-        random.shuffle(self.neg_pairs)
         self.pos_idx = 0
-        self.neg_idx = 0
 
     def _load_pairs(self):
         data_dir = Path("data/pairs")
         if not data_dir.exists():
             return
-
         for path in sorted(data_dir.glob("*.jsonl")):
             if path.name.startswith("eval_"):
                 continue
@@ -257,17 +238,13 @@ class PairDataset:
                     try:
                         doc = json.loads(line)
                         if "sim_score" in doc:
-                            continue  # skip graded for now
+                            continue
                         label = doc.get("label", 1)
-                        pair = (doc["text_a"], doc["text_b"])
                         if label == 1:
-                            self.pos_pairs.append(pair)
-                        else:
-                            self.neg_pairs.append(pair)
+                            self.pos_pairs.append((doc["text_a"], doc["text_b"]))
                     except (json.JSONDecodeError, KeyError):
                         continue
-
-        log(f"  Pair data: {len(self.pos_pairs):,} pos, {len(self.neg_pairs):,} neg")
+        log(f"  Pair data: {len(self.pos_pairs):,} positive pairs")
 
     def get_pos_batch(self, batch_size):
         texts_a, texts_b = [], []
@@ -285,31 +262,12 @@ class PairDataset:
                                padding=True, truncation=True, return_tensors="pt")
         return enc_a, enc_b
 
-    def get_neg_batch(self, batch_size):
-        if not self.neg_pairs:
-            return None, None
-        texts_a, texts_b = [], []
-        for _ in range(batch_size):
-            if self.neg_idx >= len(self.neg_pairs):
-                random.shuffle(self.neg_pairs)
-                self.neg_idx = 0
-            a, b = self.neg_pairs[self.neg_idx]
-            texts_a.append(a)
-            texts_b.append(b)
-            self.neg_idx += 1
-        enc_a = self.tokenizer(texts_a, max_length=self.max_len,
-                               padding=True, truncation=True, return_tensors="pt")
-        enc_b = self.tokenizer(texts_b, max_length=self.max_len,
-                               padding=True, truncation=True, return_tensors="pt")
-        return enc_a, enc_b
-
 
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 
 def _unwrap(model):
-    """Get underlying model from torch.compile wrapper."""
     return model._orig_mod if hasattr(model, '_orig_mod') else model
 
 
@@ -332,8 +290,31 @@ def run_diagnostics(model, tokenizer, device="cuda"):
 
 
 @torch.no_grad()
+def measure_effective_rank(model, tokenizer, texts, device="cuda"):
+    """Measure effective rank of concept representations via PCA."""
+    model.eval()
+    m = _unwrap(model)
+    # Encode a batch of texts
+    enc = tokenizer(texts[:200], max_length=128, padding=True,
+                    truncation=True, return_tensors="pt").to(device)
+    concepts = m.encode(enc["input_ids"], enc["attention_mask"])
+    flat = concepts.view(concepts.shape[0], -1).cpu().numpy()
+
+    # PCA
+    flat = flat - flat.mean(axis=0)
+    _, s, _ = np.linalg.svd(flat, full_matrices=False)
+    var = s ** 2
+    var_ratio = var / var.sum()
+    cumvar = np.cumsum(var_ratio)
+    rank90 = int(np.searchsorted(cumvar, 0.90)) + 1
+    rank95 = int(np.searchsorted(cumvar, 0.95)) + 1
+
+    model.train()
+    return rank90, rank95, var_ratio[:10]
+
+
+@torch.no_grad()
 def test_reconstruction(model, tokenizer, device="cuda"):
-    """Encode then decode a few sentences to see if reconstruction works."""
     model.eval()
     m = _unwrap(model)
     test_texts = [
@@ -348,9 +329,7 @@ def test_reconstruction(model, tokenizer, device="cuda"):
         enc = tokenizer(text, max_length=128, padding=True,
                         truncation=True, return_tensors="pt").to(device)
         concepts = m.encode(enc["input_ids"], enc["attention_mask"])
-
-        # Greedy decode
-        bos_id = tokenizer.cls_token_id or 101  # [CLS] for BERT
+        bos_id = tokenizer.cls_token_id or 101
         generated = [bos_id]
         for _ in range(len(enc["input_ids"][0]) + 5):
             dec_input = torch.tensor([generated], device=device)
@@ -359,10 +338,8 @@ def test_reconstruction(model, tokenizer, device="cuda"):
             if next_token == tokenizer.sep_token_id:
                 break
             generated.append(next_token)
-
         decoded = tokenizer.decode(generated[1:], skip_special_tokens=True)
         results.append((text, decoded))
-
     model.train()
     return results
 
@@ -385,7 +362,6 @@ def cosine_lr(step, total_steps, peak_lr, warmup_steps):
 def save_checkpoint(model, optimizer, scaler, config, step, loss, checkpoint_dir):
     os.makedirs(checkpoint_dir, exist_ok=True)
     state = model.state_dict()
-    # Strip torch.compile prefix
     state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
     ckpt = {
         "model_state_dict": state,
@@ -402,7 +378,6 @@ def save_checkpoint(model, optimizer, scaler, config, step, loss, checkpoint_dir
     torch.save(ckpt, latest)
     log(f"  Checkpoint saved: {path}")
 
-    # Cleanup: keep milestones (every 50k) + last 3
     all_ckpts = sorted(Path(checkpoint_dir).glob("step_*.pt"))
     to_keep = set()
     for c in all_ckpts:
@@ -445,7 +420,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     log("=" * 70)
-    log("FLM V4 — CONCEPT AUTOENCODER TRAINING")
+    log("FLM V4 — CONCEPT AUTOENCODER V3 (InfoNCE + Decorrelation)")
     log("=" * 70)
 
     from transformers import AutoTokenizer
@@ -455,7 +430,6 @@ def train(resume_from=None, fresh=False, eval_only=False):
     model_config = dict(MODEL_CONFIG)
     model_config["vocab_size"] = tokenizer.vocab_size
 
-    # Resolve checkpoint
     if resume_from is None and not fresh:
         ckpt_dir = Path(CHECKPOINT_DIR)
         latest = ckpt_dir / "latest.pt"
@@ -480,7 +454,6 @@ def train(resume_from=None, fresh=False, eval_only=False):
         log(f"Bottleneck: {config.num_concepts} concepts x {config.concept_dim} dim "
             f"= {config.total_concept_dim} total dims")
 
-    # Eval-only mode
     if eval_only:
         log("\n--- DIAGNOSTICS ---")
         results = run_diagnostics(model, tokenizer, device)
@@ -494,14 +467,12 @@ def train(resume_from=None, fresh=False, eval_only=False):
             log("")
         return
 
-    # Compile
     if hasattr(torch, "compile"):
         log("Compiling model with torch.compile...")
         model = torch.compile(model)
 
     model.train()
 
-    # Data
     log("Loading data...")
     recon_dataset = ReconstructionDataset(tokenizer, max_len=config.max_seq_len)
     pair_dataset = PairDataset(tokenizer, max_len=config.max_seq_len)
@@ -510,13 +481,14 @@ def train(resume_from=None, fresh=False, eval_only=False):
         log("ERROR: No training texts found. Run build_pairs.py first.")
         return
 
-    # Initial diagnostics
-    log("\n--- INITIAL DIAGNOSTICS (random weights) ---")
+    # Collect texts for rank measurement
+    rank_texts = random.sample(recon_dataset.texts, min(200, len(recon_dataset.texts)))
+
+    log("\n--- INITIAL DIAGNOSTICS ---")
     results = run_diagnostics(model, tokenizer, device)
     for a, b, sim, ptype in results:
         log(f"  {sim:+.4f}  [{ptype:<12s}] {a}  <->  {b}")
 
-    # Training state
     losses = []
     start_time = time.time()
 
@@ -528,14 +500,15 @@ def train(resume_from=None, fresh=False, eval_only=False):
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    log(f"\nTraining plan:")
+    log(f"\nTraining plan (V3 — InfoNCE + Decorrelation):")
     log(f"  Encoder: {config.enc_hidden}h x {config.enc_layers}L x {config.enc_heads}heads")
     log(f"  Decoder: {config.dec_hidden}h x {config.dec_layers}L x {config.dec_heads}heads")
     log(f"  Bottleneck: {config.num_concepts} x {config.concept_dim} = {config.total_concept_dim} dims")
-    log(f"  Batch: {BATCH_SIZE} recon + {PARA_BATCH_SIZE} para + {NEG_BATCH_SIZE} neg")
+    log(f"  Batch: {BATCH_SIZE} recon + {PARA_BATCH_SIZE} InfoNCE pairs")
     log(f"  Peak LR: {PEAK_LR} | Steps: {start_step} -> {TOTAL_STEPS}")
-    log(f"  Weights: SCHEDULED (P1: r=2.0 g=0.25 | P2: r=1.0 g=0.5 | P3: r=0.5 g=1.0)")
-    log(f"  Texts: {len(recon_dataset.texts):,} | Pairs: {len(pair_dataset.pos_pairs):,} pos, {len(pair_dataset.neg_pairs):,} neg")
+    log(f"  InfoNCE temp: {NCE_TEMPERATURE} | Decorr: phase-scheduled")
+    log(f"  Weights: SCHEDULED (P1: r=2.0 g=0.25 d=0.5 | P2: r=1.0 g=0.5 d=1.0 | P3: r=0.5 g=1.0 d=2.0)")
+    log(f"  Texts: {len(recon_dataset.texts):,} | Pairs: {len(pair_dataset.pos_pairs):,}")
     log("-" * 70)
 
     for step in range(start_step, TOTAL_STEPS):
@@ -550,36 +523,40 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
         m = _unwrap(model)
 
-        # --- Reconstruction + Word-order loss (shared batch) ---
+        # --- Reconstruction + Word-order + Decorrelation ---
         recon_enc = recon_dataset.get_batch(BATCH_SIZE)
         input_ids = recon_enc["input_ids"].to(device)
         attention_mask = recon_enc["attention_mask"].to(device)
 
         with torch.amp.autocast("cuda", dtype=torch.float16):
             logits, concepts = model(input_ids, attention_mask)
-            targets = input_ids[:, 1:]  # predict next token
+            targets = input_ids[:, 1:]
             r_loss = reconstruction_loss(logits, targets)
 
         r_loss_val = r_loss.item()
-
-        # Schedule loss weights based on reconstruction quality
-        recon_w, para_w, neg_w, wo_w = get_loss_weights(r_loss_val)
+        recon_w, nce_w, wo_w, decorr_w = get_loss_weights(r_loss_val)
 
         with torch.amp.autocast("cuda", dtype=torch.float16):
             total_loss = recon_w * r_loss
 
-            # Word-order: shuffle tokens in the same batch, push apart
+            # Slot decorrelation
+            decorr = slot_decorrelation_loss(concepts)
+            total_loss = total_loss + decorr_w * decorr
+
+            # Word-order InfoNCE
             shuffled_ids, shuffled_mask = shuffle_tokens(input_ids, attention_mask)
             concepts_shuf = m.encode(shuffled_ids, shuffled_mask)
-            wo_loss, wo_sim_val = word_order_loss(concepts, concepts_shuf,
-                                                   target_sim=WO_TARGET)
+            wo_loss, wo_sim_val = word_order_info_nce(
+                concepts, concepts_shuf, temperature=NCE_TEMPERATURE)
             total_loss = total_loss + wo_w * wo_loss
 
         wo_loss_val = wo_loss.item()
+        decorr_val = decorr.item()
 
-        # --- Paraphrase loss (encode-only, no decoder) ---
-        p_loss_val = 0.0
+        # --- Paraphrase InfoNCE (encode-only, in-batch negatives) ---
+        nce_loss_val = 0.0
         p_sim_val = 0.0
+        n_sim_val = 0.0
         if pair_dataset.pos_pairs:
             enc_a, enc_b = pair_dataset.get_pos_batch(PARA_BATCH_SIZE)
             with torch.amp.autocast("cuda", dtype=torch.float16):
@@ -589,27 +566,10 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 mask_b = enc_b["attention_mask"].to(device)
                 concepts_a = m.encode(ids_a, mask_a)
                 concepts_b = m.encode(ids_b, mask_b)
-                p_loss, p_sim_val = paraphrase_loss(concepts_a, concepts_b,
-                                                     target_sim=POS_TARGET)
-                total_loss = total_loss + para_w * p_loss
-            p_loss_val = p_loss.item()
-
-        # --- Negative loss (encode-only, no decoder) ---
-        n_loss_val = 0.0
-        n_sim_val = 0.0
-        neg_enc_a, neg_enc_b = pair_dataset.get_neg_batch(NEG_BATCH_SIZE)
-        if neg_enc_a is not None:
-            with torch.amp.autocast("cuda", dtype=torch.float16):
-                neg_ids_a = neg_enc_a["input_ids"].to(device)
-                neg_mask_a = neg_enc_a["attention_mask"].to(device)
-                neg_ids_b = neg_enc_b["input_ids"].to(device)
-                neg_mask_b = neg_enc_b["attention_mask"].to(device)
-                concepts_na = m.encode(neg_ids_a, neg_mask_a)
-                concepts_nb = m.encode(neg_ids_b, neg_mask_b)
-                n_loss, n_sim_val = negative_loss(concepts_na, concepts_nb,
-                                                   target_sim=NEG_TARGET)
-                total_loss = total_loss + neg_w * n_loss
-            n_loss_val = n_loss.item()
+                nce_loss, p_sim_val, n_sim_val = info_nce_loss(
+                    concepts_a, concepts_b, temperature=NCE_TEMPERATURE)
+                total_loss = total_loss + nce_w * nce_loss
+            nce_loss_val = nce_loss.item()
 
         if torch.isnan(total_loss):
             log(f"NaN loss at step {step}, skipping")
@@ -630,14 +590,14 @@ def train(resume_from=None, fresh=False, eval_only=False):
             pct = (step + 1) / TOTAL_STEPS * 100
             phase = "P1" if r_loss_val > 2.0 else ("P2" if r_loss_val > 1.0 else "P3")
             log(f"step {step+1:>7d} | loss {avg_loss:.4f} "
-                f"(recon={r_loss_val:.3f} para={p_loss_val:.3f} neg={n_loss_val:.3f} wo={wo_loss_val:.3f}) [{phase} rw={recon_w}] | "
+                f"(recon={r_loss_val:.3f} nce={nce_loss_val:.3f} wo={wo_loss_val:.3f} "
+                f"decorr={decorr_val:.3f}) [{phase} rw={recon_w} dw={decorr_w}] | "
                 f"p_sim={p_sim_val:.3f} n_sim={n_sim_val:.3f} wo_sim={wo_sim_val:.3f} | "
                 f"lr {current_lr:.2e} | {pct:.1f}%")
 
         # Eval
         if (step + 1) % EVAL_EVERY == 0:
             results = run_diagnostics(model, tokenizer, device)
-            # Find word order pairs
             word_order_sims = [sim for _, _, sim, pt in results if pt == "word_order"]
             para_sims = [sim for _, _, sim, pt in results if pt == "paraphrase"]
             unrelated_sims = [sim for _, _, sim, pt in results if pt == "unrelated"]
@@ -646,19 +606,23 @@ def train(resume_from=None, fresh=False, eval_only=False):
             avg_wo = sum(word_order_sims) / len(word_order_sims) if word_order_sims else 0
             avg_neg = sum(unrelated_sims) / len(unrelated_sims) if unrelated_sims else 0
 
-            log(f"  EVAL: para_sim={avg_para:.3f} word_order_sim={avg_wo:.3f} "
-                f"unrelated_sim={avg_neg:.3f}")
+            # Effective rank
+            rank90, rank95, top_var = measure_effective_rank(
+                model, tokenizer, rank_texts, device)
+
+            log(f"  EVAL: para_sim={avg_para:.3f} wo_sim={avg_wo:.3f} "
+                f"unrelated_sim={avg_neg:.3f} | rank90={rank90} rank95={rank95}")
 
             for a, b, sim, ptype in results:
                 marker = ""
                 if ptype == "word_order" and sim < 0.8:
-                    marker = " !!!"  # celebrate word order sensitivity
+                    marker = " !!!"
                 log(f"    {sim:+.4f}  [{ptype:<12s}] {a} <-> {b}{marker}")
 
             elapsed = time.time() - start_time
             avg_loss = sum(losses[-100:]) / len(losses[-100:])
             log_metrics(step + 1, avg_loss, avg_para, avg_neg,
-                        avg_wo, current_lr, elapsed / 3600)
+                        avg_wo, rank90, current_lr, elapsed / 3600)
 
         # Reconstruction samples
         if (step + 1) % SAMPLE_EVERY == 0:
@@ -678,7 +642,6 @@ def train(resume_from=None, fresh=False, eval_only=False):
         if shutdown_requested:
             break
 
-    # Final save
     if losses:
         avg_loss = sum(losses[-100:]) / len(losses[-100:])
         save_checkpoint(model, optimizer, scaler, config,
@@ -693,7 +656,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Train concept autoencoder")
+    parser = argparse.ArgumentParser(description="Train concept autoencoder V3")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--eval-only", action="store_true")

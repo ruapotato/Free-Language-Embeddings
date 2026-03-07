@@ -39,6 +39,7 @@ PLOT_DIR = "logs/plots"
 CONCEPT_RUNS = {
     "v1": {"log": "logs/concept_v1.log", "metrics": "logs/concept_v1_metrics.csv"},
     "v2": {"log": "logs/concept_v2.log", "metrics": "logs/concept_v2_metrics.csv"},
+    "v3": {"log": "logs/concept_v3.log", "metrics": "logs/concept_v3_metrics.csv"},
 }
 
 
@@ -56,10 +57,16 @@ def load_concept_step_data(log_path):
                     total_loss = float(parts[1].split("loss")[1].split("(")[0].strip())
                     detail = parts[1].split("(")[1].split(")")[0]
                     recon = float(re.search(r"recon=([\d.]+)", detail).group(1))
-                    para = float(re.search(r"para=([\d.]+)", detail).group(1))
-                    neg = float(re.search(r"neg=([\d.]+)", detail).group(1))
+                    # V2 format: para=/neg=/wo=  V3 format: nce=/wo=/decorr=
+                    para_m = re.search(r"para=([\d.]+)", detail)
+                    nce_m = re.search(r"nce=([\d.]+)", detail)
+                    para = float(nce_m.group(1)) if nce_m else (float(para_m.group(1)) if para_m else 0.0)
+                    neg_m = re.search(r"neg=([\d.]+)", detail)
+                    neg = float(neg_m.group(1)) if neg_m else 0.0
                     wo_m = re.search(r"wo=([\d.]+)", detail)
                     wo = float(wo_m.group(1)) if wo_m else 0.0
+                    decorr_m = re.search(r"decorr=([\d.]+)", detail)
+                    decorr = float(decorr_m.group(1)) if decorr_m else 0.0
                     sim_part = parts[2]
                     p_sim = float(re.search(r"p_sim=([\d.]+)", sim_part).group(1))
                     n_sim = float(re.search(r"n_sim=([\d.]+)", sim_part).group(1))
@@ -68,8 +75,8 @@ def load_concept_step_data(log_path):
                     rows.append({
                         "step": step, "total_loss": total_loss,
                         "recon_loss": recon, "para_loss": para, "neg_loss": neg,
-                        "wo_loss": wo, "p_sim": p_sim, "n_sim": n_sim,
-                        "wo_sim": wo_sim,
+                        "wo_loss": wo, "decorr_loss": decorr,
+                        "p_sim": p_sim, "n_sim": n_sim, "wo_sim": wo_sim,
                     })
                 except (ValueError, IndexError, AttributeError):
                     continue
@@ -95,6 +102,8 @@ def load_concept_eval_data(log_path):
                 try:
                     for m in re.finditer(r"(\w+_sim)=([-\d.]+)", line):
                         current_eval[m.group(1)] = float(m.group(2))
+                    for m in re.finditer(r"(rank\d+)=(\d+)", line):
+                        current_eval[m.group(1)] = int(m.group(2))
                 except (ValueError, IndexError):
                     pass
             if current_eval and re.search(r"[+-]\d\.\d{4}\s+\[", line):
@@ -118,26 +127,44 @@ def load_concept_eval_data(log_path):
 
 
 def load_concept_csv(csv_path):
-    """Load metrics CSV for elapsed time."""
+    """Load metrics CSV for elapsed time. Handles both V2 and V3 formats."""
     if not os.path.exists(csv_path):
         return []
     rows = []
+    has_eff_rank = False
     with open(csv_path) as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("timestamp"):
+            if not line:
+                continue
+            if line.startswith("timestamp"):
+                has_eff_rank = "eff_rank" in line
                 continue
             parts = line.split(",")
             try:
-                rows.append({
-                    "step": int(parts[1]),
-                    "recon_loss": float(parts[2]),
-                    "para_sim": float(parts[3]),
-                    "neg_sim": float(parts[4]),
-                    "word_order_sim": float(parts[5]),
-                    "lr": float(parts[6]),
-                    "elapsed_hours": float(parts[7]),
-                })
+                if has_eff_rank:
+                    # V3: timestamp,step,recon_loss,pos_sim,neg_sim,wo_sim,eff_rank,lr,elapsed_hours
+                    rows.append({
+                        "step": int(parts[1]),
+                        "recon_loss": float(parts[2]),
+                        "para_sim": float(parts[3]),
+                        "neg_sim": float(parts[4]),
+                        "word_order_sim": float(parts[5]),
+                        "eff_rank": int(parts[6]),
+                        "lr": float(parts[7]),
+                        "elapsed_hours": float(parts[8]),
+                    })
+                else:
+                    # V2: timestamp,step,recon_loss,pos_sim,neg_sim,word_order_sim,lr,elapsed_hours
+                    rows.append({
+                        "step": int(parts[1]),
+                        "recon_loss": float(parts[2]),
+                        "para_sim": float(parts[3]),
+                        "neg_sim": float(parts[4]),
+                        "word_order_sim": float(parts[5]),
+                        "lr": float(parts[6]),
+                        "elapsed_hours": float(parts[7]),
+                    })
             except (ValueError, IndexError):
                 continue
     return rows
@@ -209,15 +236,22 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
     para_vals = [d["para_loss"] for d in step_data]
     neg_vals = [d["neg_loss"] for d in step_data]
     wo_vals = [d["wo_loss"] for d in step_data]
+    decorr_vals = [d["decorr_loss"] for d in step_data]
+    is_v3 = any(v > 0 for v in decorr_vals)
     if len(para_vals) > 10:
         sw = min(30, len(para_vals) // 3)
         ax_components.plot(steps, smooth(para_vals, sw),
-                           color=C_PARA_LOSS, linewidth=2, label="Para loss")
-        ax_components.plot(steps, smooth(neg_vals, sw),
-                           color=C_NEG_LOSS, linewidth=2, label="Neg loss")
+                           color=C_PARA_LOSS, linewidth=2,
+                           label="NCE loss" if is_v3 else "Para loss")
+        if not is_v3:
+            ax_components.plot(steps, smooth(neg_vals, sw),
+                               color=C_NEG_LOSS, linewidth=2, label="Neg loss")
         if any(v > 0 for v in wo_vals):
             ax_components.plot(steps, smooth(wo_vals, sw),
                                color=C_WO_LOSS, linewidth=2, label="WO loss")
+        if is_v3:
+            ax_components.plot(steps, smooth(decorr_vals, sw),
+                               color="#7B1FA2", linewidth=2, label="Decorr loss")
     ax_components.set_xlabel("Step")
     ax_components.set_ylabel("Loss")
     ax_components.set_title("Geometry Losses")
@@ -271,31 +305,49 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
     ax_diag.legend(fontsize=9)
     ax_diag.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
 
-    # Panel 5: Word Order & Binding Detail
-    if eval_data:
+    # Panel 5: Effective Rank (V3) or Word Order Detail (V2)
+    has_rank = eval_data and any(d.get("rank90") for d in eval_data)
+    if has_rank:
         e_steps = [d["step"] for d in eval_data]
-        pairs = {
-            "dog/man bit": ("pair_word_order_0", C_WO, "o"),
-            "alice/bob likes": ("pair_word_order_1", "#E91E63", "s"),
-            "she/he gave": ("pair_word_order_2", "#FF9800", "^"),
-            "purple binding": ("pair_binding_0", C_BIND, "D"),
-        }
-        for label, (key, color, marker) in pairs.items():
-            vals = [d.get(key) for d in eval_data]
-            valid = [(s, v) for s, v in zip(e_steps, vals) if v is not None]
-            if valid:
-                ax_wordorder.plot([s for s, _ in valid], [v for _, v in valid],
-                                  color=color, linewidth=2, marker=marker,
-                                  markersize=4, label=label)
-        ax_wordorder.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3,
-                             linewidth=1, label="Goal: below 0.5")
-    ax_wordorder.set_xlabel("Step")
-    ax_wordorder.set_ylabel("Cosine Similarity")
-    ax_wordorder.set_title("Word Order & Binding (lower = better)")
-    ax_wordorder.set_ylim(-0.1, 1.05)
-    ax_wordorder.grid(True, alpha=0.3)
-    ax_wordorder.legend(fontsize=7, loc="lower left")
-    ax_wordorder.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
+        rank90 = [d.get("rank90", 0) for d in eval_data]
+        rank95 = [d.get("rank95", 0) for d in eval_data]
+        ax_wordorder.plot(e_steps, rank90, color="#1565C0", linewidth=2.5,
+                          marker="o", markersize=4, label="Rank 90%")
+        ax_wordorder.plot(e_steps, rank95, color="#2E7D32", linewidth=2.5,
+                          marker="s", markersize=4, label="Rank 95%")
+        ax_wordorder.axhline(y=1024, color="gray", linestyle="--", alpha=0.3,
+                             linewidth=1, label="Max (1024)")
+        ax_wordorder.set_xlabel("Step")
+        ax_wordorder.set_ylabel("Effective Rank (PCA dims)")
+        ax_wordorder.set_title("Effective Rank (higher = better)")
+        ax_wordorder.grid(True, alpha=0.3)
+        ax_wordorder.legend(fontsize=9)
+        ax_wordorder.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
+    else:
+        if eval_data:
+            e_steps = [d["step"] for d in eval_data]
+            pairs = {
+                "dog/man bit": ("pair_word_order_0", C_WO, "o"),
+                "alice/bob likes": ("pair_word_order_1", "#E91E63", "s"),
+                "she/he gave": ("pair_word_order_2", "#FF9800", "^"),
+                "purple binding": ("pair_binding_0", C_BIND, "D"),
+            }
+            for label, (key, color, marker) in pairs.items():
+                vals = [d.get(key) for d in eval_data]
+                valid = [(s, v) for s, v in zip(e_steps, vals) if v is not None]
+                if valid:
+                    ax_wordorder.plot([s for s, _ in valid], [v for _, v in valid],
+                                      color=color, linewidth=2, marker=marker,
+                                      markersize=4, label=label)
+            ax_wordorder.axhline(y=0.5, color="gray", linestyle="--", alpha=0.3,
+                                 linewidth=1, label="Goal: below 0.5")
+        ax_wordorder.set_xlabel("Step")
+        ax_wordorder.set_ylabel("Cosine Similarity")
+        ax_wordorder.set_title("Word Order & Binding (lower = better)")
+        ax_wordorder.set_ylim(-0.1, 1.05)
+        ax_wordorder.grid(True, alpha=0.3)
+        ax_wordorder.legend(fontsize=7, loc="lower left")
+        ax_wordorder.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
 
     # Panel 6: Stats
     ax_stats.axis("off")
@@ -319,6 +371,11 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
                                       ("Unrelated sim", "unrelated_sim", "<0.10"),
                                       ("Word order sim", "word_order_sim", "<0.30")]:
             lines.append(f"  {display:<24s} {le.get(key, 0):>+8.3f} {target:>8s}")
+        if le.get("rank90"):
+            lines += [f"", f"  Effective Rank:"]
+            lines.append(f"    {'rank90':<20s} {le['rank90']:>6d} / 1024")
+            if le.get("rank95"):
+                lines.append(f"    {'rank95':<20s} {le['rank95']:>6d} / 1024")
         lines += [f"", f"  Word Order Detail:"]
         for display, key in [("dog/man bit", "pair_word_order_0"),
                               ("alice/bob likes", "pair_word_order_1"),
@@ -709,7 +766,7 @@ def main():
     parser.add_argument("--interval", type=int, default=60, help="Refresh interval")
     parser.add_argument("--legacy", action="store_true", help="V1/V2/V3 pretrain comparison")
     parser.add_argument("--compare", action="store_true", help="V1 vs V2 concept comparison")
-    parser.add_argument("--run", type=str, default="v2", help="Which run to plot (v1 or v2)")
+    parser.add_argument("--run", type=str, default=None, help="Which run to plot (v1, v2, v3; default: latest with data)")
     args = parser.parse_args()
 
     if args.show:
@@ -723,11 +780,21 @@ def main():
         plot_comparison(save=not args.show, show=args.show)
         return
 
+    # Auto-detect latest run with data
+    run = args.run
+    if run is None:
+        for r in ["v3", "v2", "v1"]:
+            if os.path.exists(CONCEPT_RUNS[r]["log"]):
+                run = r
+                break
+        if run is None:
+            run = "v3"
+
     if args.live:
         print(f"Live mode - refreshing every {args.interval}s. Ctrl+C to stop.")
         while True:
             try:
-                plot_concept_dashboard(run=args.run, save=True, show=False)
+                plot_concept_dashboard(run=run, save=True, show=False)
                 if os.path.exists(CONCEPT_RUNS["v1"]["log"]) and os.path.exists(CONCEPT_RUNS["v2"]["log"]):
                     plot_comparison(save=True, show=False)
                 time.sleep(args.interval)
@@ -735,7 +802,7 @@ def main():
                 print("\nStopped.")
                 break
     else:
-        plot_concept_dashboard(run=args.run, save=not args.show, show=args.show)
+        plot_concept_dashboard(run=run, save=not args.show, show=args.show)
 
 
 if __name__ == "__main__":
