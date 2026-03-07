@@ -40,6 +40,7 @@ CONCEPT_RUNS = {
     "v1": {"log": "logs/concept_v1.log", "metrics": "logs/concept_v1_metrics.csv"},
     "v2": {"log": "logs/concept_v2.log", "metrics": "logs/concept_v2_metrics.csv"},
     "v3": {"log": "logs/concept_v3.log", "metrics": "logs/concept_v3_metrics.csv"},
+    "v4": {"log": "logs/concept_v4.log", "metrics": "logs/concept_v4_metrics.csv"},
 }
 
 
@@ -783,7 +784,7 @@ def main():
     # Auto-detect latest run with data
     run = args.run
     if run is None:
-        for r in ["v3", "v2", "v1"]:
+        for r in ["v4", "v3", "v2", "v1"]:
             if os.path.exists(CONCEPT_RUNS[r]["log"]):
                 run = r
                 break
