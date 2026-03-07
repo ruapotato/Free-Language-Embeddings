@@ -36,8 +36,8 @@ class ConceptConfig:
     enc_heads: int = 6
     enc_intermediate: int = 1536
     # Bottleneck
-    num_concepts: int = 8       # K concept vectors
-    concept_dim: int = 128      # dim per concept vector
+    num_concepts: int = 32      # K concept vectors (slots)
+    concept_dim: int = 32       # dim per concept vector
     # Decoder
     dec_hidden: int = 384
     dec_layers: int = 6
@@ -605,3 +605,32 @@ def slot_decorrelation_loss(concepts):
     loss = corr[mask.expand(B, -1, -1)].pow(2).mean()
 
     return loss
+
+
+def slot_isolation_loss(concepts_base, concepts_variant, target_slot):
+    """
+    When only one concept axis varies between base and variant,
+    only the target slot should change. All other slots should stay the same.
+
+    concepts_base: (B, K, D)
+    concepts_variant: (B, K, D)
+    target_slot: int — which slot SHOULD change
+
+    Loss = high similarity on non-target slots + low similarity on target slot
+    """
+    B, K, D = concepts_base.shape
+    normed_base = F.normalize(concepts_base, p=2, dim=-1)
+    normed_var = F.normalize(concepts_variant, p=2, dim=-1)
+
+    # Per-slot cosine similarity: (B, K)
+    slot_sims = (normed_base * normed_var).sum(dim=-1)
+
+    # Non-target slots should be identical (sim -> 1.0)
+    mask = torch.ones(K, dtype=torch.bool, device=slot_sims.device)
+    mask[target_slot] = False
+    unchanged_loss = (1.0 - slot_sims[:, mask]).pow(2).mean()
+
+    # Target slot should be different (sim -> low)
+    changed_loss = F.relu(slot_sims[:, target_slot] - 0.5).pow(2).mean()
+
+    return unchanged_loss + changed_loss

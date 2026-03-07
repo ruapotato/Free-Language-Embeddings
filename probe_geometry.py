@@ -7,7 +7,7 @@ import numpy as np
 from transformers import BertTokenizerFast
 from concept_model import ConceptAutoencoder, ConceptConfig
 
-CKPT = "checkpoints/concept_v4/latest.pt"
+CKPT = "checkpoints/concept_v5/latest.pt"
 DEVICE = "cpu"
 
 def load_model():

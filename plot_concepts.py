@@ -24,7 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-CKPT_DIR = Path("checkpoints/concept_v4")
+CKPT_DIR = Path("checkpoints/concept_v5")
 OUTPUT_DIR = Path("logs/plots")
 CACHE_DIR = Path("logs/concept_cache")
 FRAME_DIR = Path("logs/umap_frames")

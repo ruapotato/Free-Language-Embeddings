@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from flask import Flask, request, jsonify, Response
 
-CKPT_DIR = Path("checkpoints/concept_v4")
+CKPT_DIR = Path("checkpoints/concept_v5")
 
 # ── Sentence corpus ────────────────────────────────────────────────────
 

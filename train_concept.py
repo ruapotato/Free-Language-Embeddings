@@ -1,16 +1,14 @@
 """
-FLM V4 — Train Concept Autoencoder V4
+FLM V5 — Train Concept Autoencoder V5
 =======================================
-Hard negatives + per-dimension variance + smooth weight scheduling.
+32-slot supervised concept architecture with synthetic axis training.
 
-Key changes from V3:
-  - Uses ALL pair data: positives, hard negatives (NLI contradictions, PAWS),
-    graded STS similarity
-  - Spectral spread loss: directly maximizes effective rank by penalizing
-    uneven eigenvalue distribution
-  - Smooth recon decay: recon weight = max(floor, 1/recon_loss) so it
-    naturally lessens as reconstruction improves, never fully drops off
-  - No stage freezing — all params train throughout
+Key changes from V4:
+  - 32 slots x 32 dims (was 8 x 128) — each slot owns one concept family
+  - Slot isolation loss: synthetic data teaches each slot what to encode
+  - 1.67M synthetic concept-axis pairs (size, color, tense, sentiment, etc.)
+  - Mixed training: reconstruction + contrastive + slot isolation
+  - Per-slot accuracy stats in eval
 
 Usage:
     python train_concept.py --fresh          # fresh training
@@ -34,13 +32,14 @@ import torch.nn.functional as F
 from pathlib import Path
 from concept_model import (ConceptConfig, ConceptAutoencoder,
                            reconstruction_loss, info_nce_loss,
-                           word_order_info_nce, slot_decorrelation_loss)
+                           word_order_info_nce, slot_decorrelation_loss,
+                           slot_isolation_loss)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-CHECKPOINT_DIR = "checkpoints/concept_v4"
+CHECKPOINT_DIR = "checkpoints/concept_v5"
 LOG_DIR = "logs"
 
 MODEL_CONFIG = dict(
@@ -49,8 +48,8 @@ MODEL_CONFIG = dict(
     enc_layers=6,
     enc_heads=6,
     enc_intermediate=1536,
-    num_concepts=8,
-    concept_dim=128,
+    num_concepts=32,
+    concept_dim=32,
     dec_hidden=384,
     dec_layers=6,
     dec_heads=6,
@@ -79,7 +78,8 @@ HARD_NEG_WEIGHT = 0.5
 WO_WEIGHT = 0.5
 DECORR_WEIGHT = 1.0
 STS_WEIGHT = 0.5
-DIMVAR_WEIGHT = 1.0           # per-dimension variance loss (rank pusher)
+SLOT_ISO_WEIGHT = 2.0        # slot isolation loss (concept axis training)
+AXIS_BATCH_SIZE = 64          # batch size for concept axis pairs
 
 # Logging
 LOG_EVERY = 50
@@ -88,8 +88,8 @@ SAMPLE_EVERY = 2000
 CHECKPOINT_EVERY = 5000
 
 LOG_PATHS = {
-    "log": f"{LOG_DIR}/concept_v4.log",
-    "metrics": f"{LOG_DIR}/concept_v4_metrics.csv",
+    "log": f"{LOG_DIR}/concept_v5.log",
+    "metrics": f"{LOG_DIR}/concept_v5_metrics.csv",
 }
 
 # Diagnostic pairs
@@ -340,6 +340,82 @@ class PairDataset:
         return enc_a, enc_b, torch.tensor(scores, dtype=torch.float32)
 
 
+class ConceptAxisDataset:
+    """Loads synthetic concept axis pairs for slot isolation training."""
+    def __init__(self, tokenizer, max_len=128):
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+        # pairs_by_slot[slot_id] = [(base, variant), ...]
+        self.pairs_by_slot = {i: [] for i in range(32)}
+        self._load()
+        self.indices = {i: 0 for i in range(32)}
+
+    def _load(self):
+        data_dir = Path("data/concept_axes")
+        combined = data_dir / "all_axes.jsonl"
+        if not combined.exists():
+            log(f"  WARNING: No concept axis data at {combined}")
+            return
+        count = 0
+        with open(combined) as f:
+            for line in f:
+                doc = json.loads(line)
+                slot = doc["slot"]
+                self.pairs_by_slot[slot].append((doc["base"], doc["variant"]))
+                count += 1
+        for slot_id in range(32):
+            random.shuffle(self.pairs_by_slot[slot_id])
+        log(f"  Concept axis pairs: {count:,} across 32 slots")
+        non_empty = sum(1 for s in range(32) if self.pairs_by_slot[s])
+        log(f"  Active slots: {non_empty}/32")
+
+    def get_batch(self, batch_size):
+        """Get a random batch sampling from random slots. Returns (enc_base, enc_var, slot_ids)."""
+        bases, variants, slot_ids = [], [], []
+        for _ in range(batch_size):
+            # Pick a random slot that has data
+            slot = random.randint(0, 31)
+            pairs = self.pairs_by_slot[slot]
+            if not pairs:
+                slot = random.choice([s for s in range(32) if self.pairs_by_slot[s]])
+                pairs = self.pairs_by_slot[slot]
+            idx = self.indices[slot]
+            if idx >= len(pairs):
+                random.shuffle(pairs)
+                idx = 0
+            base, var = pairs[idx]
+            self.indices[slot] = idx + 1
+            bases.append(base)
+            variants.append(var)
+            slot_ids.append(slot)
+        enc_base = self.tokenizer(bases, max_length=self.max_len,
+                                   padding=True, truncation=True, return_tensors="pt")
+        enc_var = self.tokenizer(variants, max_length=self.max_len,
+                                  padding=True, truncation=True, return_tensors="pt")
+        return enc_base, enc_var, torch.tensor(slot_ids, dtype=torch.long)
+
+    def get_slot_batch(self, slot_id, batch_size):
+        """Get a batch for a specific slot."""
+        pairs = self.pairs_by_slot[slot_id]
+        if not pairs:
+            return None, None
+        bases, variants = [], []
+        for _ in range(batch_size):
+            idx = self.indices[slot_id]
+            if idx >= len(pairs):
+                random.shuffle(pairs)
+                idx = 0
+            base, var = pairs[idx]
+            self.indices[slot_id] = idx + 1
+            bases.append(base)
+            variants.append(var)
+        enc_base = self.tokenizer(bases, max_length=self.max_len,
+                                   padding=True, truncation=True, return_tensors="pt")
+        enc_var = self.tokenizer(variants, max_length=self.max_len,
+                                  padding=True, truncation=True, return_tensors="pt")
+        return enc_base, enc_var
+
+
 # ---------------------------------------------------------------------------
 # Prefetch buffer — tokenize on CPU threads while GPU trains
 # ---------------------------------------------------------------------------
@@ -347,10 +423,11 @@ class PairDataset:
 class PrefetchBuffer:
     """Pre-tokenizes batches in background threads to keep GPU fed."""
 
-    def __init__(self, recon_dataset, pair_dataset, device,
+    def __init__(self, recon_dataset, pair_dataset, axis_dataset, device,
                  pair_batch_size=128, hard_neg_batch=64, buf_size=4):
         self.recon = recon_dataset
         self.pairs = pair_dataset
+        self.axis = axis_dataset
         self.device = device
         self.pair_bs = pair_batch_size
         self.hn_bs = hard_neg_batch
@@ -358,6 +435,7 @@ class PrefetchBuffer:
         self.pos_q = queue.Queue(maxsize=buf_size)
         self.hn_q = queue.Queue(maxsize=buf_size)
         self.sts_q = queue.Queue(maxsize=buf_size)
+        self.axis_q = queue.Queue(maxsize=buf_size)
         self._stop = threading.Event()
         self._threads = []
 
@@ -366,7 +444,8 @@ class PrefetchBuffer:
         for name, fn in [("recon", self._fill_recon),
                          ("pos", self._fill_pos),
                          ("hn", self._fill_hn),
-                         ("sts", self._fill_sts)]:
+                         ("sts", self._fill_sts),
+                         ("axis", self._fill_axis)]:
             t = threading.Thread(target=fn, daemon=True, name=f"prefetch-{name}")
             t.start()
             self._threads.append(t)
@@ -406,6 +485,14 @@ class PrefetchBuffer:
             except queue.Full:
                 continue
 
+    def _fill_axis(self):
+        while not self._stop.is_set():
+            try:
+                batch = self.axis.get_batch(AXIS_BATCH_SIZE)
+                self.axis_q.put(batch, timeout=1.0)
+            except queue.Full:
+                continue
+
     def get_recon(self):
         return self.recon_q.get()
 
@@ -417,6 +504,9 @@ class PrefetchBuffer:
 
     def get_sts(self):
         return self.sts_q.get()
+
+    def get_axis(self):
+        return self.axis_q.get()
 
 
 # ---------------------------------------------------------------------------
@@ -464,27 +554,16 @@ def sts_loss(concepts_a, concepts_b, target_scores):
     return loss, pred_sim.mean().item()
 
 
-def dimension_variance_loss(concepts):
-    """
-    Push the model to use ALL dimensions by penalizing low per-dimension variance.
-
-    For each dimension in the flattened concept vector, compute variance across
-    the batch. Penalize dimensions with low variance via -log(var). No sample
-    cap — works on full batch, O(B*D), and can push all 1024 dims.
-
-    concepts: (B, K, D) — will be flattened to (B, K*D)
-    """
-    flat = concepts.view(concepts.shape[0], -1).float()  # (B, K*D)
-    var = flat.var(dim=0)  # (K*D,) variance per dimension
-    # -log(var) penalizes low-variance dims heavily, diminishing return on high-var
-    loss = -torch.log(var.clamp(min=1e-8)).mean()
-    return loss
-
-    # KL divergence from uniform (want to minimize)
-    # KL(uniform || p) = sum(uniform * log(uniform/p))
-    loss = (uniform * (uniform.log() - p.log())).sum()
-
-    return loss
+SLOT_NAMES = {
+    0: "subject", 1: "object", 2: "animacy", 3: "age",
+    4: "size", 5: "color", 6: "shape", 7: "material",
+    8: "weight", 9: "temperature", 10: "action_type", 11: "manner",
+    12: "speed", 13: "direction", 14: "location", 15: "spatial",
+    16: "distance", 17: "tense", 18: "duration", 19: "time_ref",
+    20: "number", 21: "degree", 22: "sentiment", 23: "emotion",
+    24: "arousal", 25: "quality", 26: "difficulty", 27: "negation",
+    28: "certainty", 29: "causation", 30: "formality", 31: "speech_act",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +610,48 @@ def measure_effective_rank(model, tokenizer, texts, device="cuda"):
     rank95 = int(np.searchsorted(cumvar, 0.95)) + 1
     model.train()
     return rank90, rank95, var_ratio[:10]
+
+
+@torch.no_grad()
+def measure_slot_accuracy(model, axis_dataset, tokenizer, device="cuda"):
+    """Measure how well each slot isolates its concept.
+
+    For each slot, take pairs where only that concept varies and check:
+    - target slot has LOW cosine sim (it changed)
+    - other slots have HIGH cosine sim (they didn't change)
+    """
+    model.eval()
+    m = _unwrap(model)
+    slot_scores = {}
+    for slot_id in range(32):
+        pairs = axis_dataset.pairs_by_slot[slot_id]
+        if len(pairs) < 10:
+            continue
+        sample = random.sample(pairs, min(32, len(pairs)))
+        bases = [p[0] for p in sample]
+        variants = [p[1] for p in sample]
+        enc_b = tokenizer(bases, max_length=128, padding=True,
+                          truncation=True, return_tensors="pt").to(device)
+        enc_v = tokenizer(variants, max_length=128, padding=True,
+                          truncation=True, return_tensors="pt").to(device)
+        c_base = m.encode(enc_b["input_ids"], enc_b["attention_mask"])
+        c_var = m.encode(enc_v["input_ids"], enc_v["attention_mask"])
+        normed_b = F.normalize(c_base, p=2, dim=-1)
+        normed_v = F.normalize(c_var, p=2, dim=-1)
+        slot_sims = (normed_b * normed_v).sum(dim=-1)  # (B, K)
+        target_sim = slot_sims[:, slot_id].mean().item()
+        mask = torch.ones(32, dtype=torch.bool, device=device)
+        mask[slot_id] = False
+        other_sim = slot_sims[:, mask].mean().item()
+        # Good isolation = low target sim, high other sim
+        isolation = other_sim - target_sim
+        slot_scores[slot_id] = {
+            "target_sim": target_sim,
+            "other_sim": other_sim,
+            "isolation": isolation,
+        }
+    model.train()
+    return slot_scores
 
 
 @torch.no_grad()
@@ -640,7 +761,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     log("=" * 70)
-    log("FLM V4 — CONCEPT AUTOENCODER V4 (Hard Neg + Spectral Spread)")
+    log("FLM V5 — CONCEPT AUTOENCODER V5 (32-Slot Supervised Concepts)")
     log("=" * 70)
 
     from transformers import AutoTokenizer
@@ -696,6 +817,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     log("Loading data...")
     recon_dataset = ReconstructionDataset(tokenizer, max_len=config.max_seq_len)
     pair_dataset = PairDataset(tokenizer, max_len=config.max_seq_len)
+    axis_dataset = ConceptAxisDataset(tokenizer, max_len=config.max_seq_len)
 
     if len(recon_dataset.texts) == 0:
         log("ERROR: No training texts found.")
@@ -722,26 +844,28 @@ def train(resume_from=None, fresh=False, eval_only=False):
     m = _unwrap(model)
     HARD_NEG_BATCH = min(64, PAIR_BATCH_SIZE // 2)
 
-    log(f"\nTraining plan (V4 — Hard Negatives + Spectral Spread):")
+    axis_total = sum(len(v) for v in axis_dataset.pairs_by_slot.values())
+    log(f"\nTraining plan (V5 — 32-Slot Supervised Concepts):")
     log(f"  Encoder: {config.enc_hidden}h x {config.enc_layers}L x {config.enc_heads}heads")
     log(f"  Decoder: {config.dec_hidden}h x {config.dec_layers}L x {config.dec_heads}heads")
     log(f"  Bottleneck: {config.num_concepts} x {config.concept_dim} = {config.total_concept_dim} dims")
-    log(f"  Batch: {BATCH_SIZE} recon + {PAIR_BATCH_SIZE} pairs + {HARD_NEG_BATCH} hard neg")
+    log(f"  Batch: {BATCH_SIZE} recon + {PAIR_BATCH_SIZE} pairs + {HARD_NEG_BATCH} hard neg + {AXIS_BATCH_SIZE} axis")
     log(f"  Peak LR: {PEAK_LR} | Steps: {start_step} -> {TOTAL_STEPS}")
     log(f"  Recon weight: smooth decay (floor={RECON_FLOOR})")
-    log(f"  Geometry: nce={NCE_WEIGHT} wo={WO_WEIGHT} decorr={DECORR_WEIGHT} "
-        f"dimvar={DIMVAR_WEIGHT} sts={STS_WEIGHT}")
+    log(f"  Losses: nce={NCE_WEIGHT} wo={WO_WEIGHT} decorr={DECORR_WEIGHT} "
+        f"slot_iso={SLOT_ISO_WEIGHT} sts={STS_WEIGHT}")
     log(f"  Data: {len(pair_dataset.pos_pairs):,} pos + "
         f"{len(pair_dataset.hard_neg_pairs):,} hard neg + "
-        f"{len(pair_dataset.sts_pairs):,} STS")
+        f"{len(pair_dataset.sts_pairs):,} STS + "
+        f"{axis_total:,} axis")
     log("-" * 70)
 
     # Start prefetch buffer
-    prefetch = PrefetchBuffer(recon_dataset, pair_dataset, device,
+    prefetch = PrefetchBuffer(recon_dataset, pair_dataset, axis_dataset, device,
                               pair_batch_size=PAIR_BATCH_SIZE,
                               hard_neg_batch=HARD_NEG_BATCH)
     prefetch.start()
-    log("Prefetch buffer started (4 threads)")
+    log("Prefetch buffer started (5 threads)")
 
     for step in range(start_step, TOTAL_STEPS):
         if shutdown_requested:
@@ -781,13 +905,31 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 concepts, concepts_shuf, temperature=NCE_TEMPERATURE)
             total_loss = total_loss + geo_w * WO_WEIGHT * wo_loss
 
-        # Per-dimension variance loss (needs float32, outside autocast)
-        dimvar = dimension_variance_loss(concepts)
-        total_loss = total_loss + geo_w * DIMVAR_WEIGHT * dimvar
-
         wo_loss_val = wo_loss.item()
         decorr_val = decorr.item()
-        dimvar_val = dimvar.item()
+
+        # --- Slot isolation loss (concept axis training) ---
+        iso_loss_val = 0.0
+        axis_enc_base, axis_enc_var, axis_slots = prefetch.get_axis()
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            ax_ids_b = axis_enc_base["input_ids"].to(device, non_blocking=True)
+            ax_mask_b = axis_enc_base["attention_mask"].to(device, non_blocking=True)
+            ax_ids_v = axis_enc_var["input_ids"].to(device, non_blocking=True)
+            ax_mask_v = axis_enc_var["attention_mask"].to(device, non_blocking=True)
+            ax_concepts_b = m.encode(ax_ids_b, ax_mask_b)
+            ax_concepts_v = m.encode(ax_ids_v, ax_mask_v)
+            # Group by slot and compute isolation loss per group
+            iso_loss = torch.tensor(0.0, device=device)
+            unique_slots = axis_slots.unique()
+            for s in unique_slots:
+                mask = axis_slots == s
+                if mask.sum() < 2:
+                    continue
+                iso_loss = iso_loss + slot_isolation_loss(
+                    ax_concepts_b[mask], ax_concepts_v[mask], s.item())
+            iso_loss = iso_loss / max(len(unique_slots), 1)
+            total_loss = total_loss + geo_w * SLOT_ISO_WEIGHT * iso_loss
+        iso_loss_val = iso_loss.item()
 
         # --- Paraphrase InfoNCE with hard negatives ---
         nce_loss_val = 0.0
@@ -859,7 +1001,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             log(f"step {step+1:>7d} | loss {avg_loss:.4f} "
                 f"(recon={r_loss_val:.3f} nce={nce_loss_val:.3f} "
                 f"wo={wo_loss_val:.3f} decorr={decorr_val:.3f} "
-                f"dimvar={dimvar_val:.3f} sts={sts_loss_val:.3f}) "
+                f"iso={iso_loss_val:.3f} sts={sts_loss_val:.3f}) "
                 f"[rw={recon_w:.2f} gw={geo_w:.2f}] | "
                 f"p_sim={p_sim_val:.3f} n_sim={n_sim_val:.3f} "
                 f"wo_sim={wo_sim_val:.3f} | "
@@ -879,8 +1021,15 @@ def train(resume_from=None, fresh=False, eval_only=False):
             rank90, rank95, top_var = measure_effective_rank(
                 model, tokenizer, rank_texts, device)
 
+            # Slot isolation accuracy
+            slot_scores = measure_slot_accuracy(
+                model, axis_dataset, tokenizer, device)
+            avg_iso = sum(s["isolation"] for s in slot_scores.values()) / max(len(slot_scores), 1)
+            good_slots = sum(1 for s in slot_scores.values() if s["isolation"] > 0.1)
+
             log(f"  EVAL: para_sim={avg_para:.3f} wo_sim={avg_wo:.3f} "
-                f"unrelated_sim={avg_neg:.3f} | rank90={rank90} rank95={rank95}")
+                f"unrelated_sim={avg_neg:.3f} | rank90={rank90} rank95={rank95} | "
+                f"slot_iso={avg_iso:.3f} ({good_slots}/32 good)")
 
             for a, b, sim, ptype in results:
                 log(f"    {sim:+.4f}  [{ptype:<12s}] {a} <-> {b}")
@@ -890,7 +1039,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             log_metrics(step + 1, avg_loss, avg_para, avg_neg,
                         avg_wo, rank90, current_lr, elapsed / 3600)
 
-        # Reconstruction samples
+        # Reconstruction samples + slot detail
         if (step + 1) % SAMPLE_EVERY == 0:
             log("--- RECONSTRUCTION SAMPLES ---")
             recon = test_reconstruction(model, tokenizer, device)
@@ -898,6 +1047,18 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 match = "OK" if orig.lower().strip() == decoded.lower().strip() else "DIFF"
                 log(f"  [{match}] {orig}")
                 log(f"        -> {decoded}")
+
+            # Detailed slot isolation stats
+            log("--- SLOT ISOLATION DETAIL ---")
+            slot_scores = measure_slot_accuracy(
+                model, axis_dataset, tokenizer, device)
+            for sid in sorted(slot_scores.keys()):
+                s = slot_scores[sid]
+                name = SLOT_NAMES.get(sid, f"slot_{sid}")
+                status = "OK" if s["isolation"] > 0.1 else "WEAK" if s["isolation"] > 0 else "BAD"
+                log(f"  [{status:>4s}] slot {sid:2d} ({name:>12s}): "
+                    f"target_sim={s['target_sim']:.3f} other_sim={s['other_sim']:.3f} "
+                    f"isolation={s['isolation']:+.3f}")
 
         # Checkpoint
         if (step + 1) % CHECKPOINT_EVERY == 0:
@@ -923,7 +1084,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Train concept autoencoder V4")
+    parser = argparse.ArgumentParser(description="Train concept autoencoder V5")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--eval-only", action="store_true")

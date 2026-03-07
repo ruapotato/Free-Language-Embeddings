@@ -41,6 +41,7 @@ CONCEPT_RUNS = {
     "v2": {"log": "logs/concept_v2.log", "metrics": "logs/concept_v2_metrics.csv"},
     "v3": {"log": "logs/concept_v3.log", "metrics": "logs/concept_v3_metrics.csv"},
     "v4": {"log": "logs/concept_v4.log", "metrics": "logs/concept_v4_metrics.csv"},
+    "v5": {"log": "logs/concept_v5.log", "metrics": "logs/concept_v5_metrics.csv"},
 }
 
 
@@ -68,6 +69,8 @@ def load_concept_step_data(log_path):
                     wo = float(wo_m.group(1)) if wo_m else 0.0
                     decorr_m = re.search(r"decorr=([\d.]+)", detail)
                     decorr = float(decorr_m.group(1)) if decorr_m else 0.0
+                    iso_m = re.search(r"iso=([\d.]+)", detail)
+                    iso = float(iso_m.group(1)) if iso_m else 0.0
                     sim_part = parts[2]
                     p_sim = float(re.search(r"p_sim=([\d.]+)", sim_part).group(1))
                     n_sim = float(re.search(r"n_sim=([\d.]+)", sim_part).group(1))
@@ -76,7 +79,7 @@ def load_concept_step_data(log_path):
                     rows.append({
                         "step": step, "total_loss": total_loss,
                         "recon_loss": recon, "para_loss": para, "neg_loss": neg,
-                        "wo_loss": wo, "decorr_loss": decorr,
+                        "wo_loss": wo, "decorr_loss": decorr, "iso_loss": iso,
                         "p_sim": p_sim, "n_sim": n_sim, "wo_sim": wo_sim,
                     })
                 except (ValueError, IndexError, AttributeError):
@@ -105,6 +108,9 @@ def load_concept_eval_data(log_path):
                         current_eval[m.group(1)] = float(m.group(2))
                     for m in re.finditer(r"(rank\d+)=(\d+)", line):
                         current_eval[m.group(1)] = int(m.group(2))
+                    iso_m = re.search(r"slot_iso=([-\d.]+)", line)
+                    if iso_m:
+                        current_eval["slot_iso"] = float(iso_m.group(1))
                 except (ValueError, IndexError):
                     pass
             if current_eval and re.search(r"[+-]\d\.\d{4}\s+\[", line):
@@ -253,6 +259,10 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
         if is_v3:
             ax_components.plot(steps, smooth(decorr_vals, sw),
                                color="#7B1FA2", linewidth=2, label="Decorr loss")
+        iso_vals = [d.get("iso_loss", 0) for d in step_data]
+        if any(v > 0 for v in iso_vals):
+            ax_components.plot(steps, smooth(iso_vals, sw),
+                               color="#E65100", linewidth=2, label="Slot iso loss")
     ax_components.set_xlabel("Step")
     ax_components.set_ylabel("Loss")
     ax_components.set_title("Geometry Losses")
@@ -318,11 +328,21 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
                           marker="s", markersize=4, label="Rank 95%")
         ax_wordorder.axhline(y=1024, color="gray", linestyle="--", alpha=0.3,
                              linewidth=1, label="Max (1024)")
+        # Slot isolation on secondary y-axis
+        slot_iso_vals = [d.get("slot_iso") for d in eval_data]
+        if any(v is not None for v in slot_iso_vals):
+            ax2 = ax_wordorder.twinx()
+            valid = [(s, v) for s, v in zip(e_steps, slot_iso_vals) if v is not None]
+            ax2.plot([s for s, _ in valid], [v for _, v in valid],
+                     color="#E65100", linewidth=2, marker="D", markersize=3,
+                     label="Slot isolation", alpha=0.8)
+            ax2.set_ylabel("Slot Isolation", color="#E65100")
+            ax2.tick_params(axis="y", labelcolor="#E65100")
         ax_wordorder.set_xlabel("Step")
         ax_wordorder.set_ylabel("Effective Rank (PCA dims)")
-        ax_wordorder.set_title("Effective Rank (higher = better)")
+        ax_wordorder.set_title("Effective Rank & Slot Isolation")
         ax_wordorder.grid(True, alpha=0.3)
-        ax_wordorder.legend(fontsize=9)
+        ax_wordorder.legend(fontsize=9, loc="upper left")
         ax_wordorder.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
     else:
         if eval_data:
@@ -352,7 +372,7 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
 
     # Panel 6: Stats
     ax_stats.axis("off")
-    lines = [f"flm V4 -- Concept Autoencoder ({run})", "=" * 44]
+    lines = [f"flm -- Concept Autoencoder ({run})", "=" * 44]
     if step_data:
         latest = step_data[-1]
         lines += [f"", f"  Step:              {latest['step']:>10,d} / 200,000",
@@ -377,6 +397,8 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
             lines.append(f"    {'rank90':<20s} {le['rank90']:>6d} / 1024")
             if le.get("rank95"):
                 lines.append(f"    {'rank95':<20s} {le['rank95']:>6d} / 1024")
+        if le.get("slot_iso") is not None:
+            lines += [f"", f"  Slot Isolation:    {le['slot_iso']:>+8.3f}"]
         lines += [f"", f"  Word Order Detail:"]
         for display, key in [("dog/man bit", "pair_word_order_0"),
                               ("alice/bob likes", "pair_word_order_1"),
@@ -390,7 +412,7 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
                   bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5",
                             edgecolor="#BDBDBD"))
 
-    plt.suptitle(f"flm V4 -- Concept Autoencoder Training ({run})",
+    plt.suptitle(f"flm -- Concept Autoencoder Training ({run})",
                  fontsize=16, fontweight="bold", y=0.98)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
@@ -784,7 +806,7 @@ def main():
     # Auto-detect latest run with data
     run = args.run
     if run is None:
-        for r in ["v4", "v3", "v2", "v1"]:
+        for r in ["v5", "v4", "v3", "v2", "v1"]:
             if os.path.exists(CONCEPT_RUNS[r]["log"]):
                 run = r
                 break
