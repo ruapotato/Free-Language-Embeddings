@@ -218,28 +218,42 @@ class SemanticEncoder(nn.Module):
         return total, trainable
 
 
-def nt_xent_loss(z_a, z_b, temperature=0.07):
+def adaptive_contrastive_loss(z_pos_a, z_pos_b, z_neg_a, z_neg_b,
+                              pos_target=0.9, neg_target=0.3):
     """
-    NT-Xent (SimCLR) contrastive loss.
+    Unified adaptive contrastive loss with linear violations.
 
-    z_a, z_b: (batch, dim) — L2-normalized vectors for positive pairs.
-    All other pairs in the batch are negatives.
+    Positive pairs: penalize linearly when sim < pos_target (constant gradient)
+    Negative pairs: penalize linearly when sim > neg_target (constant gradient)
+
+    Linear keeps gradient pressure constant. Squared made gradient vanish
+    near target, causing the loss to plateau at 0.11 with metrics stalled.
     """
-    batch_size = z_a.shape[0]
-    z = torch.cat([z_a, z_b], dim=0)  # (2*batch, dim)
+    # Positive loss: pull together
+    pos_sim = F.cosine_similarity(z_pos_a, z_pos_b)  # (batch,)
+    pos_violation = F.relu(pos_target - pos_sim)  # how far below target
+    pos_loss = pos_violation.mean()
 
-    # Cosine similarity matrix
-    sim = torch.mm(z, z.t()) / temperature  # (2*batch, 2*batch)
+    # Negative loss: push apart
+    neg_sim = F.cosine_similarity(z_neg_a, z_neg_b)  # (batch,)
+    neg_violation = F.relu(neg_sim - neg_target)  # how far above target
+    neg_loss = neg_violation.mean()
 
-    # Mask out self-similarity
-    mask = torch.eye(2 * batch_size, device=z.device, dtype=torch.bool)
-    sim.masked_fill_(mask, float("-inf"))
+    return pos_loss, neg_loss, pos_sim.mean().item(), neg_sim.mean().item()
 
-    # Positive pairs: (i, i+batch) and (i+batch, i)
-    labels = torch.cat([
-        torch.arange(batch_size, 2 * batch_size, device=z.device),
-        torch.arange(0, batch_size, device=z.device),
-    ])
 
-    loss = F.cross_entropy(sim, labels)
-    return loss
+def graded_similarity_loss(z_a, z_b, target_sim):
+    """
+    Regression loss for graded similarity (STS-B).
+
+    Instead of binary same/different, train the model to produce
+    cosine similarity matching a continuous target (0-1).
+    This teaches the concept space proper distance geometry.
+
+    Args:
+        z_a, z_b: (batch, dim) L2-normalized vectors
+        target_sim: (batch,) target cosine similarity in [0, 1]
+    """
+    pred_sim = F.cosine_similarity(z_a, z_b)  # (batch,)
+    loss = F.mse_loss(pred_sim, target_sim)
+    return loss, pred_sim.mean().item()

@@ -40,6 +40,20 @@ checkpoints/
 # Logs
 logs/*.log
 
+# Animation temp frames and caches (regenerable)
+logs/umap_frames/
+logs/concept_cache/
+logs/tracking/
+
+# Videos (too large for git)
+logs/plots/*.mp4
+
+# Pair datasets (regenerable with build_pairs.py)
+data/pairs/
+
+# Training PID file
+.train_pid
+
 # IDE
 .vscode/
 .idea/

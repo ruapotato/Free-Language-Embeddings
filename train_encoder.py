@@ -21,7 +21,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from pathlib import Path
-from encoder_model import EncoderConfig, SemanticEncoder, nt_xent_loss
+from encoder_model import (EncoderConfig, SemanticEncoder,
+                          adaptive_contrastive_loss, graded_similarity_loss)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -42,21 +43,26 @@ ENCODER_CONFIG = dict(
 )
 
 # Training hyperparameters
-BATCH_SIZE = 256
+BATCH_SIZE = 192
 PEAK_LR = 3e-4
 WARMUP_STEPS = 1000
 TOTAL_STEPS = 100_000
-TEMPERATURE = 0.07
 WEIGHT_DECAY = 0.01
 BETAS = (0.9, 0.999)
 GRAD_CLIP = 1.0
+NEG_BATCH_SIZE = 192       # negative pairs per step
+POS_TARGET = 0.9           # pull positive pairs above this
+NEG_TARGET = 0.3           # push negative pairs below this
+NEG_WEIGHT = 2.0           # weight negative loss vs positive loss
+GRADED_WEIGHT = 0.5        # weight for graded similarity regression loss
+GRADED_BATCH_SIZE = 96     # graded pairs per step
 
 # Logging
 LOG_EVERY = 50
 EVAL_EVERY = 500
-SAMPLE_EVERY = 5000
-CHECKPOINT_EVERY = 5000
-UMAP_EVERY = 5000
+SAMPLE_EVERY = 1000
+CHECKPOINT_EVERY = 2000
+UMAP_EVERY = 500
 
 LOG_PATHS = {
     "log": f"{LOG_DIR}/encoder_v4.log",
@@ -124,17 +130,23 @@ class PairDataset:
     """Loads paraphrase pairs from data/pairs/*.jsonl.
 
     Each line: {"text_a": "...", "text_b": "...", "label": 1/0, "source": "..."}
-    label=1 means paraphrase (positive pair), label=0 means non-paraphrase.
-    We only use label=1 pairs for training (negatives come from in-batch).
+    Loads both positive (label=1) and negative (label=0) pairs.
+    Negatives include hard negatives from PAWS and non-paraphrases from QQP/MRPC.
     """
 
     def __init__(self, tokenizer, max_len=128):
         self.tokenizer = tokenizer
         self.max_len = max_len
-        self.pairs = []
+        self.pos_pairs = []
+        self.neg_pairs = []
+        self.graded_pairs = []  # (text_a, text_b, sim_score)
         self._load_pairs()
-        random.shuffle(self.pairs)
-        self.idx = 0
+        random.shuffle(self.pos_pairs)
+        random.shuffle(self.neg_pairs)
+        random.shuffle(self.graded_pairs)
+        self.pos_idx = 0
+        self.neg_idx = 0
+        self.graded_idx = 0
 
     def _load_pairs(self):
         data_dir = Path("data/pairs")
@@ -142,20 +154,96 @@ class PairDataset:
             log(f"WARNING: {data_dir} not found")
             return
 
+        # Load per-source so we can balance
+        pos_by_source = {}
+        neg_by_source = {}
+
+        graded_pairs_raw = []
+
         for path in sorted(data_dir.glob("*.jsonl")):
-            count = 0
+            if path.name.startswith("eval_"):
+                continue
+            source = path.stem
+            pos_by_source[source] = []
+            neg_by_source[source] = []
+            graded_count = 0
             with open(path) as f:
                 for line in f:
                     try:
                         doc = json.loads(line)
-                        if doc.get("label", 1) == 1:  # positive pairs only
-                            self.pairs.append((doc["text_a"], doc["text_b"]))
-                            count += 1
+                        label = doc.get("label", 1)
+                        pair_type = doc.get("type", "")
+
+                        # Graded pairs (STS-B) go to separate pool
+                        # Only keep clearly similar (>0.7) or clearly different (<0.3)
+                        # The middle zone (0.3-0.7) fights the margin-based losses
+                        if "sim_score" in doc:
+                            score = doc["sim_score"]
+                            if score > 0.7 or score < 0.3:
+                                graded_pairs_raw.append(
+                                    (doc["text_a"], doc["text_b"], score))
+                                graded_count += 1
+                            continue
+
+                        pair = (doc["text_a"], doc["text_b"])
+                        if label == 1:
+                            pos_by_source[source].append(pair)
+                        else:
+                            neg_by_source[source].append(pair)
                     except (json.JSONDecodeError, KeyError):
                         continue
-            log(f"  Loaded {count:,} pairs from {path.name}")
+            pos_n = len(pos_by_source[source])
+            neg_n = len(neg_by_source[source])
+            extra = f" + {graded_count:,} graded" if graded_count else ""
+            log(f"  {path.name}: {pos_n:,} pos + {neg_n:,} neg{extra}")
 
-        log(f"  Total training pairs: {len(self.pairs):,}")
+        # Balance positives: cap each source, oversample small sources
+        # Target: roughly equal representation per source
+        pos_counts = {s: len(p) for s, p in pos_by_source.items() if p}
+        if pos_counts:
+            median_count = sorted(pos_counts.values())[len(pos_counts) // 2]
+            target_per_source = min(median_count * 2, 100_000)
+            for source, pairs in pos_by_source.items():
+                if not pairs:
+                    continue
+                if len(pairs) > target_per_source:
+                    # Downsample large sources
+                    random.shuffle(pairs)
+                    sampled = pairs[:target_per_source]
+                elif len(pairs) < target_per_source // 2:
+                    # Oversample small sources
+                    repeats = (target_per_source // len(pairs)) + 1
+                    sampled = (pairs * repeats)[:target_per_source]
+                else:
+                    sampled = pairs
+                self.pos_pairs.extend(sampled)
+                log(f"    pos balanced: {source} {len(pairs):,} → {len(sampled):,}")
+
+        # Balance negatives: oversample PAWS hard negatives
+        neg_counts = {s: len(p) for s, p in neg_by_source.items() if p}
+        if neg_counts:
+            target_neg = max(neg_counts.values())
+            for source, pairs in neg_by_source.items():
+                if not pairs:
+                    continue
+                if source == "paws":
+                    # PAWS hard negatives are the most valuable — oversample heavily
+                    repeats = (target_neg // len(pairs)) + 1
+                    sampled = (pairs * repeats)[:target_neg]
+                else:
+                    sampled = pairs
+                self.neg_pairs.extend(sampled)
+                log(f"    neg balanced: {source} {len(pairs):,} → {len(sampled):,}")
+
+        # Graded pairs: oversample STS-B since it's small but valuable
+        if graded_pairs_raw:
+            target_graded = max(50_000, len(graded_pairs_raw))
+            repeats = (target_graded // len(graded_pairs_raw)) + 1
+            self.graded_pairs = (graded_pairs_raw * repeats)[:target_graded]
+            log(f"    graded: {len(graded_pairs_raw):,} → {len(self.graded_pairs):,}")
+
+        log(f"  Balanced total: {len(self.pos_pairs):,} pos, {len(self.neg_pairs):,} neg, "
+            f"{len(self.graded_pairs):,} graded")
 
     def get_batch(self, batch_size):
         """Get a batch of tokenized positive pairs."""
@@ -163,13 +251,13 @@ class PairDataset:
         texts_b = []
 
         for _ in range(batch_size):
-            if self.idx >= len(self.pairs):
-                random.shuffle(self.pairs)
-                self.idx = 0
-            a, b = self.pairs[self.idx]
+            if self.pos_idx >= len(self.pos_pairs):
+                random.shuffle(self.pos_pairs)
+                self.pos_idx = 0
+            a, b = self.pos_pairs[self.pos_idx]
             texts_a.append(a)
             texts_b.append(b)
-            self.idx += 1
+            self.pos_idx += 1
 
         enc_a = self.tokenizer(texts_a, max_length=self.max_len,
                                padding=True, truncation=True,
@@ -179,6 +267,58 @@ class PairDataset:
                                return_tensors="pt")
 
         return enc_a, enc_b
+
+    def get_neg_batch(self, batch_size):
+        """Get a batch of tokenized negative pairs (hard negatives)."""
+        if not self.neg_pairs:
+            return None, None
+        texts_a = []
+        texts_b = []
+
+        for _ in range(batch_size):
+            if self.neg_idx >= len(self.neg_pairs):
+                random.shuffle(self.neg_pairs)
+                self.neg_idx = 0
+            a, b = self.neg_pairs[self.neg_idx]
+            texts_a.append(a)
+            texts_b.append(b)
+            self.neg_idx += 1
+
+        enc_a = self.tokenizer(texts_a, max_length=self.max_len,
+                               padding=True, truncation=True,
+                               return_tensors="pt")
+        enc_b = self.tokenizer(texts_b, max_length=self.max_len,
+                               padding=True, truncation=True,
+                               return_tensors="pt")
+
+        return enc_a, enc_b
+
+    def get_graded_batch(self, batch_size):
+        """Get a batch of graded similarity pairs with target scores."""
+        if not self.graded_pairs:
+            return None, None, None
+        texts_a = []
+        texts_b = []
+        scores = []
+
+        for _ in range(batch_size):
+            if self.graded_idx >= len(self.graded_pairs):
+                random.shuffle(self.graded_pairs)
+                self.graded_idx = 0
+            a, b, score = self.graded_pairs[self.graded_idx]
+            texts_a.append(a)
+            texts_b.append(b)
+            scores.append(score)
+            self.graded_idx += 1
+
+        enc_a = self.tokenizer(texts_a, max_length=self.max_len,
+                               padding=True, truncation=True,
+                               return_tensors="pt")
+        enc_b = self.tokenizer(texts_b, max_length=self.max_len,
+                               padding=True, truncation=True,
+                               return_tensors="pt")
+
+        return enc_a, enc_b, torch.tensor(scores, dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +355,7 @@ def eval_geometry(model, eval_pairs, tokenizer, device="cuda", max_pairs=500):
     para_sims = []
     nonpara_sims = []
     crosslingual_sims = []
+    crosslingual_neg_sims = []
     hard_neg_sims = []
 
     for source, pairs in eval_pairs.items():
@@ -230,6 +371,8 @@ def eval_geometry(model, eval_pairs, tokenizer, device="cuda", max_pairs=500):
 
             if pair_type == "crosslingual":
                 crosslingual_sims.append(sim)
+            elif pair_type == "crosslingual_neg":
+                crosslingual_neg_sims.append(sim)
             elif pair_type == "hard_negative":
                 hard_neg_sims.append(sim)
             elif label == 1:
@@ -250,7 +393,85 @@ def eval_geometry(model, eval_pairs, tokenizer, device="cuda", max_pairs=500):
         "nonpara_sim": nonpara_sim,
         "sep_ratio": sep_ratio,
         "crosslingual_sim": safe_mean(crosslingual_sims),
+        "crosslingual_neg_sim": safe_mean(crosslingual_neg_sims, 0.5),
         "hard_neg_sim": safe_mean(hard_neg_sims),
+    }
+
+
+@torch.no_grad()
+def eval_concept_geometry(model, tokenizer, device="cuda"):
+    """Evaluate concept space geometry quality.
+
+    Tests clustering, directional consistency, and analogies.
+    Returns summary metrics that track concept quality over training.
+    """
+    model.eval()
+
+    def encode(text):
+        enc = tokenizer(text, max_length=128, padding=True,
+                        truncation=True, return_tensors="pt").to(device)
+        vec = model(enc["input_ids"], enc["attention_mask"])
+        return vec.cpu().numpy()[0]
+
+    def cos(a, b):
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+
+    # 1. Clustering: within-group vs between-group similarity
+    groups = {
+        "animals": ["a cat", "a dog", "a bird", "a fish"],
+        "vehicles": ["a car", "a truck", "a bus", "a train"],
+        "emotions": ["I am happy", "I am sad", "I am angry", "I am scared"],
+    }
+    group_vecs = {name: [encode(p) for p in phrases]
+                  for name, phrases in groups.items()}
+
+    within_sims = []
+    between_sims = []
+    for name, vecs in group_vecs.items():
+        for i in range(len(vecs)):
+            for j in range(i + 1, len(vecs)):
+                within_sims.append(cos(vecs[i], vecs[j]))
+        centroid = np.mean(vecs, axis=0)
+        for other_name, other_vecs in group_vecs.items():
+            if other_name != name:
+                other_centroid = np.mean(other_vecs, axis=0)
+                between_sims.append(cos(centroid, other_centroid))
+
+    cluster_ratio = np.mean(within_sims) / max(np.mean(between_sims), 0.01)
+
+    # 2. Directional consistency: "big X" - "X" should be consistent
+    size_pairs = [("a cat", "a big cat"), ("a dog", "a big dog"),
+                  ("a house", "a big house"), ("a car", "a big car")]
+    deltas = []
+    for base, modified in size_pairs:
+        vb = encode(base)
+        vm = encode(modified)
+        d = vm - vb
+        d = d / (np.linalg.norm(d) + 1e-8)
+        deltas.append(d)
+    dir_sims = [cos(deltas[i], deltas[j])
+                for i in range(len(deltas)) for j in range(i + 1, len(deltas))]
+    direction_consistency = float(np.mean(dir_sims))
+
+    # 3. Analogies: king-man+woman≈queen, big cat - cat + dog ≈ big dog
+    analogies = [
+        ("a big cat", "a cat", "a dog", "a big dog"),
+        ("he is happy", "he", "she", "she is happy"),
+        ("a hot day", "hot", "cold", "a cold day"),
+    ]
+    analogy_sims = []
+    for a, b, c, d in analogies:
+        va, vb, vc, vd = encode(a), encode(b), encode(c), encode(d)
+        result = va - vb + vc
+        result = result / (np.linalg.norm(result) + 1e-8)
+        analogy_sims.append(cos(result, vd))
+    analogy_score = float(np.mean(analogy_sims))
+
+    model.train()
+    return {
+        "cluster_ratio": cluster_ratio,
+        "direction_consistency": direction_consistency,
+        "analogy_score": analogy_score,
     }
 
 
@@ -274,58 +495,86 @@ def load_eval_pairs():
     return eval_pairs
 
 
+def build_tracking_set(eval_pairs, max_per_source=50):
+    """Build a fixed set of sentences to track across training.
+
+    Returns list of (text_a, text_b, pair_type) — same order every time.
+    Includes concept-probing pairs so the animation shows geometry evolution.
+    """
+    tracking = []
+    for source, pairs in sorted(eval_pairs.items()):
+        for text_a, text_b, label, pair_type in pairs[:max_per_source]:
+            tracking.append((text_a, text_b, pair_type))
+
+    # Diagnostic pairs
+    diag_types = ["paraphrase", "paraphrase", "paraphrase",
+                  "crosslingual", "non_paraphrase", "hard_negative"]
+    for (text_a, text_b), ptype in zip(DIAGNOSTIC_PAIRS, diag_types):
+        tracking.append((text_a, text_b, ptype))
+
+    # Concept geometry pairs — these are what we really want to see evolve
+    concept_pairs = [
+        # Animal cluster
+        ("a cat", "a dog", "concept_cluster"),
+        ("a cat", "a bird", "concept_cluster"),
+        ("a dog", "a bird", "concept_cluster"),
+        # Vehicle cluster
+        ("a car", "a truck", "concept_cluster"),
+        ("a car", "a bus", "concept_cluster"),
+        # Cross-cluster (should be far apart)
+        ("a cat", "a car", "concept_cross"),
+        ("a dog", "a truck", "concept_cross"),
+        ("I am happy", "a car", "concept_cross"),
+        # Size direction
+        ("a cat", "a big cat", "concept_size"),
+        ("a dog", "a big dog", "concept_size"),
+        ("a house", "a big house", "concept_size"),
+        # Emotion direction
+        ("I am happy", "I am sad", "concept_emotion"),
+        ("I am happy", "I am angry", "concept_emotion"),
+        # Analogies
+        ("a big cat", "a big dog", "concept_analogy"),
+        ("a small cat", "a small dog", "concept_analogy"),
+    ]
+    for a, b, ptype in concept_pairs:
+        tracking.append((a, b, ptype))
+
+    return tracking
+
+
 @torch.no_grad()
-def generate_umap(model, eval_pairs, tokenizer, step, device="cuda"):
-    """Generate UMAP visualization of concept vectors."""
-    try:
-        import umap
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        return
-
+def save_tracking_vectors(model, tracking_set, tokenizer, step, device="cuda"):
+    """Save concept vectors for the fixed tracking set. Fast — just forward passes."""
     model.eval()
-    vectors = []
-    labels = []
+    vecs_a = []
+    vecs_b = []
 
-    # Collect vectors from eval pairs
-    all_texts = []
-    for source, pairs in eval_pairs.items():
-        for text_a, text_b, label, pair_type in pairs[:250]:
-            all_texts.append((text_a, source))
-            all_texts.append((text_b, source))
+    # Batch encode for speed
+    all_texts_a = [t[0] for t in tracking_set]
+    all_texts_b = [t[1] for t in tracking_set]
 
-    if len(all_texts) < 50:
-        return
+    batch_size = 64
+    for start in range(0, len(all_texts_a), batch_size):
+        end = min(start + batch_size, len(all_texts_a))
 
-    for text, source in all_texts[:1000]:
-        enc = tokenizer(text, max_length=128, padding=True,
-                        truncation=True, return_tensors="pt").to(device)
-        vec = model(enc["input_ids"], enc["attention_mask"])
-        vectors.append(vec.cpu().numpy()[0])
-        labels.append(source)
+        enc_a = tokenizer(all_texts_a[start:end], max_length=128,
+                          padding=True, truncation=True, return_tensors="pt").to(device)
+        enc_b = tokenizer(all_texts_b[start:end], max_length=128,
+                          padding=True, truncation=True, return_tensors="pt").to(device)
 
-    vectors = np.array(vectors)
-    reducer = umap.UMAP(n_components=2, random_state=42)
-    embedding = reducer.fit_transform(vectors)
+        va = model(enc_a["input_ids"], enc_a["attention_mask"]).cpu().numpy()
+        vb = model(enc_b["input_ids"], enc_b["attention_mask"]).cpu().numpy()
+        vecs_a.append(va)
+        vecs_b.append(vb)
 
-    plt.figure(figsize=(10, 8))
-    unique_labels = list(set(labels))
-    colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
-    for i, label in enumerate(unique_labels):
-        mask = [l == label for l in labels]
-        pts = embedding[mask]
-        plt.scatter(pts[:, 0], pts[:, 1], c=[colors[i]], s=5, alpha=0.5, label=label)
-    plt.legend(fontsize=8, markerscale=3)
-    plt.title(f"Concept Vector UMAP — Step {step:,}")
+    vecs_a = np.concatenate(vecs_a, axis=0)
+    vecs_b = np.concatenate(vecs_b, axis=0)
 
-    umap_dir = Path("logs/umap")
-    umap_dir.mkdir(parents=True, exist_ok=True)
-    path = umap_dir / f"step_{step:06d}.png"
-    plt.savefig(path, dpi=100, bbox_inches="tight")
-    plt.close()
-    log(f"  UMAP saved: {path}")
+    track_dir = Path("logs/tracking")
+    track_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(track_dir / f"step_{step:06d}.npz",
+                        vecs_a=vecs_a, vecs_b=vecs_b, step=step)
+    log(f"  Tracking vectors saved (step {step})")
     model.train()
 
 
@@ -452,7 +701,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
             log(f"\n  Para sim:        {metrics['para_sim']:.4f} (target >0.95)")
             log(f"  Non-para sim:    {metrics['nonpara_sim']:.4f} (target <0.30)")
             log(f"  Separation:      {metrics['sep_ratio']:.4f} (target >3.0)")
-            log(f"  Cross-lingual:   {metrics['crosslingual_sim']:.4f} (target >0.90)")
+            log(f"  Cross-lingual+:  {metrics['crosslingual_sim']:.4f} (target >0.90)")
+            log(f"  Cross-lingual-:  {metrics['crosslingual_neg_sim']:.4f} (target <0.30)")
             log(f"  Hard negative:   {metrics['hard_neg_sim']:.4f} (target <0.40)")
         return
 
@@ -466,9 +716,23 @@ def train(resume_from=None, fresh=False, eval_only=False):
     # Data
     log("Loading training pairs...")
     dataset = PairDataset(tokenizer, max_len=config.max_seq_len)
-    if len(dataset.pairs) == 0:
+    if len(dataset.pos_pairs) == 0:
         log("ERROR: No training pairs found. Run build_pairs.py first.")
         return
+
+    # Build tracking set for animation
+    tracking_set = build_tracking_set(eval_pairs)
+    log(f"  Tracking {len(tracking_set)} pairs for animation")
+
+    # Save initial vectors (random weights — step 0)
+    save_tracking_vectors(model, tracking_set, tokenizer, 0, device)
+
+    # Save tracking metadata once
+    track_dir = Path("logs/tracking")
+    track_dir.mkdir(parents=True, exist_ok=True)
+    with open(track_dir / "metadata.json", "w") as f:
+        meta = [{"text_a": a, "text_b": b, "type": t} for a, b, t in tracking_set]
+        json.dump(meta, f)
 
     # Run initial diagnostics
     log("\n--- INITIAL DIAGNOSTICS (random weights) ---")
@@ -491,9 +755,12 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
     log(f"\nTraining plan:")
     log(f"  Model: {config.hidden_size}h × {config.num_layers}L × {config.num_heads}heads → {config.output_dim}d")
-    log(f"  Batch size: {BATCH_SIZE} | Temperature: {TEMPERATURE}")
+    log(f"  Batch size: {BATCH_SIZE} (pos) + {NEG_BATCH_SIZE} (neg)")
     log(f"  Peak LR: {PEAK_LR} | Steps: {start_step} → {TOTAL_STEPS}")
-    log(f"  Training pairs: {len(dataset.pairs):,}")
+    log(f"  Positive pairs: {len(dataset.pos_pairs):,}")
+    log(f"  Negative pairs: {len(dataset.neg_pairs):,}")
+    log(f"  Graded pairs:  {len(dataset.graded_pairs):,}")
+    log(f"  Targets: pos_sim>{POS_TARGET} neg_sim<{NEG_TARGET} | neg_weight={NEG_WEIGHT} | graded_weight={GRADED_WEIGHT}")
     log("-" * 70)
 
     for step in range(start_step, TOTAL_STEPS):
@@ -505,19 +772,52 @@ def train(resume_from=None, fresh=False, eval_only=False):
         for pg in optimizer.param_groups:
             pg["lr"] = current_lr
 
-        # Get batch
+        # Get positive batch
         enc_a, enc_b = dataset.get_batch(BATCH_SIZE)
         ids_a = enc_a["input_ids"].to(device)
         mask_a = enc_a["attention_mask"].to(device)
         ids_b = enc_b["input_ids"].to(device)
         mask_b = enc_b["attention_mask"].to(device)
 
-        # Forward + loss
+        # Get negative batch
+        neg_enc_a, neg_enc_b = dataset.get_neg_batch(NEG_BATCH_SIZE)
+        neg_ids_a = neg_enc_a["input_ids"].to(device)
+        neg_mask_a = neg_enc_a["attention_mask"].to(device)
+        neg_ids_b = neg_enc_b["input_ids"].to(device)
+        neg_mask_b = neg_enc_b["attention_mask"].to(device)
+
+        # Get graded batch (STS-B)
+        graded_enc_a, graded_enc_b, graded_targets = \
+            dataset.get_graded_batch(GRADED_BATCH_SIZE)
+
+        # Forward + unified adaptive loss
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", dtype=torch.float16):
-            z_a = model(ids_a, mask_a)
-            z_b = model(ids_b, mask_b)
-            loss = nt_xent_loss(z_a, z_b, temperature=TEMPERATURE)
+            z_pos_a = model(ids_a, mask_a)
+            z_pos_b = model(ids_b, mask_b)
+            z_neg_a = model(neg_ids_a, neg_mask_a)
+            z_neg_b = model(neg_ids_b, neg_mask_b)
+
+            pos_loss, neg_loss, batch_pos_sim, batch_neg_sim = \
+                adaptive_contrastive_loss(z_pos_a, z_pos_b, z_neg_a, z_neg_b,
+                                          pos_target=POS_TARGET,
+                                          neg_target=NEG_TARGET)
+            loss = pos_loss + NEG_WEIGHT * neg_loss
+
+            # Graded similarity regression loss
+            g_loss_val = 0.0
+            if graded_targets is not None:
+                g_ids_a = graded_enc_a["input_ids"].to(device)
+                g_mask_a = graded_enc_a["attention_mask"].to(device)
+                g_ids_b = graded_enc_b["input_ids"].to(device)
+                g_mask_b = graded_enc_b["attention_mask"].to(device)
+                g_targets = graded_targets.to(device)
+
+                z_g_a = model(g_ids_a, g_mask_a)
+                z_g_b = model(g_ids_b, g_mask_b)
+                g_loss, _ = graded_similarity_loss(z_g_a, z_g_b, g_targets)
+                loss = loss + GRADED_WEIGHT * g_loss
+                g_loss_val = g_loss.item()
 
         if torch.isnan(loss):
             log(f"NaN loss at step {step}, skipping")
@@ -530,6 +830,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
         scaler.update()
 
         loss_val = loss.item()
+        pos_loss_val = pos_loss.item()
+        neg_loss_val = neg_loss.item()
         losses.append(loss_val)
 
         # Log
@@ -538,17 +840,25 @@ def train(resume_from=None, fresh=False, eval_only=False):
             avg_loss = sum(losses[-100:]) / len(losses[-100:])
             hours = elapsed / 3600
             pct = (step + 1) / TOTAL_STEPS * 100
-            log(f"step {step+1:>7d} | loss {avg_loss:.4f} | "
-                f"lr {current_lr:.2e} | {pct:.1f}% | {hours:.1f}h")
+            g_str = f" g={g_loss_val:.3f}" if g_loss_val > 0 else ""
+            log(f"step {step+1:>7d} | loss {avg_loss:.4f} "
+                f"(pos={pos_loss_val:.3f} neg={neg_loss_val:.3f}{g_str}) | "
+                f"p_sim={batch_pos_sim:.3f} n_sim={batch_neg_sim:.3f} | "
+                f"lr {current_lr:.2e} | {pct:.1f}%")
 
         # Eval geometry
         if (step + 1) % EVAL_EVERY == 0 and eval_pairs:
             metrics = eval_geometry(model, eval_pairs, tokenizer, device)
+            concept = eval_concept_geometry(model, tokenizer, device)
             log(f"  EVAL: para={metrics['para_sim']:.3f} "
                 f"non={metrics['nonpara_sim']:.3f} "
                 f"sep={metrics['sep_ratio']:.2f} "
-                f"xlang={metrics['crosslingual_sim']:.3f} "
+                f"xlang+={metrics['crosslingual_sim']:.3f} "
+                f"xlang-={metrics['crosslingual_neg_sim']:.3f} "
                 f"hard={metrics['hard_neg_sim']:.3f}")
+            log(f"  CONCEPT: cluster={concept['cluster_ratio']:.2f} "
+                f"direction={concept['direction_consistency']:.3f} "
+                f"analogy={concept['analogy_score']:.3f}")
             elapsed = time.time() - start_time
             avg_loss = sum(losses[-100:]) / len(losses[-100:])
             log_metrics(step + 1, avg_loss, metrics["para_sim"],
@@ -563,9 +873,9 @@ def train(resume_from=None, fresh=False, eval_only=False):
             for a, b, sim in results:
                 log(f"  {sim:+.4f}  {a}  ↔  {b}")
 
-        # UMAP
-        if (step + 1) % UMAP_EVERY == 0 and eval_pairs:
-            generate_umap(model, eval_pairs, tokenizer, step + 1, device)
+        # Save tracking vectors for animation
+        if (step + 1) % UMAP_EVERY == 0:
+            save_tracking_vectors(model, tracking_set, tokenizer, step + 1, device)
 
         # Checkpoint
         if (step + 1) % CHECKPOINT_EVERY == 0:

@@ -190,7 +190,11 @@ def build_mrpc():
 # ---------------------------------------------------------------------------
 
 def build_europarl():
-    """Download EuroParl EN-FR — cross-lingual pairs. Public Domain."""
+    """Download EuroParl EN-FR — cross-lingual pairs. Public Domain.
+
+    Creates both positive (matching translations) and negative (mismatched)
+    cross-lingual pairs so the model can't cheat with "EN+FR = same meaning".
+    """
     out_path = DATA_DIR / "europarl.jsonl"
     eval_path = DATA_DIR / "eval_europarl.jsonl"
     if out_path.exists() and out_path.stat().st_size > 0:
@@ -214,32 +218,65 @@ def build_europarl():
         log("  WARNING: Could not load EuroParl, skipping.")
         return
 
-    count = 0
-    eval_count = 0
-    max_pairs = 200_000  # Cap to keep dataset balanced
+    # First pass: collect all pairs into memory
+    all_en = []
+    all_fr = []
+    max_collect = 200_000
+
+    for sample in ds:
+        translation = sample.get("translation", {})
+        text_en = translation.get("en", "").strip()
+        text_fr = translation.get("fr", "").strip()
+
+        if len(text_en) < 10 or len(text_fr) < 10:
+            continue
+        if len(text_en) > 500:
+            continue
+
+        all_en.append(text_en)
+        all_fr.append(text_fr)
+
+        if len(all_en) >= max_collect:
+            break
+
+    log(f"  Collected {len(all_en):,} EN-FR pairs")
+
+    # Create negative pairs by shuffling the French side
+    fr_shuffled = list(range(len(all_fr)))
+    random.shuffle(fr_shuffled)
+    # Ensure no pair maps to itself
+    for i in range(len(fr_shuffled)):
+        if fr_shuffled[i] == i:
+            swap = (i + 1) % len(fr_shuffled)
+            fr_shuffled[i], fr_shuffled[swap] = fr_shuffled[swap], fr_shuffled[i]
+
+    pos_count = 0
+    neg_count = 0
+    eval_pos = 0
+    eval_neg = 0
 
     with open(out_path, "w") as f, open(eval_path, "w") as ef:
-        for sample in ds:
-            translation = sample.get("translation", {})
-            text_en = translation.get("en", "")
-            text_fr = translation.get("fr", "")
+        for i in range(len(all_en)):
+            is_eval = random.random() < EVAL_FRACTION
+            target = ef if is_eval else f
 
-            if len(text_en) < 10 or len(text_fr) < 10:
-                continue
-            if len(text_en) > 500:  # Skip very long parliamentary speeches
-                continue
+            # Positive: matching translation
+            if write_pair(target, all_en[i], all_fr[i], 1, "crosslingual", "europarl"):
+                if is_eval:
+                    eval_pos += 1
+                else:
+                    pos_count += 1
 
-            if random.random() < EVAL_FRACTION:
-                if write_pair(ef, text_en, text_fr, 1, "crosslingual", "europarl"):
-                    eval_count += 1
-            else:
-                if write_pair(f, text_en, text_fr, 1, "crosslingual", "europarl"):
-                    count += 1
+            # Negative: mismatched translation (1:1 ratio with positives)
+            j = fr_shuffled[i]
+            if write_pair(target, all_en[i], all_fr[j], 0, "crosslingual_neg", "europarl"):
+                if is_eval:
+                    eval_neg += 1
+                else:
+                    neg_count += 1
 
-            if count + eval_count >= max_pairs:
-                break
-
-    log(f"  EuroParl: {count:,} train + {eval_count:,} eval")
+    log(f"  EuroParl: {pos_count:,} pos + {neg_count:,} neg train, "
+        f"{eval_pos:,} pos + {eval_neg:,} neg eval")
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +331,140 @@ def build_wikimatrix():
 
 
 # ---------------------------------------------------------------------------
+# Source: STS-B (Semantic Textual Similarity Benchmark)
+# ---------------------------------------------------------------------------
+
+def build_stsb():
+    """Download STS-B — graded similarity scores 0-5. CC-BY-SA.
+
+    Unlike binary paraphrase data, STS-B provides continuous similarity
+    scores that teach the model graded semantic distance.
+    """
+    out_path = DATA_DIR / "stsb.jsonl"
+    eval_path = DATA_DIR / "eval_stsb.jsonl"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        log(f"STS-B already exists ({count_lines(out_path):,} pairs), skipping.")
+        return
+
+    log("Building STS-B...")
+    from datasets import load_dataset
+
+    ds = load_dataset("glue", "stsb")
+
+    count = 0
+    eval_count = 0
+    with open(out_path, "w") as f, open(eval_path, "w") as ef:
+        for split in ["train", "validation", "test"]:
+            if split not in ds:
+                continue
+            for sample in ds[split]:
+                text_a = sample["sentence1"]
+                text_b = sample["sentence2"]
+                score = sample["label"]  # float 0-5
+
+                # Normalize to 0-1 for the model
+                sim_target = score / 5.0
+
+                doc = {
+                    "text_a": text_a.strip(),
+                    "text_b": text_b.strip(),
+                    "label": 1 if sim_target > 0.6 else 0,
+                    "sim_score": round(sim_target, 4),
+                    "type": "graded",
+                    "source": "stsb",
+                }
+
+                if len(doc["text_a"]) < 5 or len(doc["text_b"]) < 5:
+                    continue
+
+                target = ef if random.random() < EVAL_FRACTION else f
+                target.write(json.dumps(doc, ensure_ascii=False) + "\n")
+                if target == ef:
+                    eval_count += 1
+                else:
+                    count += 1
+
+    log(f"  STS-B: {count:,} train + {eval_count:,} eval")
+
+
+# ---------------------------------------------------------------------------
+# Source: NLI (SNLI + MultiNLI)
+# ---------------------------------------------------------------------------
+
+def build_nli():
+    """Download SNLI + MultiNLI — entailment/contradiction pairs.
+
+    Entailment pairs → positive (same meaning direction)
+    Contradiction pairs → hard negative (explicitly opposite)
+    Neutral pairs → weak negative (unrelated)
+    """
+    out_path = DATA_DIR / "nli.jsonl"
+    eval_path = DATA_DIR / "eval_nli.jsonl"
+    if out_path.exists() and out_path.stat().st_size > 0:
+        log(f"NLI already exists ({count_lines(out_path):,} pairs), skipping.")
+        return
+
+    log("Building NLI (SNLI + MultiNLI)...")
+    from datasets import load_dataset
+
+    count = 0
+    eval_count = 0
+    label_counts = {"entailment": 0, "contradiction": 0, "neutral": 0}
+
+    with open(out_path, "w") as f, open(eval_path, "w") as ef:
+        for ds_name in ["snli", "multi_nli"]:
+            log(f"  Loading {ds_name}...")
+            try:
+                ds = load_dataset(ds_name)
+            except Exception as e:
+                log(f"  WARNING: Could not load {ds_name}: {e}")
+                continue
+
+            for split in ["train", "validation", "validation_matched"]:
+                if split not in ds:
+                    continue
+                for sample in ds[split]:
+                    nli_label = sample["label"]  # 0=entailment, 1=neutral, 2=contradiction
+                    if nli_label == -1:  # skip unlabeled
+                        continue
+
+                    text_a = sample["premise"]
+                    text_b = sample["hypothesis"]
+
+                    if len(text_a.strip()) < 5 or len(text_b.strip()) < 5:
+                        continue
+
+                    if nli_label == 0:
+                        pair_type = "entailment"
+                        label = 1
+                    elif nli_label == 2:
+                        pair_type = "contradiction"
+                        label = 0
+                    else:
+                        pair_type = "neutral"
+                        label = 0
+
+                    doc = {
+                        "text_a": text_a.strip(),
+                        "text_b": text_b.strip(),
+                        "label": label,
+                        "type": pair_type,
+                        "source": ds_name,
+                    }
+
+                    target = ef if random.random() < EVAL_FRACTION else f
+                    target.write(json.dumps(doc, ensure_ascii=False) + "\n")
+                    if target == ef:
+                        eval_count += 1
+                    else:
+                        count += 1
+                    label_counts[pair_type] = label_counts.get(pair_type, 0) + 1
+
+    log(f"  NLI: {count:,} train + {eval_count:,} eval")
+    log(f"  Breakdown: {label_counts}")
+
+
+# ---------------------------------------------------------------------------
 # Status and main
 # ---------------------------------------------------------------------------
 
@@ -303,6 +474,8 @@ SOURCES = {
     "mrpc":       ("MRPC (news paraphrases)", "Permissive", build_mrpc),
     "europarl":   ("EuroParl EN-FR",          "Public Domain", build_europarl),
     "wikimatrix": ("WikiMatrix EN-FR",        "CC-BY-SA",   build_wikimatrix),
+    "stsb":       ("STS-B (graded sim)",      "CC-BY-SA",   build_stsb),
+    "nli":        ("SNLI+MultiNLI (entail)",  "CC-BY-SA",   build_nli),
 }
 
 

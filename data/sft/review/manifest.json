@@ -13,10 +13,10 @@
       "auto_rejected": 0
     },
     "stackexchange": {
-      "total": 185932,
-      "auto_approved": 82185,
-      "needs_review": 62914,
-      "auto_rejected": 40833
+      "total": 185938,
+      "auto_approved": 82188,
+      "needs_review": 62899,
+      "auto_rejected": 40851
     },
     "ubuntu": {
       "total": 61941,
@@ -26,14 +26,14 @@
     }
   },
   "totals": {
-    "auto_approved": 123793,
-    "auto_rejected": 45798,
-    "needs_review": 95303,
-    "total": 264894
+    "auto_approved": 123796,
+    "auto_rejected": 45816,
+    "needs_review": 95288,
+    "total": 264900
   },
   "batches": {
     "se_askubuntu": {
-      "count": 272,
+      "count": 274,
       "paths": [
         "needs_review/se_askubuntu/batch_0001.jsonl",
         "needs_review/se_askubuntu/batch_0002.jsonl",
@@ -306,7 +306,9 @@
         "needs_review/se_askubuntu/batch_0269.jsonl",
         "needs_review/se_askubuntu/batch_0270.jsonl",
         "needs_review/se_askubuntu/batch_0271.jsonl",
-        "needs_review/se_askubuntu/batch_0272.jsonl"
+        "needs_review/se_askubuntu/batch_0272.jsonl",
+        "needs_review/se_askubuntu/batch_0273.jsonl",
+        "needs_review/se_askubuntu/batch_0274.jsonl"
       ]
     },
     "se_other": {
@@ -537,7 +539,7 @@
       ]
     },
     "se_serverfault": {
-      "count": 236,
+      "count": 235,
       "paths": [
         "needs_review/se_serverfault/batch_0001.jsonl",
         "needs_review/se_serverfault/batch_0002.jsonl",
@@ -773,12 +775,11 @@
         "needs_review/se_serverfault/batch_0232.jsonl",
         "needs_review/se_serverfault/batch_0233.jsonl",
         "needs_review/se_serverfault/batch_0234.jsonl",
-        "needs_review/se_serverfault/batch_0235.jsonl",
-        "needs_review/se_serverfault/batch_0236.jsonl"
+        "needs_review/se_serverfault/batch_0235.jsonl"
       ]
     },
     "se_superuser": {
-      "count": 292,
+      "count": 291,
       "paths": [
         "needs_review/se_superuser/batch_0001.jsonl",
         "needs_review/se_superuser/batch_0002.jsonl",
@@ -1070,8 +1071,7 @@
         "needs_review/se_superuser/batch_0288.jsonl",
         "needs_review/se_superuser/batch_0289.jsonl",
         "needs_review/se_superuser/batch_0290.jsonl",
-        "needs_review/se_superuser/batch_0291.jsonl",
-        "needs_review/se_superuser/batch_0292.jsonl"
+        "needs_review/se_superuser/batch_0291.jsonl"
       ]
     },
     "se_unix": {
