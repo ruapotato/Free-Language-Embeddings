@@ -741,3 +741,131 @@ def per_slot_contrastive_loss(concepts, slot_id, labels, temperature=0.07):
     loss = -(log_prob * pos_mask.float()).sum() / pos_mask.sum()
 
     return loss
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V7 Losses — Flat Cosine + Margin + Per-Slot Paraphrase
+# ═══════════════════════════════════════════════════════════════════════
+
+def flat_similarity_matrix(concepts_a, concepts_b):
+    """
+    Flat cosine similarity on concatenated 1024-dim vectors.
+
+    Unlike slot_similarity_matrix (mean-of-per-slot-cosines), this treats
+    the full concept stack as one vector. Dead slots contribute near-zero
+    norm instead of +1.0 similarity, eliminating the similarity floor.
+
+    concepts_a: (B1, K, D)
+    concepts_b: (B2, K, D)
+    Returns: (B1, B2) similarity matrix
+    """
+    flat_a = F.normalize(concepts_a.view(concepts_a.shape[0], -1), p=2, dim=-1)
+    flat_b = F.normalize(concepts_b.view(concepts_b.shape[0], -1), p=2, dim=-1)
+    return torch.mm(flat_a, flat_b.T)
+
+
+def flat_info_nce_loss(concepts_a, concepts_b, temperature=0.07):
+    """
+    Symmetric InfoNCE using flat cosine similarity.
+    Replaces V6's slot_similarity_matrix-based NCE.
+
+    Returns: (loss, pos_sim_mean, neg_sim_mean)
+    """
+    sim_raw = flat_similarity_matrix(concepts_a, concepts_b)
+    sim_matrix = sim_raw / temperature
+    labels = torch.arange(sim_matrix.shape[0], device=sim_matrix.device)
+
+    loss = (F.cross_entropy(sim_matrix, labels) +
+            F.cross_entropy(sim_matrix.T, labels)) / 2
+
+    with torch.no_grad():
+        pos_sim = sim_raw.diag().mean().item()
+        mask = ~torch.eye(sim_raw.shape[0], dtype=torch.bool,
+                          device=sim_raw.device)
+        neg_sim = sim_raw[mask].mean().item()
+
+    return loss, pos_sim, neg_sim
+
+
+def flat_word_order_info_nce(concepts_orig, concepts_shuffled, temperature=0.07):
+    """
+    InfoNCE for word-order using flat cosine similarity.
+
+    Returns: (loss, wo_sim_mean)
+    """
+    B = concepts_orig.shape[0]
+
+    sim_orig_raw = flat_similarity_matrix(concepts_orig, concepts_orig)
+    sim_shuf_raw = flat_similarity_matrix(concepts_orig, concepts_shuffled)
+
+    sim_orig = sim_orig_raw / temperature
+    sim_shuf = sim_shuf_raw / temperature
+    sim_all = torch.cat([sim_orig, sim_shuf], dim=1)
+
+    labels = torch.arange(B, device=sim_all.device)
+    loss = F.cross_entropy(sim_all, labels)
+
+    with torch.no_grad():
+        wo_sim = sim_shuf_raw.diag().mean().item()
+
+    return loss, wo_sim
+
+
+def margin_paraphrase_loss(concepts_a, concepts_b, target_sim=0.85):
+    """
+    Margin loss: paraphrase pairs should have flat cosine > target_sim.
+    Explicit absolute target, not just relative ranking.
+
+    Returns: (loss, actual_sim_mean)
+    """
+    flat_a = F.normalize(concepts_a.view(concepts_a.shape[0], -1), p=2, dim=-1)
+    flat_b = F.normalize(concepts_b.view(concepts_b.shape[0], -1), p=2, dim=-1)
+    sim = (flat_a * flat_b).sum(dim=-1)  # (B,)
+    loss = F.relu(target_sim - sim).mean()
+    return loss, sim.mean().item()
+
+
+def margin_negative_loss(concepts_a, concepts_b, target_sim=0.3):
+    """
+    Margin loss: unrelated pairs should have flat cosine < target_sim.
+
+    Returns: (loss, actual_sim_mean)
+    """
+    flat_a = F.normalize(concepts_a.view(concepts_a.shape[0], -1), p=2, dim=-1)
+    flat_b = F.normalize(concepts_b.view(concepts_b.shape[0], -1), p=2, dim=-1)
+    sim = (flat_a * flat_b).sum(dim=-1)
+    loss = F.relu(sim - target_sim).mean()
+    return loss, sim.mean().item()
+
+
+def margin_word_order_loss(concepts_orig, concepts_shuffled, target_sim=0.5):
+    """
+    Margin loss: word-order swaps should have flat cosine < target_sim.
+
+    Returns: (loss, actual_sim_mean)
+    """
+    flat_a = F.normalize(concepts_orig.view(concepts_orig.shape[0], -1), p=2, dim=-1)
+    flat_b = F.normalize(concepts_shuffled.view(concepts_shuffled.shape[0], -1), p=2, dim=-1)
+    sim = (flat_a * flat_b).sum(dim=-1)
+    loss = F.relu(sim - target_sim).mean()
+    return loss, sim.mean().item()
+
+
+def per_slot_paraphrase_loss(concepts_a, concepts_b):
+    """
+    Per-slot paraphrase consistency on REAL text pairs.
+    For each of 32 slots, paraphrase pairs should produce similar slot vectors.
+
+    This bridges the gap between synthetic-only slot training and real text.
+
+    concepts_a: (B, K, D)
+    concepts_b: (B, K, D)
+    Returns: (loss, mean_slot_sim)
+    """
+    normed_a = F.normalize(concepts_a, p=2, dim=-1)  # (B, K, D)
+    normed_b = F.normalize(concepts_b, p=2, dim=-1)
+    # Per-slot cosine: (B, K)
+    slot_sims = (normed_a * normed_b).sum(dim=-1)
+    # Each slot should be close for paraphrases — target sim ~0.9
+    loss = F.relu(0.85 - slot_sims).mean()
+    return loss, slot_sims.mean().item()

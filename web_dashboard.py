@@ -53,9 +53,15 @@ def parse_step_data(log_path):
                         "scon": grab(r"scon=([\d.]+)", detail),
                         "xrecon": grab(r"xrecon=([\d.]+)", detail),
                         "sts": grab(r"sts=([\d.]+)", detail),
+                        # V7 fields
+                        "m_para": grab(r"m_para=([\d.]+)", detail),
+                        "m_neg": grab(r"m_neg=([\d.]+)", detail),
+                        "m_wo": grab(r"m_wo=([\d.]+)", detail),
+                        "sp": grab(r"sp=([\d.]+)", detail),
                         "p_sim": grab(r"p_sim=([\d.]+)", sim_part),
                         "n_sim": grab(r"n_sim=([\d.]+)", sim_part),
                         "wo_sim": grab(r"wo_sim=([\d.]+)", sim_part),
+                        "sp_sim": grab(r"sp_sim=([\d.]+)", sim_part),
                         "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
                     })
                 except (ValueError, IndexError, AttributeError):
@@ -125,17 +131,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v6"
+    return "v7"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -305,7 +311,8 @@ body {
     <div class="card"><h3>Batch Similarities</h3><canvas id="chart-batch-sim"></canvas></div>
     <div class="card"><h3>Diagnostic Similarities</h3><canvas id="chart-diag-sim"></canvas></div>
     <div class="card"><h3>Effective Rank & Slot Isolation</h3><canvas id="chart-rank"></canvas></div>
-    <div class="card"><h3>V6: Classifier + Contrastive</h3><canvas id="chart-v6-cls"></canvas></div>
+    <div class="card"><h3>Classifier + Contrastive</h3><canvas id="chart-v6-cls"></canvas></div>
+    <div class="card"><h3>V7: Margin Losses</h3><canvas id="chart-v7-margins"></canvas></div>
     <div class="card"><h3>Clustering & Direction</h3><canvas id="chart-v6-geo"></canvas></div>
     <div class="card"><h3>Slot Assignment</h3><canvas id="chart-v6-slots"></canvas></div>
     <div class="stats-card" id="stats-panel">Loading...</div>
@@ -495,6 +502,8 @@ function updateDashboard(response) {
     ];
     if (steps.some(d => d.wo_sim > 0))
         bsDs.push(ds('WO sim', ema(steps.map(d => d.wo_sim), sw), C.woSim));
+    if (steps.some(d => d.sp_sim > 0))
+        bsDs.push(ds('SP sim', ema(steps.map(d => d.sp_sim), sw), '#ab47bc'));
     if (hasCmp && clippedCmpSteps.length) {
         bsDs.push(cmpDs('Pos' + cmpLabel, ema(clippedCmpSteps.map(d => d.p_sim), ccw), C.cmpPSim));
         bsDs.push(cmpDs('Neg' + cmpLabel, ema(clippedCmpSteps.map(d => d.n_sim), ccw), C.cmpNSim));
@@ -595,6 +604,40 @@ function updateDashboard(response) {
         data: { labels: s, datasets: v6Ds },
         options: dualAxisOpts('Loss', 'Accuracy', undefined, undefined, 0, 1.05),
     });
+
+    // 6b. V7: Margin Losses + Slot Paraphrase
+    const hasV7 = steps.some(d => d.m_para > 0 || d.sp > 0);
+    if (hasV7) {
+        const v7Ds = [];
+        const addV7 = (key, label, color, axis) => {
+            const vals = steps.map(d => d[key]);
+            if (vals.some(v => v > 0))
+                v7Ds.push(ds(label, ema(vals, sw), color, {yAxisID: axis || 'y'}));
+        };
+        addV7('m_para', 'Margin Para', '#66bb6a', 'y');
+        addV7('m_neg', 'Margin Neg', '#ef5350', 'y');
+        addV7('m_wo', 'Margin WO', '#ffa726', 'y');
+        addV7('sp', 'Slot Para', '#ab47bc', 'y');
+        // sp_sim on right axis
+        const spSimVals = steps.map(d => d.sp_sim);
+        if (spSimVals.some(v => v > 0))
+            v7Ds.push(ds('SP Sim', ema(spSimVals, sw), '#42a5f5', {yAxisID: 'y2'}));
+        mkChart('chart-v7-margins', {
+            type: 'line',
+            data: { labels: s, datasets: v7Ds },
+            options: dualAxisOpts('Loss', 'Similarity', undefined, undefined, 0, 1.05),
+        });
+    } else {
+        // Show placeholder for non-V7 runs
+        const ctx = document.getElementById('chart-v7-margins');
+        if (ctx) {
+            mkChart('chart-v7-margins', {
+                type: 'line',
+                data: { labels: [0], datasets: [ds('No V7 data', [0], '#666')] },
+                options: chartOpts('Loss'),
+            });
+        }
+    }
 
     // 7. Geometry: Clustering Gap & Direction Consistency
     const hasGeo = evals.length && evals.some(d => d.clustering_gap != null);

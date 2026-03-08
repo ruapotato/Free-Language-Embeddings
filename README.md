@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: Active training (Concept Autoencoder V6).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
+> **Status: Active training (Concept Autoencoder V7).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -56,26 +56,32 @@ Each slot owns one semantic family. Synthetic training data teaches the model wh
 | 14 | Location/Scene | 30 | Formality/Register |
 | 15 | Spatial Relations | 31 | Speech Act/Intent |
 
-### Training Losses (V6)
+### Training Losses (V7)
 
-**Key V6 innovation: detached geometry with gradient leak.**
+**Key V7 innovations: flat cosine similarity, margin losses, real-data slot training, gradient taper.**
 
-The encoder and decoder train semi-independently. Geometry losses (classifier, contrastive, isolation) flow only to the encoder. Reconstruction gradients flow primarily to the decoder, with only 10% leaking to the encoder. This prevents reconstruction from overriding slot assignments while keeping the encoder information-rich.
+V6 post-mortem: `slot_similarity_matrix` used mean-of-per-slot-cosines where dead slots contributed +1.0, creating a 0.625 similarity floor. InfoNCE hit ~0 loss without moving absolute similarities. Slot-structure losses only saw synthetic data.
 
-Nine losses in two groups:
+V7 fixes four root causes with 13 losses:
 
 **Encoder losses** (geometry — gradients to encoder+bottleneck):
-1. **Per-slot classifiers** (NEW): Auxiliary linear heads on each slot predict the concept_value label. Direct gradient telling each slot what to encode. 100% accuracy by step 1,000.
-2. **Per-slot contrastive** (NEW): Same concept_value → similar slot vectors, different → far apart. Shapes within-slot geometry.
-3. **Slot isolation**: Synthetic pairs where only one concept varies. Target slot should change, others stay the same. 2.15M synthetic pairs.
-4. **Paraphrase InfoNCE**: Hard negatives from NLI contradictions and PAWS adversarial pairs.
-5. **Word-order InfoNCE**: Swap 2 random content tokens, push original and swapped apart.
+1. **Per-slot classifiers**: Auxiliary heads classify concept_value from slot vectors (synthetic).
+2. **Per-slot contrastive**: Same concept_value → similar slot vectors (synthetic).
+3. **Slot isolation**: Only target slot should change when one concept varies (synthetic).
+4. **Paraphrase InfoNCE**: Hard negatives, now using **flat cosine** (no dead-slot floor).
+5. **Word-order InfoNCE**: 2-token swap, **flat cosine**.
 6. **Slot decorrelation**: Penalizes correlation between concept slots.
-7. **STS graded similarity**: MSE between predicted and human-rated similarity scores.
+7. **STS graded similarity**: MSE between predicted and human-rated similarity.
+8. **Margin paraphrase** (V7 NEW): Absolute target — paraphrase sim > 0.85.
+9. **Margin negative** (V7 NEW): Absolute target — unrelated sim < 0.3.
+10. **Margin word-order** (V7 NEW): Absolute target — WO-swapped sim < 0.5.
+11. **Per-slot paraphrase** (V7 NEW): Each slot should match on REAL paraphrase pairs, bridging synthetic→real.
 
-**Decoder losses** (reconstruction — gradients mostly to decoder):
-8. **Self-reconstruction** (cross-entropy): Decode concept vectors back to original tokens.
-9. **Cross-reconstruction** (NEW): Encode paraphrase A, decode toward paraphrase B. Forces bottleneck to encode meaning, not surface form.
+**Decoder losses** (reconstruction — gradient taper to encoder):
+12. **Self-reconstruction** (cross-entropy): Decode concept vectors back to original tokens.
+13. **Cross-reconstruction**: Encode paraphrase A, decode toward paraphrase B.
+
+**Gradient taper** replaces V6's blunt 10% RECON_LEAK: 100% at decoder, 30% at bottleneck, linearly tapering to 5% at early encoder layers.
 
 ### Training Data (DFSG-compliant)
 
@@ -87,15 +93,11 @@ Nine losses in two groups:
 | QQP | CC | 400K | Question paraphrases |
 | Tatoeba | CC-BY | 350K | Cross-lingual pairs |
 
-### Training Progress (Concept Autoencoder V6)
+### Training Progress (Concept Autoencoder V7)
 
-V6 uses detached geometry with gradient leak. Slot assignments reached 32/32 correct within 1,000 steps.
+V7 uses flat cosine, margin losses, per-slot paraphrase on real data, and gradient taper.
 
 **Live Dashboard:** `python web_dashboard.py` then open http://localhost:8501
-
-**Static Dashboard (V6)**
-
-![V6 Training Dashboard](logs/plots/concept_v6_dashboard.png)
 
 ### Quick Start
 
@@ -107,7 +109,7 @@ python generate_concept_data.py
 python build_pairs.py
 
 # 3. Train concept autoencoder
-python train_concept.py --fresh
+python train_v7.py --fresh
 
 # 4. Visualize concept space
 python plot_concepts.py                    # static plot (latest checkpoint)
@@ -118,13 +120,20 @@ python plot_training.py                    # V5 dashboard (auto-detects latest)
 
 ## Version History
 
-### Concept Autoencoder V6 (current) — Detached Geometry
+### Concept Autoencoder V7 (current) — Flat Cosine + Margin + Real Paraphrase
+- Flat cosine similarity replaces mean-of-per-slot-cosines (eliminates dead-slot floor)
+- Margin losses: explicit absolute similarity targets (para>0.85, neg<0.3, WO<0.5)
+- Per-slot paraphrase loss on REAL data (bridges synthetic→real gap)
+- Gradient taper: 100% at decoder, 30% at bottleneck, 5% at early encoder (replaces blunt 10% RECON_LEAK)
+- 13 losses total: 11 encoder geometry + 2 decoder reconstruction
+
+### Concept Autoencoder V6 (archived) — Detached Geometry
 - Detached encoder/decoder training: geometry gradients to encoder only, recon to decoder (10% leak)
 - Per-slot classifiers: auxiliary heads classify concept_value from slot vectors
 - Per-slot contrastive: shapes within-slot geometry (same value → close, different → far)
 - Cross-reconstruction: encode A, decode toward paraphrase B
 - 32/32 slot assignments correct within 1,000 steps (V5 had ~3/10)
-- New monitoring: clustering gap, direction consistency, slot assignment accuracy
+- Batch similarities flat at p_sim=0.69, n_sim=0.006 — dead-slot similarity floor
 
 ### Concept Autoencoder V5 (archived) — 32-Slot Supervised Concepts
 - 54.3M param encoder-decoder with 32x32 concept bottleneck
@@ -172,7 +181,8 @@ python plot_training.py                    # V5 dashboard (auto-detects latest)
 ```
 flm/
 ├── concept_model.py          # Concept autoencoder (54.3M, encoder-decoder)
-├── train_v6.py               # V6 training (detached geometry + classifiers)
+├── train_v7.py               # V7 training (flat cosine + margin + real paraphrase)
+├── train_v6.py               # V6 training (archived)
 ├── train_concept.py          # V5 training (archived)
 ├── generate_concept_data.py  # Synthetic concept axis dataset generator
 ├── plot_concepts.py          # UMAP concept space visualization
