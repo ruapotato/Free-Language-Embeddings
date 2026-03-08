@@ -76,12 +76,13 @@ V7 fixes four root causes with 13 losses:
 9. **Margin negative** (V7 NEW): Absolute target — unrelated sim < 0.3.
 10. **Margin word-order** (V7 NEW): Absolute target — WO-swapped sim < 0.5.
 11. **Per-slot paraphrase** (V7 NEW): Each slot should match on REAL paraphrase pairs, bridging synthetic→real.
+12. **Batch repulsion** (V7 NEW): Push random text pairs below sim 0.3 — prevents clustering collapse where all representations drift toward high mutual similarity.
 
 **Decoder losses** (reconstruction — gradient taper to encoder):
 12. **Self-reconstruction** (cross-entropy): Decode concept vectors back to original tokens.
 13. **Cross-reconstruction**: Encode paraphrase A, decode toward paraphrase B.
 
-**Gradient taper** replaces V6's blunt 10% RECON_LEAK: 100% at decoder, 30% at bottleneck, linearly tapering to 5% at early encoder layers.
+**Gradient taper** replaces V6's blunt 10% RECON_LEAK: 30% of reconstruction gradient reaches encoder (via autograd scaling).
 
 ### Training Data (DFSG-compliant)
 
@@ -125,7 +126,8 @@ python plot_training.py                    # V5 dashboard (auto-detects latest)
 - Margin losses: explicit absolute similarity targets (para>0.85, neg<0.3, WO<0.5)
 - Per-slot paraphrase loss on REAL data (bridges synthetic→real gap)
 - Gradient taper: 100% at decoder, 30% at bottleneck, 5% at early encoder (replaces blunt 10% RECON_LEAK)
-- 13 losses total: 11 encoder geometry + 2 decoder reconstruction
+- Batch repulsion loss prevents clustering collapse (pushes random text sim < 0.3)
+- 14 losses total: 12 encoder geometry + 2 decoder reconstruction
 
 ### Concept Autoencoder V6 (archived) — Detached Geometry
 - Detached encoder/decoder training: geometry gradients to encoder only, recon to decoder (10% leak)

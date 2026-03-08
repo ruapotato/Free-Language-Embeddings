@@ -851,6 +851,27 @@ def margin_word_order_loss(concepts_orig, concepts_shuffled, target_sim=0.5):
     return loss, sim.mean().item()
 
 
+def batch_repulsion_loss(concepts, target_sim=0.3):
+    """
+    Push random text pairs apart. Takes a batch of concepts from random
+    (unrelated) texts and penalizes pairwise similarity above target.
+
+    This prevents the global similarity space from compressing — without it,
+    all representations drift toward high mutual similarity.
+
+    concepts: (B, K, D)
+    Returns: (loss, mean_pairwise_sim)
+    """
+    flat = F.normalize(concepts.view(concepts.shape[0], -1), p=2, dim=-1)
+    sim = torch.mm(flat, flat.T)  # (B, B)
+    # Exclude self-similarity diagonal
+    mask = ~torch.eye(sim.shape[0], dtype=torch.bool, device=sim.device)
+    off_diag = sim[mask]
+    # Penalize similarities above target
+    loss = F.relu(off_diag - target_sim).mean()
+    return loss, off_diag.mean().item()
+
+
 def per_slot_paraphrase_loss(concepts_a, concepts_b):
     """
     Per-slot paraphrase consistency on REAL text pairs.

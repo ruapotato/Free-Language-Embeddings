@@ -58,10 +58,12 @@ def parse_step_data(log_path):
                         "m_neg": grab(r"m_neg=([\d.]+)", detail),
                         "m_wo": grab(r"m_wo=([\d.]+)", detail),
                         "sp": grab(r"sp=([\d.]+)", detail),
+                        "repul": grab(r"repul=([\d.]+)", detail),
                         "p_sim": grab(r"p_sim=([\d.]+)", sim_part),
                         "n_sim": grab(r"n_sim=([\d.]+)", sim_part),
                         "wo_sim": grab(r"wo_sim=([\d.]+)", sim_part),
                         "sp_sim": grab(r"sp_sim=([\d.]+)", sim_part),
+                        "r_sim": grab(r"r_sim=([\d.]+)", sim_part),
                         "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
                     })
                 except (ValueError, IndexError, AttributeError):
@@ -456,7 +458,7 @@ function updateDashboard(response) {
         data: { labels: hasCmp && clippedCmpSteps.length ? mergedLabels(s, ccs) : s, datasets: reconDs.map(d => {
             if (hasCmp && clippedCmpSteps.length) {
                 const ml = mergedLabels(s, ccs);
-                const isCmp = d.label.includes(cmpLabel);
+                const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
                 const srcSteps = isCmp ? ccs : s;
                 const raw = isCmp
                     ? ema(clippedCmpSteps.map(x => x.recon), ccw)
@@ -504,6 +506,8 @@ function updateDashboard(response) {
         bsDs.push(ds('WO sim', ema(steps.map(d => d.wo_sim), sw), C.woSim));
     if (steps.some(d => d.sp_sim > 0))
         bsDs.push(ds('SP sim', ema(steps.map(d => d.sp_sim), sw), '#ab47bc'));
+    if (steps.some(d => d.r_sim > 0))
+        bsDs.push(ds('Repul sim', ema(steps.map(d => d.r_sim), sw), '#78909c'));
     if (hasCmp && clippedCmpSteps.length) {
         bsDs.push(cmpDs('Pos' + cmpLabel, ema(clippedCmpSteps.map(d => d.p_sim), ccw), C.cmpPSim));
         bsDs.push(cmpDs('Neg' + cmpLabel, ema(clippedCmpSteps.map(d => d.n_sim), ccw), C.cmpNSim));
@@ -513,7 +517,7 @@ function updateDashboard(response) {
         data: { labels: hasCmp && clippedCmpSteps.length ? mergedLabels(s, ccs) : s, datasets: bsDs.map(d => {
             if (hasCmp && clippedCmpSteps.length) {
                 const ml = mergedLabels(s, ccs);
-                const isCmp = d.label.includes(cmpLabel);
+                const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
                 const src = isCmp ? clippedCmpSteps : steps;
                 const srcSteps = isCmp ? ccs : s;
                 const key = d.label.startsWith('Pos') ? 'p_sim'
@@ -546,7 +550,7 @@ function updateDashboard(response) {
             type: 'line',
             data: { labels: allEvalSteps, datasets: diagDs.map(d => {
                 if (hasCmp && clippedCmpEvals.length) {
-                    const isCmp = d.label.includes(cmpLabel);
+                    const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
                     const src = isCmp ? clippedCmpEvals : evals;
                     const srcSteps = src.map(x => x.step);
                     const key = d.label.startsWith('Para') ? 'para_sim'
@@ -618,6 +622,7 @@ function updateDashboard(response) {
         addV7('m_neg', 'Margin Neg', '#ef5350', 'y');
         addV7('m_wo', 'Margin WO', '#ffa726', 'y');
         addV7('sp', 'Slot Para', '#ab47bc', 'y');
+        addV7('repul', 'Repulsion', '#78909c', 'y');
         // sp_sim on right axis
         const spSimVals = steps.map(d => d.sp_sim);
         if (spSimVals.some(v => v > 0))
@@ -661,12 +666,14 @@ function updateDashboard(response) {
         mkChart('chart-v6-geo', {
             type: 'line',
             data: { labels: allGeoSteps, datasets: gDs.map(d => {
-                const isCmp = d.label.includes(cmpLabel);
+                const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
                 const src = isCmp
                     ? clippedCmpEvals.filter(x => x.clustering_gap != null)
                     : geoEvals;
                 const srcSteps = src.map(x => x.step);
-                const key = d.label.startsWith('Cls') ? 'clustering_gap' : 'dir_consistency';
+                const key = d.label.startsWith('Cls') && isCmp ? 'clustering_gap'
+                          : d.label.startsWith('Dir') || d.label.startsWith('DirCon') ? 'dir_consistency'
+                          : 'clustering_gap';
                 const map = {}; srcSteps.forEach((st, i) => map[st] = src[i][key] || 0);
                 d.data = allGeoSteps.map(st => map[st] != null ? map[st] : null);
                 d.spanGaps = true;
@@ -697,7 +704,7 @@ function updateDashboard(response) {
         mkChart('chart-v6-slots', {
             type: 'line',
             data: { labels: allSlotSteps, datasets: slotDs.map(d => {
-                const isCmp = d.label.includes(cmpLabel);
+                const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
                 const src = isCmp
                     ? clippedCmpEvals.filter(x => x.slot_assign != null)
                     : evals.filter(x => x.slot_assign != null);

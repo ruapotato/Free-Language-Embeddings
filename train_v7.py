@@ -39,7 +39,8 @@ from concept_model import (ConceptConfig, ConceptAutoencoder,
                            slot_isolation_loss, flat_similarity_matrix,
                            SlotClassifiers, per_slot_contrastive_loss,
                            margin_paraphrase_loss, margin_negative_loss,
-                           margin_word_order_loss, per_slot_paraphrase_loss)
+                           margin_word_order_loss, per_slot_paraphrase_loss,
+                           batch_repulsion_loss)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -91,6 +92,7 @@ MARGIN_PARA_WEIGHT = 1.5      # absolute paraphrase similarity target
 MARGIN_NEG_WEIGHT = 1.0       # absolute negative similarity target
 MARGIN_WO_WEIGHT = 1.0        # absolute word-order similarity target
 SLOT_PARA_WEIGHT = 2.0        # per-slot paraphrase on REAL data
+REPULSION_WEIGHT = 1.5        # push random text pairs apart (prevent clustering collapse)
 
 # Decoder losses:
 RECON_WEIGHT = 1.0
@@ -1045,7 +1047,7 @@ def train(resume_from=None, fresh=False, from_v6=False, eval_only=False):
         f"iso={SLOT_ISO_WEIGHT} cls={CLASSIFY_WEIGHT} scon={SLOT_CON_WEIGHT} "
         f"sts={STS_WEIGHT}")
     log(f"  V7 NEW: m_para={MARGIN_PARA_WEIGHT} m_neg={MARGIN_NEG_WEIGHT} "
-        f"m_wo={MARGIN_WO_WEIGHT} slot_para={SLOT_PARA_WEIGHT}")
+        f"m_wo={MARGIN_WO_WEIGHT} slot_para={SLOT_PARA_WEIGHT} repul={REPULSION_WEIGHT}")
     log(f"  Decoder losses: recon={RECON_WEIGHT} cross_recon={CROSS_RECON_WEIGHT}")
     log(f"  Data: {len(pair_dataset.pos_pairs):,} pos + "
         f"{len(pair_dataset.hard_neg_pairs):,} hard neg + "
@@ -1085,6 +1087,10 @@ def train(resume_from=None, fresh=False, from_v6=False, eval_only=False):
             decorr = slot_decorrelation_loss(concepts)
             geo_loss = DECORR_WEIGHT * decorr
 
+            # Batch repulsion: push random text apart (prevent clustering collapse)
+            repul_loss, repul_sim = batch_repulsion_loss(concepts, target_sim=0.3)
+            geo_loss = geo_loss + REPULSION_WEIGHT * repul_loss
+
             # Word-order InfoNCE (V7: flat cosine)
             shuffled_ids, shuffled_mask = shuffle_tokens(input_ids, attention_mask)
             concepts_shuf = m.encode(shuffled_ids, shuffled_mask)
@@ -1099,6 +1105,8 @@ def train(resume_from=None, fresh=False, from_v6=False, eval_only=False):
         wo_loss_val = wo_loss.item()
         decorr_val = decorr.item()
         m_wo_val = m_wo_loss.item()
+        repul_val = repul_loss.item()
+        repul_sim_val = repul_sim
 
         # --- Slot isolation + classification + contrastive (synthetic) ---
         iso_loss_val = 0.0
@@ -1302,9 +1310,11 @@ def train(resume_from=None, fresh=False, from_v6=False, eval_only=False):
                 f"cls={cls_loss_val:.3f} scon={scon_loss_val:.3f} "
                 f"sts={sts_loss_val:.3f} "
                 f"m_para={m_para_val:.3f} m_neg={m_neg_val:.3f} "
-                f"m_wo={m_wo_val:.3f} sp={slot_para_val:.3f}) | "
+                f"m_wo={m_wo_val:.3f} sp={slot_para_val:.3f} "
+                f"repul={repul_val:.3f}) | "
                 f"p_sim={p_sim_val:.3f} n_sim={n_sim_val:.3f} "
                 f"wo_sim={wo_sim_val:.3f} sp_sim={slot_para_sim:.3f} "
+                f"r_sim={repul_sim_val:.3f} "
                 f"cls_acc={cls_acc_val:.3f} | "
                 f"lr {current_lr:.2e} | {pct:.1f}%")
 
