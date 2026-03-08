@@ -511,23 +511,41 @@ def word_order_loss(concepts_orig, concepts_shuffled, target_sim=0.3):
 # V3 Losses — InfoNCE + Decorrelation
 # ═══════════════════════════════════════════════════════════════════════
 
+def slot_similarity_matrix(concepts_a, concepts_b):
+    """
+    Compute mean-of-per-slot-cosines similarity matrix.
+
+    Instead of flattening to 1024-dim and computing one cosine, compute
+    cosine per slot and average. This gives each slot equal weight so
+    a big change in ONE slot (1/32) matters, instead of being drowned
+    in flat cosine where it's only 32/1024 = 3.1% of the norm.
+
+    concepts_a: (B1, K, D)
+    concepts_b: (B2, K, D)
+    Returns: (B1, B2) similarity matrix
+    """
+    # Normalize each slot independently
+    normed_a = F.normalize(concepts_a, p=2, dim=-1)  # (B1, K, D)
+    normed_b = F.normalize(concepts_b, p=2, dim=-1)  # (B2, K, D)
+    # Per-slot sim: (K, B1, B2) via batched matmul per slot
+    # Reshape to (K, B1, D) and (K, B2, D)
+    a_t = normed_a.permute(1, 0, 2)  # (K, B1, D)
+    b_t = normed_b.permute(1, 0, 2)  # (K, B2, D)
+    per_slot_sim = torch.bmm(a_t, b_t.transpose(1, 2))  # (K, B1, B2)
+    # Mean across slots
+    return per_slot_sim.mean(dim=0)  # (B1, B2)
+
+
 def info_nce_loss(concepts_a, concepts_b, temperature=0.07):
     """
     Symmetric InfoNCE contrastive loss with in-batch negatives.
-
-    concepts_a[i] and concepts_b[i] are positive pairs.
-    All other combinations are negatives. Symmetric: both a→b and b→a
-    matching, doubling gradient signal.
+    Uses mean-of-per-slot-cosines so each slot contributes equally.
 
     Returns: (loss, pos_sim_mean, neg_sim_mean)
     """
-    flat_a = concepts_a.view(concepts_a.shape[0], -1)
-    flat_b = concepts_b.view(concepts_b.shape[0], -1)
-    flat_a = F.normalize(flat_a, p=2, dim=-1)
-    flat_b = F.normalize(flat_b, p=2, dim=-1)
-
-    # Similarity matrix: (B, B)
-    sim_matrix = flat_a @ flat_b.T / temperature
+    # Similarity matrix using slot-aware similarity: (B, B)
+    sim_raw = slot_similarity_matrix(concepts_a, concepts_b)
+    sim_matrix = sim_raw / temperature
     labels = torch.arange(sim_matrix.shape[0], device=sim_matrix.device)
 
     # Symmetric: a→b and b→a
@@ -535,10 +553,10 @@ def info_nce_loss(concepts_a, concepts_b, temperature=0.07):
             F.cross_entropy(sim_matrix.T, labels)) / 2
 
     with torch.no_grad():
-        pos_sim = (flat_a * flat_b).sum(dim=-1).mean().item()
-        mask = ~torch.eye(sim_matrix.shape[0], dtype=torch.bool,
-                          device=sim_matrix.device)
-        neg_sim = (flat_a @ flat_b.T)[mask].mean().item()
+        pos_sim = sim_raw.diag().mean().item()
+        mask = ~torch.eye(sim_raw.shape[0], dtype=torch.bool,
+                          device=sim_raw.device)
+        neg_sim = sim_raw[mask].mean().item()
 
     return loss, pos_sim, neg_sim
 
@@ -546,37 +564,26 @@ def info_nce_loss(concepts_a, concepts_b, temperature=0.07):
 def word_order_info_nce(concepts_orig, concepts_shuffled, temperature=0.07):
     """
     InfoNCE for word-order: original should be closer to itself than to
-    any shuffled version. Uses the same in-batch negative structure.
-
-    The "positive" for each original is itself (identity), and the shuffled
-    versions of all sentences in the batch are negatives.
+    any shuffled version. Uses slot-aware similarity.
 
     Returns: (loss, wo_sim_mean)
     """
-    flat_orig = concepts_orig.view(concepts_orig.shape[0], -1)
-    flat_shuf = concepts_shuffled.view(concepts_shuffled.shape[0], -1)
-    flat_orig = F.normalize(flat_orig, p=2, dim=-1)
-    flat_shuf = F.normalize(flat_shuf, p=2, dim=-1)
+    B = concepts_orig.shape[0]
 
-    B = flat_orig.shape[0]
+    # Slot-aware similarity matrices
+    sim_orig_raw = slot_similarity_matrix(concepts_orig, concepts_orig)  # (B, B)
+    sim_shuf_raw = slot_similarity_matrix(concepts_orig, concepts_shuffled)  # (B, B)
 
-    # Build (B, 2B) similarity: [orig_vs_orig, orig_vs_shuffled]
-    sim_orig = flat_orig @ flat_orig.T / temperature   # (B, B)
-    sim_shuf = flat_orig @ flat_shuf.T / temperature   # (B, B)
-    sim_all = torch.cat([sim_orig, sim_shuf], dim=1)   # (B, 2B)
+    sim_orig = sim_orig_raw / temperature
+    sim_shuf = sim_shuf_raw / temperature
+    sim_all = torch.cat([sim_orig, sim_shuf], dim=1)  # (B, 2B)
 
-    # Positives are on the diagonal of sim_orig (i.e., column i for row i)
+    # Positives are on the diagonal of sim_orig (self-similarity)
     labels = torch.arange(B, device=sim_all.device)
-
-    # Mask out self-similarity from sim_orig diagonal (would be trivial 1.0)
-    # Replace with large negative so it doesn't count as the positive
-    # Actually: the positive IS the self-similarity. The negatives are
-    # everything else (other originals + all shuffled). This pushes the model
-    # to make each sentence unique AND different from its shuffled version.
     loss = F.cross_entropy(sim_all, labels)
 
     with torch.no_grad():
-        wo_sim = (flat_orig * flat_shuf).sum(dim=-1).mean().item()
+        wo_sim = sim_shuf_raw.diag().mean().item()
 
     return loss, wo_sim
 
@@ -634,3 +641,103 @@ def slot_isolation_loss(concepts_base, concepts_variant, target_slot):
     changed_loss = F.relu(slot_sims[:, target_slot] - 0.5).pow(2).mean()
 
     return unchanged_loss + changed_loss
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V6 Losses — Slot Classifiers + Per-Slot Contrastive
+# ═══════════════════════════════════════════════════════════════════════
+
+class SlotClassifiers(nn.Module):
+    """Auxiliary classification heads for each concept slot.
+
+    Each slot gets a small linear classifier: concept_dim -> num_classes.
+    During training, the slot vector must predict the concept_value label.
+    Discarded at inference time.
+    """
+    def __init__(self, concept_dim, num_classes_per_slot):
+        """
+        num_classes_per_slot: dict[int, int] — slot_id -> num_classes
+        """
+        super().__init__()
+        self.heads = nn.ModuleDict()
+        for slot_id, num_classes in num_classes_per_slot.items():
+            self.heads[str(slot_id)] = nn.Linear(concept_dim, num_classes)
+
+    def forward(self, concepts, slot_ids, labels):
+        """
+        concepts: (B, K, D) — concept stack
+        slot_ids: (B,) — which slot each example targets
+        labels: (B,) — integer class labels for each example
+
+        Returns: cross-entropy loss averaged across examples
+        """
+        total_loss = 0.0
+        count = 0
+        for s in slot_ids.unique():
+            s_key = str(s.item())
+            if s_key not in self.heads:
+                continue
+            mask = slot_ids == s
+            slot_vecs = concepts[mask, s.item(), :]  # (n, D)
+            slot_labels = labels[mask]  # (n,)
+            logits = self.heads[s_key](slot_vecs)  # (n, C)
+            total_loss = total_loss + F.cross_entropy(logits, slot_labels)
+            count += 1
+        return total_loss / max(count, 1)
+
+    @torch.no_grad()
+    def accuracy(self, concepts, slot_ids, labels):
+        """Compute classification accuracy per slot."""
+        slot_accs = {}
+        for s in slot_ids.unique():
+            s_key = str(s.item())
+            if s_key not in self.heads:
+                continue
+            mask = slot_ids == s
+            slot_vecs = concepts[mask, s.item(), :]
+            slot_labels = labels[mask]
+            logits = self.heads[s_key](slot_vecs)
+            preds = logits.argmax(dim=-1)
+            acc = (preds == slot_labels).float().mean().item()
+            slot_accs[s.item()] = acc
+        return slot_accs
+
+
+def per_slot_contrastive_loss(concepts, slot_id, labels, temperature=0.07):
+    """
+    SupCon-style contrastive loss on a single slot's vectors.
+
+    concepts: (B, K, D) — concept stack
+    slot_id: int — which slot to compute contrastive on
+    labels: (B,) — concept_value class labels (same label = positive pair)
+    temperature: float
+
+    Pulls same-label slot vectors together, pushes different-label apart.
+    """
+    slot_vecs = F.normalize(concepts[:, slot_id, :], p=2, dim=-1)  # (B, D)
+    sim = torch.mm(slot_vecs, slot_vecs.T) / temperature  # (B, B)
+    B = sim.shape[0]
+
+    # Mask: same label = positive
+    label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # (B, B)
+    # Exclude self
+    self_mask = ~torch.eye(B, dtype=torch.bool, device=sim.device)
+    pos_mask = label_eq & self_mask
+
+    # Need at least some positives
+    if pos_mask.sum() == 0:
+        return torch.tensor(0.0, device=sim.device)
+
+    # For numerical stability
+    sim_max = sim.max(dim=1, keepdim=True).values.detach()
+    sim = sim - sim_max
+
+    # Log-sum-exp over all non-self entries (denominator)
+    exp_sim = torch.exp(sim) * self_mask.float()
+    log_denom = torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-8)
+
+    # Mean of log(positive / denom) over positive pairs
+    log_prob = sim - log_denom
+    loss = -(log_prob * pos_mask.float()).sum() / pos_mask.sum()
+
+    return loss

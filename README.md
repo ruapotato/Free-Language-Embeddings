@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: Active training (Concept Autoencoder V5).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
+> **Status: Active training (Concept Autoencoder V6).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -56,38 +56,46 @@ Each slot owns one semantic family. Synthetic training data teaches the model wh
 | 14 | Location/Scene | 30 | Formality/Register |
 | 15 | Spatial Relations | 31 | Speech Act/Intent |
 
-### Training Losses
+### Training Losses (V6)
 
-Six losses trained jointly with smooth weight scheduling:
+**Key V6 innovation: detached geometry with gradient leak.**
 
-1. **Reconstruction** (cross-entropy): Decode concept vectors back to original tokens. Forces the bottleneck to encode ALL meaning.
-2. **Slot isolation** (supervised): Synthetic pairs where only one concept varies. Target slot should change, all others stay the same. 1.67M synthetic pairs across all 32 concept axes.
-3. **Paraphrase InfoNCE** (contrastive): Hard negatives from NLI contradictions and PAWS adversarial pairs.
-4. **Word-order InfoNCE** (contrastive): Swap 2 random content tokens, push original and swapped apart.
-5. **Slot decorrelation**: Penalizes correlation between concept slots.
-6. **STS graded similarity**: MSE between predicted and human-rated similarity scores.
+The encoder and decoder train semi-independently. Geometry losses (classifier, contrastive, isolation) flow only to the encoder. Reconstruction gradients flow primarily to the decoder, with only 10% leaking to the encoder. This prevents reconstruction from overriding slot assignments while keeping the encoder information-rich.
 
-**Smooth weight scheduling** (no hard phases):
-- `recon_weight = clamp(recon_loss, 0.2, 2.0)` — high when recon is bad, decays as it improves
-- `geometry_weight = 1 / (1 + recon_loss)` — ramps up as reconstruction improves
+Nine losses in two groups:
+
+**Encoder losses** (geometry — gradients to encoder+bottleneck):
+1. **Per-slot classifiers** (NEW): Auxiliary linear heads on each slot predict the concept_value label. Direct gradient telling each slot what to encode. 100% accuracy by step 1,000.
+2. **Per-slot contrastive** (NEW): Same concept_value → similar slot vectors, different → far apart. Shapes within-slot geometry.
+3. **Slot isolation**: Synthetic pairs where only one concept varies. Target slot should change, others stay the same. 2.15M synthetic pairs.
+4. **Paraphrase InfoNCE**: Hard negatives from NLI contradictions and PAWS adversarial pairs.
+5. **Word-order InfoNCE**: Swap 2 random content tokens, push original and swapped apart.
+6. **Slot decorrelation**: Penalizes correlation between concept slots.
+7. **STS graded similarity**: MSE between predicted and human-rated similarity scores.
+
+**Decoder losses** (reconstruction — gradients mostly to decoder):
+8. **Self-reconstruction** (cross-entropy): Decode concept vectors back to original tokens.
+9. **Cross-reconstruction** (NEW): Encode paraphrase A, decode toward paraphrase B. Forces bottleneck to encode meaning, not surface form.
 
 ### Training Data (DFSG-compliant)
 
 | Dataset | License | Pairs | Use |
 |---------|---------|-------|-----|
-| Synthetic concept axes | Generated | 1.67M | Slot isolation training |
+| Synthetic concept axes | Generated | 2.15M | Slot isolation + classification |
 | ParaNMT | CC-BY | ~5M | Paraphrase pairs |
 | PAWS | Apache 2.0 | 108K | Hard paraphrase pairs |
 | QQP | CC | 400K | Question paraphrases |
 | Tatoeba | CC-BY | 350K | Cross-lingual pairs |
 
-### Training Progress (Concept Autoencoder V5)
+### Training Progress (Concept Autoencoder V6)
 
-V5 uses 32 supervised concept slots with synthetic axis training data. Currently training.
+V6 uses detached geometry with gradient leak. Slot assignments reached 32/32 correct within 1,000 steps.
 
-**Training Dashboard (V5)**
+**Live Dashboard:** `python web_dashboard.py` then open http://localhost:8501
 
-![V5 Training Dashboard](logs/plots/concept_v5_dashboard.png)
+**Static Dashboard (V6)**
+
+![V6 Training Dashboard](logs/plots/concept_v6_dashboard.png)
 
 ### Quick Start
 
@@ -110,11 +118,20 @@ python plot_training.py                    # V5 dashboard (auto-detects latest)
 
 ## Version History
 
-### Concept Autoencoder V5 (current) — 32-Slot Supervised Concepts
+### Concept Autoencoder V6 (current) — Detached Geometry
+- Detached encoder/decoder training: geometry gradients to encoder only, recon to decoder (10% leak)
+- Per-slot classifiers: auxiliary heads classify concept_value from slot vectors
+- Per-slot contrastive: shapes within-slot geometry (same value → close, different → far)
+- Cross-reconstruction: encode A, decode toward paraphrase B
+- 32/32 slot assignments correct within 1,000 steps (V5 had ~3/10)
+- New monitoring: clustering gap, direction consistency, slot assignment accuracy
+
+### Concept Autoencoder V5 (archived) — 32-Slot Supervised Concepts
 - 54.3M param encoder-decoder with 32x32 concept bottleneck
 - Each slot assigned a specific concept family (size, color, tense, sentiment, etc.)
-- 1.67M synthetic sentence pairs for slot isolation training
+- 2.15M synthetic sentence pairs for slot isolation training
 - Slot isolation loss teaches which slot encodes which concept
+- Good reconstruction and rank, but slots didn't learn assigned concepts
 
 ### Concept Autoencoder V4 (archived) — Hard Negatives + Rank Pushing
 - 8x128 bottleneck, hard negative InfoNCE, spectral spread / per-dim variance
@@ -155,10 +172,12 @@ python plot_training.py                    # V5 dashboard (auto-detects latest)
 ```
 flm/
 ├── concept_model.py          # Concept autoencoder (54.3M, encoder-decoder)
-├── train_concept.py          # V5 training with slot isolation
+├── train_v6.py               # V6 training (detached geometry + classifiers)
+├── train_concept.py          # V5 training (archived)
 ├── generate_concept_data.py  # Synthetic concept axis dataset generator
 ├── plot_concepts.py          # UMAP concept space visualization
-├── plot_training.py          # Training dashboard
+├── plot_training.py          # Training dashboard (static PNG)
+├── web_dashboard.py          # Live web dashboard (auto-refresh)
 ├── probe_geometry.py         # Probe concept space geometry
 ├── probe_concepts.py         # Interactive concept probing
 ├── build_pairs.py            # Download DFSG paraphrase pair datasets

@@ -42,6 +42,7 @@ CONCEPT_RUNS = {
     "v3": {"log": "logs/concept_v3.log", "metrics": "logs/concept_v3_metrics.csv"},
     "v4": {"log": "logs/concept_v4.log", "metrics": "logs/concept_v4_metrics.csv"},
     "v5": {"log": "logs/concept_v5.log", "metrics": "logs/concept_v5_metrics.csv"},
+    "v6": {"log": "logs/concept_v6.log", "metrics": "logs/concept_v6_metrics.csv"},
 }
 
 
@@ -76,11 +77,23 @@ def load_concept_step_data(log_path):
                     n_sim = float(re.search(r"n_sim=([\d.]+)", sim_part).group(1))
                     wo_sim_m = re.search(r"wo_sim=([\d.]+)", sim_part)
                     wo_sim = float(wo_sim_m.group(1)) if wo_sim_m else 0.0
+                    # V6 fields
+                    cls_m = re.search(r"cls=([\d.]+)", detail)
+                    cls_loss = float(cls_m.group(1)) if cls_m else 0.0
+                    scon_m = re.search(r"scon=([\d.]+)", detail)
+                    scon_loss = float(scon_m.group(1)) if scon_m else 0.0
+                    xrecon_m = re.search(r"xrecon=([\d.]+)", detail)
+                    xrecon_loss = float(xrecon_m.group(1)) if xrecon_m else 0.0
+                    cls_acc_m = re.search(r"cls_acc=([\d.]+)", sim_part)
+                    cls_acc = float(cls_acc_m.group(1)) if cls_acc_m else 0.0
                     rows.append({
                         "step": step, "total_loss": total_loss,
                         "recon_loss": recon, "para_loss": para, "neg_loss": neg,
                         "wo_loss": wo, "decorr_loss": decorr, "iso_loss": iso,
+                        "cls_loss": cls_loss, "scon_loss": scon_loss,
+                        "xrecon_loss": xrecon_loss,
                         "p_sim": p_sim, "n_sim": n_sim, "wo_sim": wo_sim,
+                        "cls_acc": cls_acc,
                     })
                 except (ValueError, IndexError, AttributeError):
                     continue
@@ -111,6 +124,21 @@ def load_concept_eval_data(log_path):
                     iso_m = re.search(r"slot_iso=([-\d.]+)", line)
                     if iso_m:
                         current_eval["slot_iso"] = float(iso_m.group(1))
+                    assign_m = re.search(r"slot_assign=(\d+)/32", line)
+                    if assign_m:
+                        current_eval["slot_assign"] = int(assign_m.group(1))
+                except (ValueError, IndexError):
+                    pass
+            # V6 geometry eval
+            if "GEO:" in line:
+                try:
+                    cg_m = re.search(r"clustering_gap=([-+\d.]+)", line)
+                    if cg_m:
+                        current_eval = current_eval or {"step": last_step}
+                        current_eval["clustering_gap"] = float(cg_m.group(1))
+                    dc_m = re.search(r"dir_consistency=([\d.]+)", line)
+                    if dc_m:
+                        current_eval["dir_consistency"] = float(dc_m.group(1))
                 except (ValueError, IndexError):
                     pass
             if current_eval and re.search(r"[+-]\d\.\d{4}\s+\[", line):
@@ -201,7 +229,9 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
         print(f"No concept {run} training data to plot.")
         return
 
-    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
+    is_v6 = run == "v6"
+    nrows = 3 if is_v6 else 2
+    fig, axes = plt.subplots(nrows, 3, figsize=(20, 5 * nrows))
     fig.patch.set_facecolor("#FAFAFA")
 
     ax_recon = axes[0, 0]
@@ -263,6 +293,14 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
         if any(v > 0 for v in iso_vals):
             ax_components.plot(steps, smooth(iso_vals, sw),
                                color="#E65100", linewidth=2, label="Slot iso loss")
+        cls_v = [d.get("cls_loss", 0) for d in step_data]
+        if any(v > 0 for v in cls_v):
+            ax_components.plot(steps, smooth(cls_v, sw),
+                               color="#00695C", linewidth=2, label="Classifier loss")
+        scon_v = [d.get("scon_loss", 0) for d in step_data]
+        if any(v > 0 for v in scon_v):
+            ax_components.plot(steps, smooth(scon_v, sw),
+                               color="#283593", linewidth=2, label="Slot con loss")
     ax_components.set_xlabel("Step")
     ax_components.set_ylabel("Loss")
     ax_components.set_title("Geometry Losses")
@@ -302,7 +340,7 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
         ax_diag.plot(e_steps, [d.get("unrelated_sim", 0) for d in eval_data],
                      color=C_UNREL, linewidth=2.5, marker="s", markersize=4,
                      label="Unrelated sim")
-        ax_diag.plot(e_steps, [d.get("word_order_sim", 0) for d in eval_data],
+        ax_diag.plot(e_steps, [d.get("wo_sim", d.get("word_order_sim", 0)) for d in eval_data],
                      color=C_WO, linewidth=2.5, marker="^", markersize=4,
                      label="Word order sim")
         ax_diag.axhline(y=0.9, color=C_PARA_SIM, linestyle="--", alpha=0.3, linewidth=1)
@@ -390,7 +428,7 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
                   f"  {'_' * 44}"]
         for display, key, target in [("Paraphrase sim", "para_sim", ">0.90"),
                                       ("Unrelated sim", "unrelated_sim", "<0.10"),
-                                      ("Word order sim", "word_order_sim", "<0.30")]:
+                                      ("Word order sim", "wo_sim", "<0.30")]:
             lines.append(f"  {display:<24s} {le.get(key, 0):>+8.3f} {target:>8s}")
         if le.get("rank90"):
             lines += [f"", f"  Effective Rank:"]
@@ -411,6 +449,110 @@ def plot_concept_dashboard(run="v2", save=True, show=False):
                   fontsize=8, verticalalignment="top", fontfamily="monospace",
                   bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5",
                             edgecolor="#BDBDBD"))
+
+    # V6 extra panels: row 3
+    if is_v6:
+        ax_cls = axes[2, 0]
+        ax_geo = axes[2, 1]
+        ax_v6stats = axes[2, 2]
+
+        # Panel 7: Classifier Loss & Accuracy
+        cls_vals = [d.get("cls_loss", 0) for d in step_data]
+        scon_vals = [d.get("scon_loss", 0) for d in step_data]
+        cls_acc_vals = [d.get("cls_acc", 0) for d in step_data]
+        if len(cls_vals) > 10 and any(v > 0 for v in cls_vals):
+            sw = min(30, len(cls_vals) // 3)
+            ax_cls.plot(steps, smooth(cls_vals, sw),
+                        color="#D32F2F", linewidth=2, label="Classifier loss")
+            ax_cls.plot(steps, smooth(scon_vals, sw),
+                        color="#1565C0", linewidth=2, label="Slot contrastive loss")
+            xrecon_vals = [d.get("xrecon_loss", 0) for d in step_data]
+            if any(v > 0 for v in xrecon_vals):
+                ax_cls.plot(steps, smooth(xrecon_vals, sw),
+                            color="#FF6F00", linewidth=2, label="Cross-recon loss")
+            # Accuracy on secondary axis
+            if any(v > 0 for v in cls_acc_vals):
+                ax2 = ax_cls.twinx()
+                ax2.plot(steps, smooth(cls_acc_vals, sw),
+                         color="#2E7D32", linewidth=2, label="Classifier acc",
+                         alpha=0.8)
+                ax2.set_ylabel("Accuracy", color="#2E7D32")
+                ax2.tick_params(axis="y", labelcolor="#2E7D32")
+                ax2.set_ylim(0, 1.05)
+                ax2.legend(fontsize=8, loc="center right")
+        ax_cls.set_xlabel("Step")
+        ax_cls.set_ylabel("Loss")
+        ax_cls.set_title("V6 Losses: Classifier + Contrastive + Cross-Recon")
+        ax_cls.grid(True, alpha=0.3)
+        ax_cls.legend(fontsize=8, loc="upper right")
+        ax_cls.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
+
+        # Panel 8: Geometry Metrics (from GEO: eval lines)
+        has_geo = eval_data and any(d.get("clustering_gap") is not None for d in eval_data)
+        if has_geo:
+            geo_steps = [d["step"] for d in eval_data if d.get("clustering_gap") is not None]
+            cg_vals = [d["clustering_gap"] for d in eval_data if d.get("clustering_gap") is not None]
+            dc_vals = [d.get("dir_consistency", 0) for d in eval_data if d.get("clustering_gap") is not None]
+            ax_geo.plot(geo_steps, cg_vals, color="#D32F2F", linewidth=2.5,
+                        marker="o", markersize=4, label="Clustering gap")
+            ax_geo.plot(geo_steps, dc_vals, color="#1565C0", linewidth=2.5,
+                        marker="s", markersize=4, label="Direction consistency")
+            ax_geo.axhline(y=0, color="gray", linestyle="--", alpha=0.3, linewidth=1)
+            ax_geo.axhline(y=0.1, color="#D32F2F", linestyle="--", alpha=0.3,
+                           linewidth=1, label="Clustering target")
+        # Slot assignment on secondary axis
+        has_assign = eval_data and any(d.get("slot_assign") is not None for d in eval_data)
+        if has_assign:
+            assign_steps = [d["step"] for d in eval_data if d.get("slot_assign") is not None]
+            assign_vals = [d["slot_assign"] for d in eval_data if d.get("slot_assign") is not None]
+            ax2 = ax_geo.twinx()
+            ax2.plot(assign_steps, assign_vals, color="#2E7D32", linewidth=2,
+                     marker="D", markersize=3, label="Correct slots (/32)",
+                     alpha=0.8)
+            ax2.set_ylabel("Correct Slots", color="#2E7D32")
+            ax2.tick_params(axis="y", labelcolor="#2E7D32")
+            ax2.set_ylim(0, 33)
+            ax2.legend(fontsize=8, loc="center right")
+        ax_geo.set_xlabel("Step")
+        ax_geo.set_ylabel("Score")
+        ax_geo.set_title("Geometry: Clustering Gap & Direction Consistency")
+        ax_geo.grid(True, alpha=0.3)
+        ax_geo.legend(fontsize=8, loc="upper left")
+        ax_geo.xaxis.set_major_formatter(ticker.FuncFormatter(fmt_step))
+
+        # Panel 9: V6 Stats Summary
+        ax_v6stats.axis("off")
+        v6_lines = [f"V6 Geometry Stats", "=" * 40]
+        if eval_data:
+            le = eval_data[-1]
+            if le.get("clustering_gap") is not None:
+                v6_lines.append(f"  Clustering gap:    {le['clustering_gap']:>+8.3f}  (want >0.1)")
+            if le.get("dir_consistency") is not None:
+                v6_lines.append(f"  Dir consistency:   {le['dir_consistency']:>8.3f}  (want >0.5)")
+            if le.get("slot_assign") is not None:
+                v6_lines.append(f"  Correct slots:     {le['slot_assign']:>5d}/32")
+            if le.get("slot_iso") is not None:
+                v6_lines.append(f"  Slot isolation:    {le['slot_iso']:>+8.3f}")
+        if step_data:
+            latest = step_data[-1]
+            v6_lines += ["", "  V6 Loss Components:"]
+            if latest.get("cls_loss", 0) > 0:
+                v6_lines.append(f"    Classifier:      {latest['cls_loss']:>8.3f}")
+            if latest.get("scon_loss", 0) > 0:
+                v6_lines.append(f"    Slot contrastive:{latest['scon_loss']:>8.3f}")
+            if latest.get("xrecon_loss", 0) > 0:
+                v6_lines.append(f"    Cross-recon:     {latest['xrecon_loss']:>8.3f}")
+            if latest.get("cls_acc", 0) > 0:
+                v6_lines.append(f"    Classifier acc:  {latest['cls_acc']:>8.1%}")
+            v6_lines += ["", "  Key V6 Design:"]
+            v6_lines.append("    concepts.detach() before decoder")
+            v6_lines.append("    Encoder gets geometry grads only")
+            v6_lines.append("    Decoder gets recon grads only")
+        ax_v6stats.text(0.02, 0.98, "\n".join(v6_lines),
+                        transform=ax_v6stats.transAxes,
+                        fontsize=8, verticalalignment="top", fontfamily="monospace",
+                        bbox=dict(boxstyle="round,pad=0.5", facecolor="#F5F5F5",
+                                  edgecolor="#BDBDBD"))
 
     plt.suptitle(f"flm -- Concept Autoencoder Training ({run})",
                  fontsize=16, fontweight="bold", y=0.98)
@@ -506,7 +648,7 @@ def plot_comparison(save=True, show=False):
     for edata, color, label in [(v1_eval, C_V1, "V1"), (v2_eval, C_V2, "V2")]:
         if edata:
             s = [d["step"] for d in edata]
-            v = [d.get("word_order_sim", 1.0) for d in edata]
+            v = [d.get("wo_sim", d.get("word_order_sim", 1.0)) for d in edata]
             ax.plot(s, v, color=color, linewidth=2.5, marker="o", markersize=4,
                     label=f"{label} word order")
     ax.axhline(y=0.3, color="gray", linestyle="--", alpha=0.4, linewidth=1,
@@ -806,12 +948,12 @@ def main():
     # Auto-detect latest run with data
     run = args.run
     if run is None:
-        for r in ["v5", "v4", "v3", "v2", "v1"]:
+        for r in ["v6", "v5", "v4", "v3", "v2", "v1"]:
             if os.path.exists(CONCEPT_RUNS[r]["log"]):
                 run = r
                 break
         if run is None:
-            run = "v3"
+            run = "v6"
 
     if args.live:
         print(f"Live mode - refreshing every {args.interval}s. Ctrl+C to stop.")

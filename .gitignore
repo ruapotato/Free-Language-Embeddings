@@ -48,6 +48,9 @@ logs/tracking/
 # Videos (too large for git)
 logs/plots/*.mp4
 
+# Concept axis data (regenerable with generate_concept_data.py)
+data/concept_axes/
+
 # Pair datasets (regenerable with build_pairs.py)
 data/pairs/
 
