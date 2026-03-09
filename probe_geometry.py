@@ -5,9 +5,9 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from transformers import BertTokenizerFast
-from concept_model import ConceptAutoencoder, ConceptConfig, slot_similarity_matrix
+from concept_model import ConceptAutoencoder, ConceptConfig, flat_similarity_matrix
 
-CKPT = "checkpoints/concept_v6/latest.pt"
+CKPT = "checkpoints/concept_v8/latest.pt"
 DEVICE = "cpu"
 
 SLOT_NAMES = {
@@ -41,8 +41,8 @@ def encode(model, tokenizer, texts):
 
 
 def slot_cosine(a, b):
-    """Slot-aware similarity between two single-example concept tensors."""
-    return slot_similarity_matrix(a, b).item()
+    """Flat cosine similarity between two single-example concept tensors."""
+    return flat_similarity_matrix(a, b).item()
 
 
 def flat_cosine(a, b):
@@ -338,12 +338,20 @@ def main():
         "three big red cars drove quickly north",
         "he certainly did not enjoy the terrible movie yesterday",
     ]
-    enc = tokenizer(recon_tests, padding=True, truncation=True, max_length=64, return_tensors="pt")
-    with torch.no_grad():
-        logits, _ = model(enc["input_ids"], enc["attention_mask"])
-    preds = logits.argmax(dim=-1)
-    for i, sent in enumerate(recon_tests):
-        decoded = tokenizer.decode(preds[i], skip_special_tokens=True)
+    for sent in recon_tests:
+        enc = tokenizer(sent, padding=True, truncation=True, max_length=64, return_tensors="pt")
+        with torch.no_grad():
+            concepts = model.encode(enc["input_ids"], enc["attention_mask"])
+            bos_id = tokenizer.cls_token_id or 101
+            generated = [bos_id]
+            for _ in range(len(enc["input_ids"][0]) + 10):
+                dec_input = torch.tensor([generated])
+                logits = model.decode(dec_input, concepts)
+                next_token = logits[0, -1].argmax().item()
+                if next_token == tokenizer.sep_token_id:
+                    break
+                generated.append(next_token)
+        decoded = tokenizer.decode(generated[1:], skip_special_tokens=True)
         print(f"  IN:  {sent}")
         print(f"  OUT: {decoded}")
         print()

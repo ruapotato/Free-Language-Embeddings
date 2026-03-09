@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: Active training (Concept Autoencoder V8).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
+> **Status: Active training (Concept Autoencoder V9).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -56,25 +56,25 @@ Each slot owns one semantic family. Synthetic training data teaches the model wh
 | 14 | Location/Scene | 30 | Formality/Register |
 | 15 | Spatial Relations | 31 | Speech Act/Intent |
 
-### Training Losses (V8)
+### Training Losses (V9)
 
-V8 uses V7's 14 losses with **staged slot specialization** and stronger margin targets.
+V9 uses V8's 15 losses with **recon-gated geometry** and **hard repulsion** for clustering.
 
-V7 post-mortem: slot structure developed (28/32 assigned, iso=0.63) but global flat cosine compressed into a narrow similarity band (para=0.94, unrelated=0.84, WO=0.71). pos_sim stuck at 0.74. Margin losses at weight 1.5 were overwhelmed by 8.4 total loss. Repulsion target 0.3 trivially satisfied. Clustering gap collapsed to 0.013.
+V8 post-mortem: slot structure excellent (31/32 assigned, iso=0.554) but reconstruction was garbage (gibberish output despite 0.55 teacher-forced CE). Clustering gap still tiny (+0.018). Geometry pushed vectors around but decoder couldn't use them — concept space may not have encoded real information.
 
-V8 fixes with three training phases:
+V9 fixes with recon-gated dynamic phases:
 
-**Phase 1 — Foundation** (30K steps): Normal training to establish reconstruction and basic slot structure.
+**Phase 1 — Recon Focus** (until recon < 0.1): Geometry losses suppressed by a gate (0→1 as recon drops from 0.5→0.1). Decoder gets 3x weight boost. Full gradient taper (1.0) through bottleneck so encoder learns representations the decoder can use.
 
-**Phase 2 — Slot Focus** (16K steps): Cycles through each slot (500 steps each). Per-slot gradient scaling gives the focus slot full gradient (1.0) while others get reduced gradient (0.05). This **guides** specialization without destroying learned structure. Decoder keeps training all slots equally so reconstruction stays healthy.
+**Phase 2 — Slot Focus** (32 x 500 steps, starts when recon is good): Cycles through each slot with per-slot gradient scaling (focus=1.0, others=0.05). Starts automatically when the recon gate opens.
 
 **Phase 3 — Joint Fine-tune** (remaining steps): All slots at full gradient, balanced refinement.
 
-**Stronger targets** (V8 vs V7): para>0.92 (was 0.85), neg<0.2 (was 0.3), WO<0.4 (was 0.5), repulsion<0.05 (was 0.3). Margin weights 5-8x (was 1-1.5). NCE temperature 0.04 (was 0.07).
+**Hard repulsion** (V9): Targets the top-k most similar non-matching pairs per sample, not just the batch mean. This focuses gradient on the worst offenders — the pairs that keep the clustering gap small.
 
-**Per-slot stats**: Dashboard shows per-slot isolation bar chart, color-coded by assignment status.
+**Recon gate**: If reconstruction drifts bad during Phase 2/3, the gate automatically reduces geometry influence. Ensures concept vectors always encode meaningful information.
 
-**Gradient taper** (from V7): 30% of reconstruction gradient reaches encoder (via autograd scaling).
+**Per-slot stats**: Dashboard shows per-slot isolation bar chart, metric glossary, and geo gate on recon chart.
 
 ### Training Data (DFSG-compliant)
 
@@ -86,9 +86,9 @@ V8 fixes with three training phases:
 | QQP | CC | 400K | Question paraphrases |
 | Tatoeba | CC-BY | 350K | Cross-lingual pairs |
 
-### Training Progress (Concept Autoencoder V8)
+### Training Progress (Concept Autoencoder V9)
 
-V8 uses staged slot specialization with three training phases.
+V9 uses recon-gated slot specialization with dynamic phases.
 
 **Live Dashboard:** `python web_dashboard.py` then open http://localhost:8501
 
@@ -102,8 +102,7 @@ python generate_concept_data.py
 python build_pairs.py
 
 # 3. Train concept autoencoder
-python train_v8.py --fresh         # from scratch
-python train_v8.py --from-v7      # init from V7 checkpoint
+python train_v9.py --fresh         # from scratch
 
 # 4. Training dashboard (auto-detects latest version)
 python web_dashboard.py
@@ -111,7 +110,16 @@ python web_dashboard.py
 
 ## Version History
 
-### Concept Autoencoder V8 (current) — Staged Slot Specialization
+### Concept Autoencoder V9 (current) — Recon-Gated Slot Specialization
+- Recon-gated geometry: geometry losses suppressed until reconstruction works (recon < 0.1)
+- Dynamic phases driven by recon quality, not fixed step counts
+- Recon boost (3x decoder weight) during Phase 1 for faster convergence
+- Hard repulsion loss: targets worst-offending pairs for clustering gap
+- Full gradient taper (1.0) through bottleneck in Phase 1
+- Dashboard: metric glossary, geo gate chart, hard repulsion tracking
+- V8 post-mortem: slots worked (31/32) but reconstruction was garbage, clustering gap still tiny
+
+### Concept Autoencoder V8 (archived) — Staged Slot Specialization
 - Three training phases: Foundation → Slot Focus → Joint Fine-tune
 - Per-slot gradient scaling (soft guidance, not hard freezing) in Phase 2
 - Per-slot isolation stats on dashboard (bar chart with assignment status)
@@ -182,7 +190,8 @@ python web_dashboard.py
 ```
 flm/
 ├── concept_model.py          # Concept autoencoder (54.3M, encoder-decoder)
-├── train_v8.py               # V8 training (staged slot specialization)
+├── train_v9.py               # V9 training (recon-gated slot specialization)
+├── train_v8.py               # V8 training (archived)
 ├── train_v7.py               # V7 training (archived)
 ├── train_v6.py               # V6 training (archived)
 ├── train_concept.py          # V5 training (archived)

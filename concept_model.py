@@ -872,6 +872,31 @@ def batch_repulsion_loss(concepts, target_sim=0.3):
     return loss, off_diag.mean().item()
 
 
+def hard_repulsion_loss(concepts, target_sim=0.05, top_k=8):
+    """
+    Hard repulsion: penalize the WORST offenders (highest similarity pairs).
+    Unlike batch_repulsion which averages over all pairs (diluting gradient),
+    this focuses on the top-k most similar non-self pairs per sample.
+
+    This pushes harder on the clustering gap by targeting the pairs that are
+    closest together in concept space.
+
+    concepts: (B, K, D)
+    Returns: (loss, max_sim)
+    """
+    flat = F.normalize(concepts.view(concepts.shape[0], -1), p=2, dim=-1)
+    sim = torch.mm(flat, flat.T)  # (B, B)
+    # Zero out diagonal
+    sim = sim - torch.eye(sim.shape[0], device=sim.device) * 2.0
+    # For each sample, get top-k most similar
+    k = min(top_k, sim.shape[0] - 1)
+    top_sims, _ = sim.topk(k, dim=1)  # (B, k)
+    # Penalize those above target
+    loss = F.relu(top_sims - target_sim).mean()
+    max_sim = top_sims[:, 0].mean().item()
+    return loss, max_sim
+
+
 def per_slot_paraphrase_loss(concepts_a, concepts_b):
     """
     Per-slot paraphrase consistency on REAL text pairs.

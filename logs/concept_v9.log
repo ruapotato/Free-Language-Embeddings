@@ -1,0 +1,321 @@
+[2026-03-09 07:35:40] ======================================================================
+[2026-03-09 07:35:40] FLM V9 — RECON-GATED SLOT SPECIALIZATION
+[2026-03-09 07:35:40] ======================================================================
+[2026-03-09 07:35:44] Tokenizer: vocab_size=30522
+[2026-03-09 07:35:44] Loading data...
+[2026-03-09 07:35:49]   Reconstruction texts: 3,503,109
+[2026-03-09 07:35:57]   Positive pairs: 667,818
+[2026-03-09 07:35:57]   Hard negative pairs: 339,146
+[2026-03-09 07:35:57]   STS graded pairs: 8,184
+[2026-03-09 07:36:04]   Concept axis pairs: 2,148,120 across 32 slots
+[2026-03-09 07:36:04]   Active slots: 32/32
+[2026-03-09 07:36:04]   Data range: slot 27 (1,800) — slot 3 (80,000)
+[2026-03-09 07:36:04]   Label vocab sizes: 0:4, 1:93, 2:4, 3:18, 4:18, 5:26, 6:20, 7:40, 8:15, 9:18, 10:6, 11:25, 12:13, 13:20, 14:6, 15:20, 16:16, 17:4, 18:28, 19:27, 20:14, 21:15, 22:3, 23:10, 24:8, 25:20, 26:39, 27:4, 28:27, 29:6, 30:4, 31:8
+[2026-03-09 07:36:05] Starting fresh training...
+[2026-03-09 07:36:05] Model: 54,296,448 params (54.3M) + 19,107 classifier
+[2026-03-09 07:36:05] Bottleneck: 32 concepts x 32 dim = 1024 total dims
+[2026-03-09 07:36:05] Compiling model with torch.compile...
+[2026-03-09 07:36:06] 
+--- INITIAL DIAGNOSTICS ---
+[2026-03-09 07:36:06]   +0.0767  [paraphrase  ] the massive cat stepped on the rug  <->  there was a rug that a massive cat stepped on
+[2026-03-09 07:36:06]   +0.6241  [paraphrase  ] the king died  <->  the monarch passed away
+[2026-03-09 07:36:06]   -0.1105  [crosslingual] the cat sat on the mat  <->  le chat etait assis sur le tapis
+[2026-03-09 07:36:06]   +0.4785  [unrelated   ] the cat sat on the mat  <->  the stock market crashed today
+[2026-03-09 07:36:06]   +0.9999  [word_order  ] the dog bit the man  <->  the man bit the dog
+[2026-03-09 07:36:06]   +0.8114  [binding     ] the purple man licked the sucker  <->  the man licked a purple sucker
+[2026-03-09 07:36:06]   +0.9991  [word_order  ] alice likes bob  <->  bob likes alice
+[2026-03-09 07:36:06]   +0.7195  [word_order  ] she gave him a book  <->  he gave her a book
+[2026-03-09 07:36:07]   Clustering gap: +0.003 | Direction consistency: 0.206
+[2026-03-09 07:36:07] 
+Training plan (V9 — Recon-Gated Slot Specialization):
+[2026-03-09 07:36:07]   Encoder: 384h x 6L x 6heads
+[2026-03-09 07:36:07]   Decoder: 384h x 6L x 6heads
+[2026-03-09 07:36:07]   Bottleneck: 32 x 32 = 1024 dims
+[2026-03-09 07:36:07]   V9 PHASES: P1=ReconFocus(until recon<0.1) -> P2=SlotFocus(32x500/slot) -> P3=JointFinetune(rest)
+[2026-03-09 07:36:07]   Phase 2 scales: focus=1.0 background=0.05
+[2026-03-09 07:36:07]   Hard repulsion weight: 5.0
+[2026-03-09 07:36:07]   NCE temp: 0.04 | Margin targets: para>0.92 neg<0.2 wo<0.4 repul<0.05
+[2026-03-09 07:36:07]   Batch: 40 recon + 80 pairs + 40 hard neg + 80 axis + 2x40 slot_con
+[2026-03-09 07:36:07]   Peak LR: 0.0003 | Steps: 0 -> 200000
+[2026-03-09 07:36:07]   Encoder: nce=2.0 wo=1.5 decorr=1.0 iso=1.0 cls=3.0 scon=2.0 sts=1.0
+[2026-03-09 07:36:07]   Margins: m_para=8.0 m_neg=5.0 m_wo=2.0 slot_para=2.0 repul=3.0
+[2026-03-09 07:36:07]   Decoder: recon=1.0 cross_recon=0.5
+[2026-03-09 07:36:07]   Recon gate: geo OFF above recon=0.5, fully ON below recon=0.1, EMA decay=0.99
+[2026-03-09 07:36:07]   Data: 667,818 pos + 339,146 hard neg + 8,184 STS + 2,148,120 axis
+[2026-03-09 07:36:07] ----------------------------------------------------------------------
+[2026-03-09 07:36:07] Prefetch buffer started (5 threads)
+[2026-03-09 07:36:07]   PHASE 1: Recon focus (geo_scale=0.00, waiting for recon < 0.1)
+[2026-03-09 07:36:35] step      50 | loss 45.9886 (recon=9.936 xrecon=9.924 nce=4.319 wo=0.647 decorr=0.998 iso=0.139 cls=2.680 scon=4.562 sts=0.221 m_para=0.177 m_neg=0.603 m_wo=0.587 sp=0.128 repul=0.574 hrepul=0.714) | p_sim=0.750 n_sim=0.604 wo_sim=0.987 sp_sim=0.750 r_sim=0.624 hr_max=0.818 cls_acc=0.166 | geo=0.00 lr 7.50e-06 | P1 0.0%
+[2026-03-09 07:37:03] step     100 | loss 44.6067 (recon=9.284 xrecon=9.335 nce=4.657 wo=1.829 decorr=1.000 iso=0.165 cls=2.679 scon=3.868 sts=0.454 m_para=0.057 m_neg=0.699 m_wo=0.598 sp=0.030 repul=0.732 hrepul=0.875) | p_sim=0.881 n_sim=0.774 wo_sim=0.998 sp_sim=0.881 r_sim=0.782 hr_max=0.957 cls_acc=0.126 | geo=0.00 lr 1.50e-05 | P1 0.1%
+[2026-03-09 07:37:31] step     150 | loss 41.9654 (recon=8.760 xrecon=8.754 nce=6.806 wo=1.370 decorr=1.000 iso=0.169 cls=2.625 scon=4.485 sts=0.426 m_para=0.194 m_neg=0.492 m_wo=0.597 sp=0.149 repul=0.483 hrepul=0.818) | p_sim=0.740 n_sim=0.467 wo_sim=0.997 sp_sim=0.740 r_sim=0.525 hr_max=0.950 cls_acc=0.111 | geo=0.00 lr 2.25e-05 | P1 0.1%
+[2026-03-09 07:37:58] step     200 | loss 39.2849 (recon=7.954 xrecon=8.180 nce=8.835 wo=1.045 decorr=1.000 iso=0.176 cls=2.756 scon=5.299 sts=0.404 m_para=0.323 m_neg=0.421 m_wo=0.598 sp=0.272 repul=0.269 hrepul=0.740) | p_sim=0.607 n_sim=0.250 wo_sim=0.998 sp_sim=0.607 r_sim=0.246 hr_max=0.914 cls_acc=0.089 | geo=0.00 lr 3.00e-05 | P1 0.1%
+[2026-03-09 07:38:24] step     250 | loss 36.4268 (recon=7.504 xrecon=7.377 nce=10.226 wo=0.828 decorr=1.000 iso=0.201 cls=2.732 scon=5.636 sts=0.330 m_para=0.416 m_neg=0.299 m_wo=0.596 sp=0.361 repul=0.218 hrepul=0.637) | p_sim=0.512 n_sim=0.087 wo_sim=0.997 sp_sim=0.512 r_sim=0.161 hr_max=0.852 cls_acc=0.128 | geo=0.00 lr 3.75e-05 | P1 0.1%
+[2026-03-09 07:38:50] step     300 | loss 33.7095 (recon=7.105 xrecon=7.034 nce=10.446 wo=0.860 decorr=1.000 iso=0.180 cls=2.959 scon=8.807 sts=0.393 m_para=0.470 m_neg=0.393 m_wo=0.598 sp=0.416 repul=0.198 hrepul=0.646) | p_sim=0.459 n_sim=0.026 wo_sim=0.998 sp_sim=0.460 r_sim=0.093 hr_max=0.855 cls_acc=0.071 | geo=0.00 lr 4.50e-05 | P1 0.1%
+[2026-03-09 07:39:17] step     350 | loss 31.3518 (recon=6.634 xrecon=6.666 nce=11.279 wo=0.749 decorr=1.000 iso=0.178 cls=2.841 scon=4.045 sts=0.409 m_para=0.517 m_neg=0.295 m_wo=0.596 sp=0.461 repul=0.177 hrepul=0.559) | p_sim=0.412 n_sim=0.056 wo_sim=0.997 sp_sim=0.412 r_sim=0.086 hr_max=0.810 cls_acc=0.066 | geo=0.00 lr 5.25e-05 | P1 0.2%
+[2026-03-09 07:39:44] step     400 | loss 29.5809 (recon=6.091 xrecon=6.423 nce=9.778 wo=0.751 decorr=1.000 iso=0.167 cls=3.109 scon=5.370 sts=0.310 m_para=0.460 m_neg=0.317 m_wo=0.596 sp=0.402 repul=0.198 hrepul=0.615) | p_sim=0.464 n_sim=0.082 wo_sim=0.996 sp_sim=0.464 r_sim=0.143 hr_max=0.837 cls_acc=0.053 | geo=0.00 lr 6.00e-05 | P1 0.2%
+[2026-03-09 07:40:11] step     450 | loss 28.3848 (recon=6.042 xrecon=6.021 nce=8.444 wo=0.734 decorr=1.000 iso=0.172 cls=2.769 scon=4.400 sts=0.329 m_para=0.420 m_neg=0.323 m_wo=0.597 sp=0.357 repul=0.161 hrepul=0.502) | p_sim=0.502 n_sim=0.122 wo_sim=0.997 sp_sim=0.502 r_sim=0.114 hr_max=0.764 cls_acc=0.125 | geo=0.00 lr 6.75e-05 | P1 0.2%
+[2026-03-09 07:40:38] step     500 | loss 27.4985 (recon=5.727 xrecon=5.968 nce=9.324 wo=0.656 decorr=1.000 iso=0.186 cls=2.952 scon=4.053 sts=0.388 m_para=0.457 m_neg=0.325 m_wo=0.593 sp=0.396 repul=0.170 hrepul=0.518) | p_sim=0.466 n_sim=0.119 wo_sim=0.993 sp_sim=0.466 r_sim=0.114 hr_max=0.777 cls_acc=0.107 | geo=0.00 lr 7.50e-05 | P1 0.2%
+[2026-03-09 07:40:39]   EVAL: para_sim=0.548 wo_sim=0.996 unrelated_sim=0.942 | rank90=9 rank95=11 | slot_iso=0.000 (0/32 good) slot_assign=2/32
+[2026-03-09 07:40:39]     +0.1011  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 07:40:39]     +0.9949  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 07:40:39]     +0.5686  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 07:40:39]     +0.9415  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 07:40:39]     +1.0000  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 07:40:39]     +0.9315  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 07:40:39]     +1.0000  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 07:40:39]     +0.9879  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 07:40:39]   SLOT_STATS: 0:-0.00N 1:-0.00N 2:-0.00N 3:+0.00N 4:-0.00N 5:-0.00N 6:+0.00N 7:-0.00N 8:-0.00N 9:-0.00N 10:-0.00N 11:-0.00N 12:+0.00N 13:+0.00N 14:+0.00N 15:+0.00N 16:+0.00N 17:+0.00Y 18:-0.00N 19:+0.00Y 20:+0.00N 21:-0.00N 22:-0.00N 23:-0.00N 24:+0.00N 25:-0.00N 26:-0.00N 27:-0.00N 28:-0.00N 29:-0.00N 30:-0.00N 31:+0.00N
+[2026-03-09 07:41:05] step     550 | loss 26.8415 (recon=5.874 xrecon=5.824 nce=11.051 wo=0.695 decorr=1.000 iso=0.188 cls=2.958 scon=4.315 sts=0.294 m_para=0.553 m_neg=0.329 m_wo=0.596 sp=0.490 repul=0.181 hrepul=0.507) | p_sim=0.372 n_sim=0.077 wo_sim=0.996 sp_sim=0.372 r_sim=0.130 hr_max=0.736 cls_acc=0.055 | geo=0.00 lr 8.25e-05 | P1 0.3%
+[2026-03-09 07:41:31] step     600 | loss 26.2767 (recon=5.447 xrecon=5.630 nce=7.706 wo=0.652 decorr=1.000 iso=0.171 cls=2.991 scon=4.777 sts=0.246 m_para=0.414 m_neg=0.295 m_wo=0.595 sp=0.355 repul=0.148 hrepul=0.455) | p_sim=0.513 n_sim=0.105 wo_sim=0.995 sp_sim=0.513 r_sim=0.102 hr_max=0.731 cls_acc=0.105 | geo=0.00 lr 9.00e-05 | P1 0.3%
+[2026-03-09 07:41:57] step     650 | loss 25.7007 (recon=5.309 xrecon=5.590 nce=8.265 wo=0.690 decorr=1.000 iso=0.155 cls=3.214 scon=6.507 sts=0.265 m_para=0.452 m_neg=0.307 m_wo=0.594 sp=0.393 repul=0.164 hrepul=0.507) | p_sim=0.473 n_sim=0.049 wo_sim=0.994 sp_sim=0.473 r_sim=0.108 hr_max=0.745 cls_acc=0.104 | geo=0.00 lr 9.75e-05 | P1 0.3%
+[2026-03-09 07:42:23] step     700 | loss 25.0981 (recon=5.567 xrecon=5.351 nce=8.931 wo=0.658 decorr=1.000 iso=0.163 cls=3.489 scon=4.099 sts=0.235 m_para=0.500 m_neg=0.284 m_wo=0.596 sp=0.440 repul=0.195 hrepul=0.499) | p_sim=0.425 n_sim=0.094 wo_sim=0.996 sp_sim=0.425 r_sim=0.175 hr_max=0.752 cls_acc=0.064 | geo=0.00 lr 1.05e-04 | P1 0.4%
+[2026-03-09 07:42:50] step     750 | loss 24.5388 (recon=5.490 xrecon=5.271 nce=8.048 wo=0.640 decorr=1.000 iso=0.150 cls=3.043 scon=4.838 sts=0.309 m_para=0.471 m_neg=0.240 m_wo=0.595 sp=0.408 repul=0.116 hrepul=0.408) | p_sim=0.453 n_sim=0.049 wo_sim=0.995 sp_sim=0.453 r_sim=0.053 hr_max=0.701 cls_acc=0.120 | geo=0.00 lr 1.12e-04 | P1 0.4%
+[2026-03-09 07:43:16] step     800 | loss 24.0624 (recon=5.382 xrecon=5.144 nce=9.444 wo=0.613 decorr=1.000 iso=0.166 cls=3.172 scon=6.852 sts=0.299 m_para=0.528 m_neg=0.288 m_wo=0.592 sp=0.466 repul=0.137 hrepul=0.419) | p_sim=0.397 n_sim=0.074 wo_sim=0.992 sp_sim=0.397 r_sim=0.092 hr_max=0.665 cls_acc=0.065 | geo=0.00 lr 1.20e-04 | P1 0.4%
+[2026-03-09 07:43:42] step     850 | loss 23.5862 (recon=5.206 xrecon=4.977 nce=8.156 wo=0.632 decorr=1.000 iso=0.169 cls=3.056 scon=4.388 sts=0.216 m_para=0.487 m_neg=0.278 m_wo=0.594 sp=0.423 repul=0.151 hrepul=0.441) | p_sim=0.435 n_sim=0.065 wo_sim=0.994 sp_sim=0.435 r_sim=0.116 hr_max=0.655 cls_acc=0.099 | geo=0.00 lr 1.28e-04 | P1 0.4%
+[2026-03-09 07:44:08] step     900 | loss 23.0636 (recon=5.151 xrecon=4.989 nce=9.040 wo=0.664 decorr=1.000 iso=0.169 cls=3.414 scon=4.940 sts=0.326 m_para=0.543 m_neg=0.309 m_wo=0.595 sp=0.476 repul=0.131 hrepul=0.424) | p_sim=0.381 n_sim=0.033 wo_sim=0.996 sp_sim=0.381 r_sim=0.048 hr_max=0.677 cls_acc=0.072 | geo=0.00 lr 1.35e-04 | P1 0.4%
+[2026-03-09 07:44:34] step     950 | loss 22.6287 (recon=5.008 xrecon=4.920 nce=7.858 wo=0.646 decorr=1.000 iso=0.150 cls=3.203 scon=6.501 sts=0.215 m_para=0.475 m_neg=0.286 m_wo=0.595 sp=0.410 repul=0.130 hrepul=0.399) | p_sim=0.448 n_sim=0.055 wo_sim=0.995 sp_sim=0.448 r_sim=0.086 hr_max=0.640 cls_acc=0.130 | geo=0.00 lr 1.42e-04 | P1 0.5%
+[2026-03-09 07:45:01] step    1000 | loss 22.3157 (recon=4.787 xrecon=4.673 nce=6.830 wo=0.637 decorr=1.000 iso=0.150 cls=3.080 scon=4.829 sts=0.296 m_para=0.461 m_neg=0.368 m_wo=0.594 sp=0.395 repul=0.140 hrepul=0.422) | p_sim=0.461 n_sim=0.096 wo_sim=0.994 sp_sim=0.462 r_sim=0.105 hr_max=0.675 cls_acc=0.166 | geo=0.00 lr 1.50e-04 | P1 0.5%
+[2026-03-09 07:45:01]   EVAL: para_sim=0.655 wo_sim=0.986 unrelated_sim=0.833 | rank90=12 rank95=14 | slot_iso=0.000 (0/32 good) slot_assign=1/32
+[2026-03-09 07:45:01]     +0.3417  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 07:45:01]     +0.9682  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 07:45:01]     +0.5953  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 07:45:01]     +0.8331  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 07:45:01]     +0.9989  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 07:45:01]     +0.9772  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 07:45:01]     +0.9999  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 07:45:01]     +0.9603  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 07:45:01]   SLOT_STATS: 0:-0.00N 1:+0.00N 2:-0.00N 3:+0.00Y 4:-0.00N 5:-0.00N 6:+0.00N 7:+0.00N 8:-0.00N 9:-0.00N 10:+0.00N 11:+0.00N 12:-0.00N 13:+0.00N 14:+0.00N 15:+0.00N 16:+0.00N 17:-0.00N 18:-0.00N 19:+0.00N 20:-0.00N 21:-0.00N 22:+0.00N 23:-0.00N 24:-0.00N 25:+0.00N 26:+0.00N 27:-0.00N 28:-0.00N 29:+0.00N 30:+0.00N 31:+0.00N
+[2026-03-09 07:45:28] step    1050 | loss 22.0412 (recon=5.238 xrecon=4.848 nce=6.258 wo=0.644 decorr=1.000 iso=0.146 cls=3.229 scon=5.604 sts=0.303 m_para=0.378 m_neg=0.315 m_wo=0.595 sp=0.315 repul=0.186 hrepul=0.490) | p_sim=0.545 n_sim=0.134 wo_sim=0.995 sp_sim=0.545 r_sim=0.157 hr_max=0.697 cls_acc=0.119 | geo=0.00 lr 1.57e-04 | P1 0.5%
+[2026-03-09 07:45:54] step    1100 | loss 21.6795 (recon=4.910 xrecon=4.660 nce=7.240 wo=0.649 decorr=1.000 iso=0.150 cls=3.308 scon=5.143 sts=0.237 m_para=0.435 m_neg=0.273 m_wo=0.596 sp=0.372 repul=0.150 hrepul=0.445) | p_sim=0.490 n_sim=0.119 wo_sim=0.996 sp_sim=0.490 r_sim=0.119 hr_max=0.684 cls_acc=0.076 | geo=0.00 lr 1.65e-04 | P1 0.5%
+[2026-03-09 07:46:20] step    1150 | loss 21.3647 (recon=4.849 xrecon=4.549 nce=7.354 wo=0.646 decorr=1.000 iso=0.180 cls=3.451 scon=6.540 sts=0.260 m_para=0.466 m_neg=0.305 m_wo=0.596 sp=0.402 repul=0.154 hrepul=0.425) | p_sim=0.458 n_sim=0.083 wo_sim=0.996 sp_sim=0.458 r_sim=0.125 hr_max=0.663 cls_acc=0.070 | geo=0.00 lr 1.72e-04 | P1 0.6%
+[2026-03-09 07:46:46] step    1200 | loss 21.0549 (recon=4.860 xrecon=4.471 nce=6.892 wo=0.640 decorr=1.000 iso=0.169 cls=3.251 scon=4.788 sts=0.321 m_para=0.459 m_neg=0.289 m_wo=0.595 sp=0.394 repul=0.150 hrepul=0.429) | p_sim=0.463 n_sim=0.079 wo_sim=0.995 sp_sim=0.463 r_sim=0.112 hr_max=0.649 cls_acc=0.133 | geo=0.00 lr 1.80e-04 | P1 0.6%
+[2026-03-09 07:47:12] step    1250 | loss 20.7259 (recon=4.831 xrecon=4.515 nce=6.824 wo=0.651 decorr=1.000 iso=0.182 cls=3.100 scon=5.209 sts=0.221 m_para=0.426 m_neg=0.320 m_wo=0.596 sp=0.367 repul=0.163 hrepul=0.444) | p_sim=0.500 n_sim=0.164 wo_sim=0.996 sp_sim=0.500 r_sim=0.142 hr_max=0.652 cls_acc=0.152 | geo=0.00 lr 1.87e-04 | P1 0.6%
+[2026-03-09 07:47:38] step    1300 | loss 20.4953 (recon=4.691 xrecon=4.430 nce=7.070 wo=0.621 decorr=1.000 iso=0.151 cls=3.393 scon=7.868 sts=0.258 m_para=0.444 m_neg=0.295 m_wo=0.592 sp=0.382 repul=0.152 hrepul=0.439) | p_sim=0.479 n_sim=0.054 wo_sim=0.992 sp_sim=0.480 r_sim=0.123 hr_max=0.674 cls_acc=0.142 | geo=0.00 lr 1.95e-04 | P1 0.7%
+[2026-03-09 07:48:03] step    1350 | loss 20.3250 (recon=4.461 xrecon=3.928 nce=6.496 wo=0.595 decorr=1.000 iso=0.140 cls=3.237 scon=3.981 sts=0.316 m_para=0.424 m_neg=0.284 m_wo=0.591 sp=0.363 repul=0.181 hrepul=0.462) | p_sim=0.500 n_sim=0.099 wo_sim=0.991 sp_sim=0.500 r_sim=0.167 hr_max=0.673 cls_acc=0.089 | geo=0.00 lr 2.02e-04 | P1 0.7%
+[2026-03-09 07:48:29] step    1400 | loss 20.0485 (recon=4.348 xrecon=4.319 nce=6.282 wo=0.625 decorr=1.000 iso=0.155 cls=3.487 scon=8.350 sts=0.345 m_para=0.408 m_neg=0.331 m_wo=0.594 sp=0.347 repul=0.143 hrepul=0.427) | p_sim=0.515 n_sim=0.094 wo_sim=0.994 sp_sim=0.515 r_sim=0.093 hr_max=0.662 cls_acc=0.087 | geo=0.00 lr 2.10e-04 | P1 0.7%
+[2026-03-09 07:48:55] step    1450 | loss 19.7571 (recon=4.653 xrecon=4.177 nce=7.080 wo=0.630 decorr=1.000 iso=0.164 cls=3.457 scon=6.006 sts=0.294 m_para=0.461 m_neg=0.276 m_wo=0.593 sp=0.400 repul=0.145 hrepul=0.407) | p_sim=0.463 n_sim=0.091 wo_sim=0.993 sp_sim=0.463 r_sim=0.114 hr_max=0.650 cls_acc=0.087 | geo=0.00 lr 2.17e-04 | P1 0.7%
+[2026-03-09 07:49:22] step    1500 | loss 19.6501 (recon=4.488 xrecon=4.064 nce=8.755 wo=0.629 decorr=1.000 iso=0.159 cls=3.336 scon=5.965 sts=0.218 m_para=0.522 m_neg=0.344 m_wo=0.594 sp=0.455 repul=0.156 hrepul=0.441) | p_sim=0.399 n_sim=0.126 wo_sim=0.994 sp_sim=0.399 r_sim=0.142 hr_max=0.670 cls_acc=0.086 | geo=0.00 lr 2.25e-04 | P1 0.8%
+[2026-03-09 07:49:23]   EVAL: para_sim=0.636 wo_sim=0.991 unrelated_sim=0.733 | rank90=12 rank95=14 | slot_iso=0.000 (0/32 good) slot_assign=0/32
+[2026-03-09 07:49:23]     +0.3389  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 07:49:23]     +0.9337  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 07:49:23]     +0.5865  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 07:49:23]     +0.7328  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 07:49:23]     +0.9971  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 07:49:23]     +0.9625  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 07:49:23]     +0.9997  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 07:49:23]     +0.9768  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 07:49:23]   SLOT_STATS: 0:-0.00N 1:+0.00N 2:-0.00N 3:-0.00N 4:-0.00N 5:-0.00N 6:+0.00N 7:+0.00N 8:-0.00N 9:-0.00N 10:+0.00N 11:-0.00N 12:-0.00N 13:+0.00N 14:+0.00N 15:+0.00N 16:+0.00N 17:-0.00N 18:-0.00N 19:+0.00N 20:-0.00N 21:-0.00N 22:+0.00N 23:-0.00N 24:-0.00N 25:+0.00N 26:+0.00N 27:-0.00N 28:-0.00N 29:+0.00N 30:+0.00N 31:+0.00N
+[2026-03-09 07:49:49] step    1550 | loss 19.5935 (recon=4.213 xrecon=4.211 nce=6.710 wo=0.622 decorr=1.000 iso=0.184 cls=3.322 scon=8.063 sts=0.301 m_para=0.448 m_neg=0.248 m_wo=0.594 sp=0.387 repul=0.150 hrepul=0.421) | p_sim=0.476 n_sim=0.105 wo_sim=0.994 sp_sim=0.476 r_sim=0.124 hr_max=0.632 cls_acc=0.106 | geo=0.00 lr 2.32e-04 | P1 0.8%
+[2026-03-09 07:50:15] step    1600 | loss 19.4034 (recon=4.566 xrecon=3.906 nce=6.178 wo=0.622 decorr=1.000 iso=0.145 cls=3.651 scon=5.672 sts=0.252 m_para=0.418 m_neg=0.222 m_wo=0.594 sp=0.355 repul=0.113 hrepul=0.376) | p_sim=0.504 n_sim=0.102 wo_sim=0.994 sp_sim=0.504 r_sim=0.066 hr_max=0.608 cls_acc=0.057 | geo=0.00 lr 2.40e-04 | P1 0.8%
+[2026-03-09 07:50:41] step    1650 | loss 19.1690 (recon=4.376 xrecon=3.717 nce=6.003 wo=0.644 decorr=1.000 iso=0.171 cls=3.217 scon=6.078 sts=0.213 m_para=0.409 m_neg=0.312 m_wo=0.596 sp=0.347 repul=0.159 hrepul=0.442) | p_sim=0.517 n_sim=0.091 wo_sim=0.996 sp_sim=0.516 r_sim=0.119 hr_max=0.670 cls_acc=0.147 | geo=0.00 lr 2.47e-04 | P1 0.8%
+[2026-03-09 07:51:06] step    1700 | loss 18.9553 (recon=4.076 xrecon=3.910 nce=6.770 wo=0.629 decorr=1.000 iso=0.156 cls=3.729 scon=6.381 sts=0.292 m_para=0.472 m_neg=0.340 m_wo=0.594 sp=0.408 repul=0.139 hrepul=0.398) | p_sim=0.451 n_sim=0.060 wo_sim=0.994 sp_sim=0.451 r_sim=0.106 hr_max=0.598 cls_acc=0.054 | geo=0.00 lr 2.55e-04 | P1 0.9%
+[2026-03-09 07:51:33] step    1750 | loss 18.7932 (recon=4.177 xrecon=3.797 nce=5.341 wo=0.622 decorr=1.000 iso=0.180 cls=3.772 scon=5.463 sts=0.278 m_para=0.391 m_neg=0.303 m_wo=0.594 sp=0.327 repul=0.133 hrepul=0.384) | p_sim=0.532 n_sim=0.057 wo_sim=0.994 sp_sim=0.532 r_sim=0.101 hr_max=0.611 cls_acc=0.132 | geo=0.00 lr 2.62e-04 | P1 0.9%
+[2026-03-09 07:51:59] step    1800 | loss 18.6958 (recon=4.018 xrecon=3.759 nce=8.165 wo=0.640 decorr=1.000 iso=0.174 cls=3.499 scon=8.125 sts=0.247 m_para=0.540 m_neg=0.256 m_wo=0.595 sp=0.476 repul=0.130 hrepul=0.398) | p_sim=0.382 n_sim=0.046 wo_sim=0.995 sp_sim=0.382 r_sim=0.084 hr_max=0.651 cls_acc=0.080 | geo=0.00 lr 2.70e-04 | P1 0.9%
+[2026-03-09 07:52:25] step    1850 | loss 18.4076 (recon=3.876 xrecon=3.962 nce=6.229 wo=0.614 decorr=1.000 iso=0.145 cls=3.871 scon=6.333 sts=0.226 m_para=0.447 m_neg=0.334 m_wo=0.593 sp=0.384 repul=0.127 hrepul=0.388) | p_sim=0.476 n_sim=0.087 wo_sim=0.993 sp_sim=0.476 r_sim=0.087 hr_max=0.623 cls_acc=0.042 | geo=0.00 lr 2.77e-04 | P1 0.9%
+[2026-03-09 07:52:51] step    1900 | loss 18.1216 (recon=4.059 xrecon=4.150 nce=6.262 wo=0.651 decorr=1.000 iso=0.144 cls=3.912 scon=5.728 sts=0.301 m_para=0.403 m_neg=0.318 m_wo=0.596 sp=0.341 repul=0.145 hrepul=0.400) | p_sim=0.521 n_sim=0.130 wo_sim=0.997 sp_sim=0.521 r_sim=0.119 hr_max=0.608 cls_acc=0.067 | geo=0.00 lr 2.85e-04 | P1 0.9%
+[2026-03-09 07:53:17] step    1950 | loss 18.1436 (recon=4.117 xrecon=3.872 nce=5.602 wo=0.638 decorr=1.000 iso=0.156 cls=3.923 scon=6.383 sts=0.259 m_para=0.386 m_neg=0.359 m_wo=0.595 sp=0.323 repul=0.170 hrepul=0.425) | p_sim=0.539 n_sim=0.162 wo_sim=0.995 sp_sim=0.539 r_sim=0.166 hr_max=0.626 cls_acc=0.036 | geo=0.00 lr 2.93e-04 | P1 1.0%
+[2026-03-09 07:53:43] step    2000 | loss 18.0867 (recon=4.314 xrecon=3.739 nce=5.996 wo=0.638 decorr=0.999 iso=0.146 cls=3.536 scon=9.120 sts=0.305 m_para=0.428 m_neg=0.278 m_wo=0.595 sp=0.362 repul=0.137 hrepul=0.393) | p_sim=0.493 n_sim=0.101 wo_sim=0.995 sp_sim=0.493 r_sim=0.102 hr_max=0.619 cls_acc=0.138 | geo=0.00 lr 3.00e-04 | P1 1.0%
+[2026-03-09 07:53:44]   EVAL: para_sim=0.611 wo_sim=0.973 unrelated_sim=0.762 | rank90=13 rank95=15 | slot_iso=0.000 (0/32 good) slot_assign=1/32
+[2026-03-09 07:53:44]     +0.2845  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 07:53:44]     +0.9377  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 07:53:44]     +0.6111  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 07:53:44]     +0.7617  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 07:53:44]     +0.9982  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 07:53:44]     +0.9707  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 07:53:44]     +0.9992  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 07:53:44]     +0.9224  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 07:53:44]   SLOT_STATS: 0:-0.00N 1:-0.00N 2:-0.00N 3:-0.00N 4:-0.00N 5:+0.00N 6:+0.00N 7:-0.00N 8:+0.00N 9:+0.00N 10:-0.00N 11:+0.00N 12:+0.00N 13:-0.00N 14:-0.00N 15:-0.00N 16:-0.00N 17:+0.00N 18:-0.00N 19:+0.00N 20:-0.00N 21:-0.00N 22:-0.00N 23:+0.00N 24:-0.00N 25:-0.00N 26:-0.00N 27:+0.00Y 28:-0.00N 29:-0.00N 30:+0.00N 31:-0.00N
+[2026-03-09 07:53:44]   GEO: clustering_gap=+0.063 dir_consistency=0.343 within=0.582 between=0.519
+[2026-03-09 07:53:44] --- RECONSTRUCTION SAMPLES ---
+[2026-03-09 07:53:44]   [DIFF] the purple man licked the sucker
+[2026-03-09 07:53:44]         -> the man is outside.
+[2026-03-09 07:53:44]   [DIFF] the man licked a purple sucker
+[2026-03-09 07:53:44]         -> the man is outside.
+[2026-03-09 07:53:44]   [DIFF] the dog bit the man
+[2026-03-09 07:53:44]         -> the man is outside.
+[2026-03-09 07:53:44]   [DIFF] the man bit the dog
+[2026-03-09 07:53:44]         -> the man is outside.
+[2026-03-09 07:53:44]   [DIFF] she runs every morning
+[2026-03-09 07:53:44]         -> she was a little boy.
+[2026-03-09 07:53:44] --- SLOT ISOLATION DETAIL ---
+[2026-03-09 07:53:45]   [ BAD] slot  0 (     subject): target_sim=0.973 other_sim=0.973 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot  1 (      object): target_sim=0.983 other_sim=0.983 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot  2 (     animacy): target_sim=0.948 other_sim=0.948 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot  3 (         age): target_sim=0.968 other_sim=0.968 isolation=-0.001 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot  4 (        size): target_sim=0.958 other_sim=0.958 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot  5 (       color): target_sim=0.983 other_sim=0.983 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot  6 (       shape): target_sim=0.980 other_sim=0.980 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot  7 (    material): target_sim=0.980 other_sim=0.980 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot  8 (      weight): target_sim=0.941 other_sim=0.941 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot  9 ( temperature): target_sim=0.981 other_sim=0.981 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 10 ( action_type): target_sim=0.977 other_sim=0.977 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 11 (      manner): target_sim=0.974 other_sim=0.974 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 12 (       speed): target_sim=0.880 other_sim=0.881 isolation=+0.001 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 13 (   direction): target_sim=0.959 other_sim=0.958 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 14 (    location): target_sim=0.841 other_sim=0.841 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 15 (     spatial): target_sim=0.857 other_sim=0.856 isolation=-0.001 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 16 (    distance): target_sim=0.789 other_sim=0.788 isolation=-0.001 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 17 (       tense): target_sim=0.902 other_sim=0.902 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 18 (    duration): target_sim=0.869 other_sim=0.868 isolation=-0.001 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 19 (    time_ref): target_sim=0.808 other_sim=0.810 isolation=+0.002 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 20 (      number): target_sim=0.807 other_sim=0.807 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 21 (      degree): target_sim=0.979 other_sim=0.979 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 22 (   sentiment): target_sim=0.977 other_sim=0.977 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 23 (     emotion): target_sim=0.951 other_sim=0.951 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 24 (     arousal): target_sim=0.803 other_sim=0.802 isolation=-0.001 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 25 (     quality): target_sim=0.985 other_sim=0.985 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 26 (  difficulty): target_sim=0.981 other_sim=0.981 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 27 (    negation): target_sim=0.931 other_sim=0.932 isolation=+0.001 assigned=Y
+[2026-03-09 07:53:45]   [ BAD] slot 28 (   certainty): target_sim=0.908 other_sim=0.908 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 29 (   causation): target_sim=0.938 other_sim=0.938 isolation=-0.000 assigned=N
+[2026-03-09 07:53:45]   [WEAK] slot 30 (   formality): target_sim=0.820 other_sim=0.820 isolation=+0.000 assigned=N
+[2026-03-09 07:53:45]   [ BAD] slot 31 (  speech_act): target_sim=0.703 other_sim=0.702 isolation=-0.000 assigned=N
+[2026-03-09 07:54:11] step    2050 | loss 18.0135 (recon=3.945 xrecon=4.063 nce=6.376 wo=0.637 decorr=0.999 iso=0.171 cls=4.245 scon=4.528 sts=0.228 m_para=0.450 m_neg=0.320 m_wo=0.595 sp=0.384 repul=0.145 hrepul=0.397) | p_sim=0.472 n_sim=0.110 wo_sim=0.995 sp_sim=0.472 r_sim=0.133 hr_max=0.617 cls_acc=0.102 | geo=0.00 lr 3.00e-04 | P1 1.0%
+[2026-03-09 07:54:37] step    2100 | loss 17.8757 (recon=3.840 xrecon=3.824 nce=5.707 wo=0.632 decorr=0.999 iso=0.146 cls=4.115 scon=5.847 sts=0.319 m_para=0.412 m_neg=0.399 m_wo=0.595 sp=0.346 repul=0.211 hrepul=0.468) | p_sim=0.510 n_sim=0.128 wo_sim=0.995 sp_sim=0.510 r_sim=0.224 hr_max=0.652 cls_acc=0.086 | geo=0.00 lr 3.00e-04 | P1 1.1%
+[2026-03-09 07:55:04] step    2150 | loss 17.6526 (recon=4.173 xrecon=3.615 nce=5.125 wo=0.616 decorr=0.999 iso=0.171 cls=3.648 scon=6.480 sts=0.308 m_para=0.375 m_neg=0.327 m_wo=0.592 sp=0.312 repul=0.203 hrepul=0.474) | p_sim=0.549 n_sim=0.158 wo_sim=0.992 sp_sim=0.549 r_sim=0.211 hr_max=0.689 cls_acc=0.178 | geo=0.00 lr 3.00e-04 | P1 1.1%
+[2026-03-09 07:55:30] step    2200 | loss 17.5871 (recon=3.632 xrecon=3.990 nce=4.902 wo=0.636 decorr=0.999 iso=0.158 cls=4.149 scon=3.904 sts=0.197 m_para=0.372 m_neg=0.335 m_wo=0.595 sp=0.308 repul=0.170 hrepul=0.417) | p_sim=0.551 n_sim=0.156 wo_sim=0.995 sp_sim=0.551 r_sim=0.164 hr_max=0.636 cls_acc=0.117 | geo=0.00 lr 3.00e-04 | P1 1.1%
+[2026-03-09 07:55:56] step    2250 | loss 17.4824 (recon=4.210 xrecon=3.793 nce=6.404 wo=0.612 decorr=0.998 iso=0.144 cls=4.376 scon=7.832 sts=0.234 m_para=0.460 m_neg=0.354 m_wo=0.593 sp=0.395 repul=0.216 hrepul=0.473) | p_sim=0.461 n_sim=0.120 wo_sim=0.993 sp_sim=0.461 r_sim=0.227 hr_max=0.667 cls_acc=0.135 | geo=0.00 lr 3.00e-04 | P1 1.1%
+[2026-03-09 07:56:22] step    2300 | loss 17.4640 (recon=3.944 xrecon=3.672 nce=4.945 wo=0.646 decorr=0.997 iso=0.148 cls=4.253 scon=5.495 sts=0.353 m_para=0.353 m_neg=0.376 m_wo=0.595 sp=0.292 repul=0.186 hrepul=0.437) | p_sim=0.572 n_sim=0.221 wo_sim=0.995 sp_sim=0.572 r_sim=0.180 hr_max=0.639 cls_acc=0.135 | geo=0.00 lr 3.00e-04 | P1 1.1%
+[2026-03-09 07:56:49] step    2350 | loss 17.2819 (recon=3.780 xrecon=3.609 nce=5.565 wo=0.618 decorr=0.993 iso=0.172 cls=4.002 scon=5.146 sts=0.380 m_para=0.386 m_neg=0.326 m_wo=0.593 sp=0.323 repul=0.186 hrepul=0.451) | p_sim=0.537 n_sim=0.179 wo_sim=0.993 sp_sim=0.537 r_sim=0.191 hr_max=0.656 cls_acc=0.139 | geo=0.00 lr 3.00e-04 | P1 1.2%
+[2026-03-09 07:57:15] step    2400 | loss 17.1319 (recon=3.735 xrecon=3.640 nce=5.255 wo=0.584 decorr=0.964 iso=0.154 cls=4.111 scon=7.120 sts=0.290 m_para=0.363 m_neg=0.387 m_wo=0.590 sp=0.302 repul=0.195 hrepul=0.455) | p_sim=0.562 n_sim=0.192 wo_sim=0.990 sp_sim=0.562 r_sim=0.207 hr_max=0.646 cls_acc=0.091 | geo=0.00 lr 3.00e-04 | P1 1.2%
+[2026-03-09 07:57:41] step    2450 | loss 16.9974 (recon=3.817 xrecon=3.852 nce=5.309 wo=0.503 decorr=0.889 iso=0.148 cls=4.280 scon=6.853 sts=0.272 m_para=0.371 m_neg=0.308 m_wo=0.579 sp=0.316 repul=0.226 hrepul=0.465) | p_sim=0.557 n_sim=0.193 wo_sim=0.979 sp_sim=0.556 r_sim=0.246 hr_max=0.651 cls_acc=0.082 | geo=0.00 lr 3.00e-04 | P1 1.2%
+[2026-03-09 07:58:07] step    2500 | loss 16.7397 (recon=3.654 xrecon=3.486 nce=5.407 wo=0.473 decorr=0.837 iso=0.168 cls=4.142 scon=4.170 sts=0.240 m_para=0.395 m_neg=0.327 m_wo=0.573 sp=0.335 repul=0.194 hrepul=0.438) | p_sim=0.528 n_sim=0.158 wo_sim=0.973 sp_sim=0.528 r_sim=0.200 hr_max=0.615 cls_acc=0.134 | geo=0.00 lr 3.00e-04 | P1 1.2%
+[2026-03-09 07:58:08]   EVAL: para_sim=0.586 wo_sim=0.953 unrelated_sim=0.679 | rank90=15 rank95=18 | slot_iso=0.004 (0/32 good) slot_assign=2/32
+[2026-03-09 07:58:08]     +0.2234  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 07:58:08]     +0.9484  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 07:58:08]     +0.7737  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 07:58:08]     +0.6794  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 07:58:08]     +0.9830  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 07:58:08]     +0.9758  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 07:58:08]     +0.9990  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 07:58:08]     +0.8783  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 07:58:08]   SLOT_STATS: 0:+0.00N 1:+0.00N 2:+0.02N 3:-0.02N 4:+0.00N 5:-0.00N 6:+0.00N 7:-0.00N 8:+0.02N 9:-0.00N 10:+0.00N 11:+0.00N 12:+0.01N 13:+0.01N 14:+0.01Y 15:-0.00N 16:+0.02N 17:+0.05N 18:+0.00N 19:-0.01N 20:+0.05N 21:-0.00N 22:+0.00N 23:-0.01N 24:-0.04N 25:+0.00N 26:+0.00N 27:+0.01Y 28:+0.01N 29:-0.01N 30:-0.02N 31:-0.00N
+[2026-03-09 07:58:34] step    2550 | loss 16.5666 (recon=3.373 xrecon=3.534 nce=4.333 wo=0.490 decorr=0.797 iso=0.154 cls=4.218 scon=7.204 sts=0.281 m_para=0.378 m_neg=0.306 m_wo=0.577 sp=0.315 repul=0.171 hrepul=0.403) | p_sim=0.544 n_sim=0.162 wo_sim=0.977 sp_sim=0.546 r_sim=0.174 hr_max=0.595 cls_acc=0.087 | geo=0.00 lr 3.00e-04 | P1 1.3%
+[2026-03-09 07:59:00] step    2600 | loss 16.4957 (recon=3.427 xrecon=3.574 nce=3.997 wo=0.477 decorr=0.835 iso=0.162 cls=4.291 scon=5.575 sts=0.350 m_para=0.321 m_neg=0.391 m_wo=0.573 sp=0.263 repul=0.291 hrepul=0.518) | p_sim=0.602 n_sim=0.256 wo_sim=0.973 sp_sim=0.599 r_sim=0.324 hr_max=0.691 cls_acc=0.057 | geo=0.00 lr 3.00e-04 | P1 1.3%
+[2026-03-09 07:59:26] step    2650 | loss 16.2932 (recon=3.590 xrecon=3.440 nce=4.259 wo=0.537 decorr=0.863 iso=0.161 cls=4.308 scon=4.771 sts=0.258 m_para=0.321 m_neg=0.348 m_wo=0.583 sp=0.263 repul=0.261 hrepul=0.502) | p_sim=0.601 n_sim=0.234 wo_sim=0.982 sp_sim=0.601 r_sim=0.292 hr_max=0.688 cls_acc=0.106 | geo=0.00 lr 3.00e-04 | P1 1.3%
+[2026-03-09 07:59:52] step    2700 | loss 16.0845 (recon=3.277 xrecon=3.986 nce=3.523 wo=0.489 decorr=0.847 iso=0.157 cls=4.791 scon=3.886 sts=0.257 m_para=0.273 m_neg=0.439 m_wo=0.578 sp=0.216 repul=0.308 hrepul=0.532) | p_sim=0.650 n_sim=0.303 wo_sim=0.978 sp_sim=0.650 r_sim=0.353 hr_max=0.689 cls_acc=0.066 | geo=0.00 lr 3.00e-04 | P1 1.4%
+[2026-03-09 08:00:18] step    2750 | loss 15.9706 (recon=3.630 xrecon=3.482 nce=4.853 wo=0.444 decorr=0.826 iso=0.150 cls=4.744 scon=5.844 sts=0.240 m_para=0.376 m_neg=0.335 m_wo=0.571 sp=0.317 repul=0.171 hrepul=0.428) | p_sim=0.549 n_sim=0.181 wo_sim=0.971 sp_sim=0.550 r_sim=0.173 hr_max=0.619 cls_acc=0.064 | geo=0.00 lr 3.00e-04 | P1 1.4%
+[2026-03-09 08:00:44] step    2800 | loss 15.7859 (recon=3.514 xrecon=3.769 nce=3.802 wo=0.453 decorr=0.787 iso=0.152 cls=4.590 scon=3.034 sts=0.229 m_para=0.285 m_neg=0.396 m_wo=0.572 sp=0.228 repul=0.268 hrepul=0.498) | p_sim=0.638 n_sim=0.309 wo_sim=0.972 sp_sim=0.638 r_sim=0.309 hr_max=0.672 cls_acc=0.153 | geo=0.00 lr 3.00e-04 | P1 1.4%
+[2026-03-09 08:01:11] step    2850 | loss 15.5553 (recon=3.567 xrecon=3.426 nce=3.679 wo=0.391 decorr=0.701 iso=0.154 cls=4.937 scon=4.687 sts=0.226 m_para=0.255 m_neg=0.470 m_wo=0.566 sp=0.206 repul=0.433 hrepul=0.597) | p_sim=0.668 n_sim=0.412 wo_sim=0.966 sp_sim=0.661 r_sim=0.483 hr_max=0.727 cls_acc=0.058 | geo=0.00 lr 3.00e-04 | P1 1.4%
+[2026-03-09 08:01:37] step    2900 | loss 15.1636 (recon=3.447 xrecon=3.539 nce=3.884 wo=0.331 decorr=0.658 iso=0.168 cls=4.417 scon=5.730 sts=0.255 m_para=0.293 m_neg=0.460 m_wo=0.555 sp=0.239 repul=0.317 hrepul=0.523) | p_sim=0.629 n_sim=0.377 wo_sim=0.955 sp_sim=0.621 r_sim=0.361 hr_max=0.680 cls_acc=0.049 | geo=0.00 lr 3.00e-04 | P1 1.5%
+[2026-03-09 08:02:03] step    2950 | loss 14.8130 (recon=3.180 xrecon=3.365 nce=3.593 wo=0.332 decorr=0.598 iso=0.142 cls=5.029 scon=5.895 sts=0.284 m_para=0.246 m_neg=0.445 m_wo=0.555 sp=0.198 repul=0.393 hrepul=0.590) | p_sim=0.676 n_sim=0.472 wo_sim=0.955 sp_sim=0.667 r_sim=0.440 hr_max=0.722 cls_acc=0.112 | geo=0.00 lr 3.00e-04 | P1 1.5%
+[2026-03-09 08:02:29] step    3000 | loss 14.3937 (recon=2.808 xrecon=3.553 nce=3.483 wo=0.299 decorr=0.527 iso=0.141 cls=4.571 scon=5.336 sts=0.216 m_para=0.230 m_neg=0.454 m_wo=0.546 sp=0.183 repul=0.416 hrepul=0.579) | p_sim=0.690 n_sim=0.484 wo_sim=0.946 sp_sim=0.682 r_sim=0.465 hr_max=0.701 cls_acc=0.118 | geo=0.00 lr 3.00e-04 | P1 1.5%
+[2026-03-09 08:02:30]   EVAL: para_sim=0.673 wo_sim=0.914 unrelated_sim=0.641 | rank90=34 rank95=50 | slot_iso=0.013 (2/32 good) slot_assign=1/32
+[2026-03-09 08:02:30]     +0.4511  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 08:02:30]     +0.8941  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 08:02:30]     +0.8242  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 08:02:30]     +0.6407  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 08:02:30]     +0.8362  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 08:02:30]     +0.8583  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 08:02:30]     +0.9894  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 08:02:30]     +0.9163  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 08:02:30]   SLOT_STATS: 0:-0.00N 1:-0.01N 2:+0.03N 3:-0.01N 4:+0.00N 5:+0.01N 6:-0.01N 7:-0.00N 8:+0.01N 9:-0.03N 10:-0.02N 11:-0.01N 12:+0.03N 13:+0.03N 14:+0.10N 15:+0.08N 16:+0.15N 17:+0.08N 18:-0.00N 19:+0.09Y 20:-0.02N 21:-0.04N 22:+0.00N 23:+0.01N 24:-0.05N 25:+0.00N 26:-0.03N 27:-0.08N 28:+0.05N 29:-0.06N 30:+0.06N 31:+0.06N
+[2026-03-09 08:02:56] step    3050 | loss 13.9327 (recon=2.860 xrecon=3.426 nce=3.061 wo=0.349 decorr=0.521 iso=0.114 cls=4.979 scon=4.713 sts=0.297 m_para=0.183 m_neg=0.413 m_wo=0.555 sp=0.149 repul=0.468 hrepul=0.627) | p_sim=0.741 n_sim=0.506 wo_sim=0.955 sp_sim=0.728 r_sim=0.518 hr_max=0.738 cls_acc=0.087 | geo=0.00 lr 3.00e-04 | P1 1.5%
+[2026-03-09 08:03:22] step    3100 | loss 13.7297 (recon=2.245 xrecon=3.179 nce=3.299 wo=0.251 decorr=0.477 iso=0.142 cls=4.955 scon=7.556 sts=0.307 m_para=0.233 m_neg=0.394 m_wo=0.539 sp=0.185 repul=0.446 hrepul=0.593) | p_sim=0.688 n_sim=0.440 wo_sim=0.939 sp_sim=0.679 r_sim=0.495 hr_max=0.720 cls_acc=0.099 | geo=0.00 lr 3.00e-04 | P1 1.6%
+[2026-03-09 08:03:49] step    3150 | loss 13.3950 (recon=2.841 xrecon=3.569 nce=3.078 wo=0.295 decorr=0.384 iso=0.119 cls=5.121 scon=7.625 sts=0.309 m_para=0.228 m_neg=0.338 m_wo=0.541 sp=0.188 repul=0.446 hrepul=0.596) | p_sim=0.694 n_sim=0.473 wo_sim=0.940 sp_sim=0.682 r_sim=0.496 hr_max=0.709 cls_acc=0.096 | geo=0.00 lr 3.00e-04 | P1 1.6%
+[2026-03-09 08:04:15] step    3200 | loss 12.8400 (recon=2.364 xrecon=3.422 nce=3.219 wo=0.256 decorr=0.407 iso=0.115 cls=4.861 scon=5.715 sts=0.304 m_para=0.237 m_neg=0.383 m_wo=0.534 sp=0.197 repul=0.443 hrepul=0.618) | p_sim=0.685 n_sim=0.471 wo_sim=0.934 sp_sim=0.672 r_sim=0.492 hr_max=0.732 cls_acc=0.071 | geo=0.00 lr 3.00e-04 | P1 1.6%
+[2026-03-09 08:04:41] step    3250 | loss 12.4959 (recon=2.527 xrecon=3.250 nce=3.553 wo=0.249 decorr=0.396 iso=0.155 cls=5.023 scon=5.426 sts=0.208 m_para=0.259 m_neg=0.413 m_wo=0.535 sp=0.215 repul=0.431 hrepul=0.591) | p_sim=0.662 n_sim=0.479 wo_sim=0.935 sp_sim=0.649 r_sim=0.480 hr_max=0.709 cls_acc=0.108 | geo=0.00 lr 3.00e-04 | P1 1.6%
+[2026-03-09 08:05:07] step    3300 | loss 12.1660 (recon=2.398 xrecon=3.280 nce=3.302 wo=0.257 decorr=0.339 iso=0.163 cls=4.520 scon=6.249 sts=0.297 m_para=0.228 m_neg=0.443 m_wo=0.536 sp=0.195 repul=0.480 hrepul=0.617) | p_sim=0.694 n_sim=0.513 wo_sim=0.936 sp_sim=0.676 r_sim=0.530 hr_max=0.718 cls_acc=0.094 | geo=0.00 lr 3.00e-04 | P1 1.7%
+[2026-03-09 08:05:34] step    3350 | loss 11.9253 (recon=2.454 xrecon=3.578 nce=3.353 wo=0.216 decorr=0.343 iso=0.165 cls=5.077 scon=9.059 sts=0.247 m_para=0.270 m_neg=0.381 m_wo=0.526 sp=0.229 repul=0.394 hrepul=0.565) | p_sim=0.652 n_sim=0.448 wo_sim=0.926 sp_sim=0.640 r_sim=0.443 hr_max=0.683 cls_acc=0.062 | geo=0.00 lr 3.00e-04 | P1 1.7%
+[2026-03-09 08:06:00] step    3400 | loss 11.7096 (recon=2.262 xrecon=3.295 nce=3.439 wo=0.198 decorr=0.350 iso=0.159 cls=5.203 scon=7.198 sts=0.267 m_para=0.239 m_neg=0.413 m_wo=0.525 sp=0.202 repul=0.448 hrepul=0.596) | p_sim=0.684 n_sim=0.485 wo_sim=0.925 sp_sim=0.671 r_sim=0.498 hr_max=0.708 cls_acc=0.149 | geo=0.00 lr 3.00e-04 | P1 1.7%
+[2026-03-09 08:06:26] step    3450 | loss 11.3091 (recon=2.082 xrecon=3.451 nce=3.528 wo=0.228 decorr=0.304 iso=0.138 cls=4.345 scon=5.919 sts=0.263 m_para=0.257 m_neg=0.420 m_wo=0.531 sp=0.218 repul=0.445 hrepul=0.583) | p_sim=0.664 n_sim=0.489 wo_sim=0.931 sp_sim=0.649 r_sim=0.495 hr_max=0.706 cls_acc=0.137 | geo=0.00 lr 3.00e-04 | P1 1.7%
+[2026-03-09 08:06:53] step    3500 | loss 10.9985 (recon=1.969 xrecon=3.300 nce=3.394 wo=0.231 decorr=0.303 iso=0.138 cls=5.135 scon=3.568 sts=0.295 m_para=0.250 m_neg=0.367 m_wo=0.529 sp=0.215 repul=0.467 hrepul=0.591) | p_sim=0.671 n_sim=0.494 wo_sim=0.929 sp_sim=0.652 r_sim=0.517 hr_max=0.691 cls_acc=0.081 | geo=0.00 lr 3.00e-04 | P1 1.8%
+[2026-03-09 08:06:53]   EVAL: para_sim=0.691 wo_sim=0.912 unrelated_sim=0.561 | rank90=61 rank95=85 | slot_iso=0.003 (5/32 good) slot_assign=2/32
+[2026-03-09 08:06:53]     +0.5096  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 08:06:53]     +0.8722  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 08:06:53]     +0.7052  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 08:06:53]     +0.5608  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 08:06:53]     +0.8830  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 08:06:53]     +0.7816  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 08:06:53]     +0.9226  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 08:06:53]     +0.9294  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 08:06:53]   SLOT_STATS: 0:-0.02N 1:-0.01N 2:+0.05Y 3:+0.05N 4:-0.01N 5:-0.01N 6:-0.03N 7:+0.02N 8:-0.07N 9:-0.08N 10:+0.01N 11:+0.01N 12:+0.04N 13:+0.05N 14:+0.10N 15:-0.05N 16:+0.19N 17:+0.07N 18:-0.01N 19:-0.14N 20:+0.02N 21:-0.11N 22:+0.14N 23:-0.05N 24:-0.05N 25:+0.01N 26:-0.10N 27:-0.16N 28:-0.03N 29:-0.07N 30:+0.19Y 31:+0.16N
+[2026-03-09 08:07:19] step    3550 | loss 10.6862 (recon=1.717 xrecon=3.005 nce=2.907 wo=0.176 decorr=0.281 iso=0.151 cls=5.065 scon=5.456 sts=0.243 m_para=0.234 m_neg=0.389 m_wo=0.513 sp=0.199 repul=0.443 hrepul=0.573) | p_sim=0.688 n_sim=0.492 wo_sim=0.914 sp_sim=0.672 r_sim=0.493 hr_max=0.687 cls_acc=0.122 | geo=0.00 lr 3.00e-04 | P1 1.8%
+[2026-03-09 08:07:46] step    3600 | loss 10.3468 (recon=1.481 xrecon=3.292 nce=3.227 wo=0.230 decorr=0.266 iso=0.139 cls=5.673 scon=9.718 sts=0.275 m_para=0.241 m_neg=0.416 m_wo=0.528 sp=0.200 repul=0.490 hrepul=0.594) | p_sim=0.681 n_sim=0.525 wo_sim=0.928 sp_sim=0.667 r_sim=0.541 hr_max=0.701 cls_acc=0.083 | geo=0.00 lr 3.00e-04 | P1 1.8%
+[2026-03-09 08:08:12] step    3650 | loss 10.1079 (recon=1.832 xrecon=3.121 nce=2.861 wo=0.222 decorr=0.265 iso=0.170 cls=5.122 scon=8.525 sts=0.241 m_para=0.229 m_neg=0.381 m_wo=0.522 sp=0.197 repul=0.461 hrepul=0.583) | p_sim=0.693 n_sim=0.499 wo_sim=0.922 sp_sim=0.674 r_sim=0.510 hr_max=0.689 cls_acc=0.113 | geo=0.00 lr 3.00e-04 | P1 1.8%
+[2026-03-09 08:08:38] step    3700 | loss 9.9171 (recon=1.412 xrecon=3.341 nce=3.398 wo=0.218 decorr=0.254 iso=0.146 cls=5.042 scon=8.439 sts=0.257 m_para=0.228 m_neg=0.405 m_wo=0.521 sp=0.196 repul=0.505 hrepul=0.624) | p_sim=0.693 n_sim=0.540 wo_sim=0.921 sp_sim=0.676 r_sim=0.556 hr_max=0.726 cls_acc=0.147 | geo=0.00 lr 3.00e-04 | P1 1.8%
+[2026-03-09 08:09:04] step    3750 | loss 9.6807 (recon=1.370 xrecon=3.056 nce=3.123 wo=0.141 decorr=0.230 iso=0.185 cls=5.461 scon=7.041 sts=0.271 m_para=0.261 m_neg=0.422 m_wo=0.499 sp=0.228 repul=0.460 hrepul=0.553) | p_sim=0.661 n_sim=0.490 wo_sim=0.899 sp_sim=0.640 r_sim=0.511 hr_max=0.654 cls_acc=0.083 | geo=0.00 lr 3.00e-04 | P1 1.9%
+[2026-03-09 08:09:30] step    3800 | loss 9.4990 (recon=1.994 xrecon=3.078 nce=2.998 wo=0.222 decorr=0.265 iso=0.168 cls=5.077 scon=8.101 sts=0.209 m_para=0.255 m_neg=0.358 m_wo=0.515 sp=0.224 repul=0.458 hrepul=0.592) | p_sim=0.666 n_sim=0.496 wo_sim=0.915 sp_sim=0.644 r_sim=0.508 hr_max=0.696 cls_acc=0.100 | geo=0.00 lr 3.00e-04 | P1 1.9%
+[2026-03-09 08:09:57] step    3850 | loss 9.3841 (recon=1.277 xrecon=3.230 nce=3.264 wo=0.152 decorr=0.273 iso=0.147 cls=5.348 scon=10.042 sts=0.258 m_para=0.247 m_neg=0.390 m_wo=0.493 sp=0.214 repul=0.447 hrepul=0.575) | p_sim=0.673 n_sim=0.496 wo_sim=0.893 sp_sim=0.653 r_sim=0.497 hr_max=0.687 cls_acc=0.064 | geo=0.00 lr 3.00e-04 | P1 1.9%
+[2026-03-09 08:10:23] step    3900 | loss 9.2012 (recon=1.397 xrecon=3.123 nce=3.300 wo=0.198 decorr=0.227 iso=0.160 cls=5.988 scon=8.811 sts=0.230 m_para=0.278 m_neg=0.399 m_wo=0.511 sp=0.250 repul=0.459 hrepul=0.566) | p_sim=0.643 n_sim=0.485 wo_sim=0.911 sp_sim=0.616 r_sim=0.509 hr_max=0.666 cls_acc=0.057 | geo=0.00 lr 3.00e-04 | P1 1.9%
+[2026-03-09 08:10:49] step    3950 | loss 9.0213 (recon=1.363 xrecon=3.169 nce=3.414 wo=0.164 decorr=0.240 iso=0.127 cls=5.342 scon=6.286 sts=0.290 m_para=0.289 m_neg=0.390 m_wo=0.507 sp=0.268 repul=0.428 hrepul=0.564) | p_sim=0.633 n_sim=0.466 wo_sim=0.907 sp_sim=0.600 r_sim=0.478 hr_max=0.667 cls_acc=0.141 | geo=0.00 lr 3.00e-04 | P1 2.0%
+[2026-03-09 08:11:16] step    4000 | loss 8.8597 (recon=1.416 xrecon=3.188 nce=2.857 wo=0.166 decorr=0.247 iso=0.149 cls=5.201 scon=8.836 sts=0.199 m_para=0.233 m_neg=0.416 m_wo=0.507 sp=0.204 repul=0.488 hrepul=0.596) | p_sim=0.688 n_sim=0.520 wo_sim=0.907 sp_sim=0.665 r_sim=0.538 hr_max=0.691 cls_acc=0.084 | geo=0.00 lr 3.00e-04 | P1 2.0%
+[2026-03-09 08:11:16]   EVAL: para_sim=0.648 wo_sim=0.895 unrelated_sim=0.484 | rank90=75 rank95=101 | slot_iso=0.021 (6/32 good) slot_assign=2/32
+[2026-03-09 08:11:16]     +0.5389  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 08:11:16]     +0.7580  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 08:11:16]     +0.6912  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 08:11:16]     +0.4835  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 08:11:16]     +0.8548  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 08:11:16]     +0.7184  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 08:11:16]     +0.9222  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 08:11:16]     +0.9072  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 08:11:16]   SLOT_STATS: 0:-0.03N 1:+0.01N 2:+0.07N 3:-0.05N 4:+0.07Y 5:-0.03N 6:-0.02N 7:-0.01N 8:+0.03N 9:-0.04N 10:-0.05N 11:+0.07N 12:+0.01N 13:+0.04N 14:+0.14N 15:-0.14N 16:+0.29N 17:+0.15N 18:-0.07N 19:-0.13N 20:+0.01N 21:-0.07N 22:+0.29Y 23:-0.05N 24:+0.02N 25:+0.02N 26:-0.09N 27:-0.14N 28:+0.05N 29:-0.05N 30:+0.21N 31:+0.18N
+[2026-03-09 08:11:17]   GEO: clustering_gap=+0.028 dir_consistency=0.150 within=0.647 between=0.618
+[2026-03-09 08:11:17] --- RECONSTRUCTION SAMPLES ---
+[2026-03-09 08:11:17]   [DIFF] the purple man licked the sucker
+[2026-03-09 08:11:17]         -> the purple man display the cliff.
+[2026-03-09 08:11:17]   [DIFF] the man licked a purple sucker
+[2026-03-09 08:11:17]         -> the man display a purple wheel.
+[2026-03-09 08:11:17]   [DIFF] the dog bit the man
+[2026-03-09 08:11:17]         -> the dog you have seen.
+[2026-03-09 08:11:17]   [DIFF] the man bit the dog
+[2026-03-09 08:11:17]         -> the man you.
+[2026-03-09 08:11:17]   [OK] she runs every morning
+[2026-03-09 08:11:17]         -> she runs every morning
+[2026-03-09 08:11:17] --- SLOT ISOLATION DETAIL ---
+[2026-03-09 08:11:18]   [ BAD] slot  0 (     subject): target_sim=0.995 other_sim=0.947 isolation=-0.048 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot  1 (      object): target_sim=0.925 other_sim=0.936 isolation=+0.011 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot  2 (     animacy): target_sim=0.876 other_sim=0.943 isolation=+0.067 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot  3 (         age): target_sim=0.867 other_sim=0.865 isolation=-0.002 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot  4 (        size): target_sim=0.872 other_sim=0.931 isolation=+0.059 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot  5 (       color): target_sim=0.980 other_sim=0.957 isolation=-0.023 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot  6 (       shape): target_sim=0.938 other_sim=0.942 isolation=+0.004 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot  7 (    material): target_sim=0.970 other_sim=0.934 isolation=-0.036 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot  8 (      weight): target_sim=0.876 other_sim=0.866 isolation=-0.010 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot  9 ( temperature): target_sim=0.923 other_sim=0.914 isolation=-0.009 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 10 ( action_type): target_sim=0.999 other_sim=0.949 isolation=-0.050 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 11 (      manner): target_sim=0.800 other_sim=0.904 isolation=+0.104 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot 12 (       speed): target_sim=0.713 other_sim=0.759 isolation=+0.046 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot 13 (   direction): target_sim=0.844 other_sim=0.887 isolation=+0.044 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 14 (    location): target_sim=0.555 other_sim=0.800 isolation=+0.245 assigned=Y
+[2026-03-09 08:11:18]   [ BAD] slot 15 (     spatial): target_sim=0.991 other_sim=0.872 isolation=-0.119 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 16 (    distance): target_sim=0.483 other_sim=0.674 isolation=+0.191 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 17 (       tense): target_sim=0.739 other_sim=0.869 isolation=+0.130 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 18 (    duration): target_sim=0.811 other_sim=0.767 isolation=-0.044 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 19 (    time_ref): target_sim=0.919 other_sim=0.796 isolation=-0.123 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot 20 (      number): target_sim=0.822 other_sim=0.874 isolation=+0.052 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 21 (      degree): target_sim=0.971 other_sim=0.925 isolation=-0.046 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 22 (   sentiment): target_sim=0.619 other_sim=0.868 isolation=+0.249 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 23 (     emotion): target_sim=0.952 other_sim=0.876 isolation=-0.076 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot 24 (     arousal): target_sim=0.687 other_sim=0.758 isolation=+0.070 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 25 (     quality): target_sim=0.931 other_sim=0.924 isolation=-0.007 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 26 (  difficulty): target_sim=0.920 other_sim=0.853 isolation=-0.067 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 27 (    negation): target_sim=0.998 other_sim=0.859 isolation=-0.139 assigned=N
+[2026-03-09 08:11:18]   [WEAK] slot 28 (   certainty): target_sim=0.856 other_sim=0.881 isolation=+0.025 assigned=N
+[2026-03-09 08:11:18]   [ BAD] slot 29 (   causation): target_sim=0.997 other_sim=0.941 isolation=-0.057 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 30 (   formality): target_sim=0.523 other_sim=0.795 isolation=+0.272 assigned=N
+[2026-03-09 08:11:18]   [  OK] slot 31 (  speech_act): target_sim=0.467 other_sim=0.685 isolation=+0.217 assigned=N
+[2026-03-09 08:11:43] step    4050 | loss 8.7266 (recon=1.239 xrecon=2.953 nce=3.862 wo=0.186 decorr=0.238 iso=0.183 cls=5.093 scon=10.269 sts=0.289 m_para=0.282 m_neg=0.399 m_wo=0.511 sp=0.260 repul=0.470 hrepul=0.588) | p_sim=0.639 n_sim=0.510 wo_sim=0.911 sp_sim=0.605 r_sim=0.520 hr_max=0.694 cls_acc=0.171 | geo=0.00 lr 3.00e-04 | P1 2.0%
+[2026-03-09 08:12:10] step    4100 | loss 8.6016 (recon=1.480 xrecon=2.827 nce=3.208 wo=0.170 decorr=0.236 iso=0.147 cls=5.253 scon=7.901 sts=0.305 m_para=0.237 m_neg=0.394 m_wo=0.512 sp=0.208 repul=0.506 hrepul=0.611) | p_sim=0.684 n_sim=0.539 wo_sim=0.912 sp_sim=0.661 r_sim=0.556 hr_max=0.706 cls_acc=0.142 | geo=0.00 lr 3.00e-04 | P1 2.1%
+[2026-03-09 08:12:36] step    4150 | loss 8.3728 (recon=1.129 xrecon=3.111 nce=3.454 wo=0.165 decorr=0.233 iso=0.170 cls=5.549 scon=9.326 sts=0.247 m_para=0.249 m_neg=0.477 m_wo=0.502 sp=0.232 repul=0.489 hrepul=0.593) | p_sim=0.673 n_sim=0.539 wo_sim=0.901 sp_sim=0.640 r_sim=0.539 hr_max=0.700 cls_acc=0.096 | geo=0.00 lr 3.00e-04 | P1 2.1%
+[2026-03-09 08:13:02] step    4200 | loss 8.2294 (recon=1.061 xrecon=3.024 nce=3.069 wo=0.208 decorr=0.234 iso=0.153 cls=6.195 scon=10.612 sts=0.282 m_para=0.233 m_neg=0.393 m_wo=0.526 sp=0.208 repul=0.499 hrepul=0.595) | p_sim=0.688 n_sim=0.544 wo_sim=0.926 sp_sim=0.661 r_sim=0.548 hr_max=0.693 cls_acc=0.037 | geo=0.00 lr 3.00e-04 | P1 2.1%
+[2026-03-09 08:13:28] step    4250 | loss 8.0723 (recon=1.345 xrecon=2.936 nce=3.037 wo=0.175 decorr=0.250 iso=0.185 cls=6.076 scon=11.102 sts=0.317 m_para=0.218 m_neg=0.439 m_wo=0.511 sp=0.191 repul=0.494 hrepul=0.603) | p_sim=0.703 n_sim=0.554 wo_sim=0.911 sp_sim=0.680 r_sim=0.543 hr_max=0.706 cls_acc=0.140 | geo=0.00 lr 3.00e-04 | P1 2.1%
+[2026-03-09 08:13:55] step    4300 | loss 7.9265 (recon=0.845 xrecon=3.059 nce=3.149 wo=0.190 decorr=0.249 iso=0.131 cls=6.661 scon=5.417 sts=0.250 m_para=0.210 m_neg=0.456 m_wo=0.516 sp=0.186 repul=0.512 hrepul=0.602) | p_sim=0.710 n_sim=0.569 wo_sim=0.916 sp_sim=0.685 r_sim=0.562 hr_max=0.695 cls_acc=0.096 | geo=0.00 lr 3.00e-04 | P1 2.1%
+[2026-03-09 08:14:21] step    4350 | loss 7.9097 (recon=1.189 xrecon=3.084 nce=3.410 wo=0.198 decorr=0.224 iso=0.166 cls=6.362 scon=8.021 sts=0.286 m_para=0.249 m_neg=0.478 m_wo=0.515 sp=0.220 repul=0.508 hrepul=0.618) | p_sim=0.671 n_sim=0.543 wo_sim=0.915 sp_sim=0.647 r_sim=0.558 hr_max=0.720 cls_acc=0.123 | geo=0.00 lr 3.00e-04 | P1 2.2%
+[2026-03-09 08:14:48] step    4400 | loss 7.8440 (recon=1.096 xrecon=3.134 nce=3.151 wo=0.199 decorr=0.233 iso=0.155 cls=5.893 scon=8.770 sts=0.317 m_para=0.223 m_neg=0.425 m_wo=0.521 sp=0.198 repul=0.509 hrepul=0.626) | p_sim=0.698 n_sim=0.545 wo_sim=0.921 sp_sim=0.672 r_sim=0.559 hr_max=0.724 cls_acc=0.111 | geo=0.00 lr 3.00e-04 | P1 2.2%
+[2026-03-09 08:15:15] step    4450 | loss 7.7607 (recon=0.910 xrecon=3.150 nce=3.386 wo=0.179 decorr=0.235 iso=0.166 cls=5.756 scon=8.364 sts=0.247 m_para=0.222 m_neg=0.416 m_wo=0.510 sp=0.189 repul=0.512 hrepul=0.618) | p_sim=0.699 n_sim=0.566 wo_sim=0.910 sp_sim=0.682 r_sim=0.562 hr_max=0.716 cls_acc=0.106 | geo=0.00 lr 3.00e-04 | P1 2.2%
+[2026-03-09 08:15:41] step    4500 | loss 7.5830 (recon=0.963 xrecon=2.891 nce=2.973 wo=0.149 decorr=0.222 iso=0.143 cls=5.540 scon=7.376 sts=0.291 m_para=0.226 m_neg=0.387 m_wo=0.497 sp=0.200 repul=0.485 hrepul=0.575) | p_sim=0.695 n_sim=0.525 wo_sim=0.896 sp_sim=0.674 r_sim=0.535 hr_max=0.679 cls_acc=0.156 | geo=0.00 lr 3.00e-04 | P1 2.2%
+[2026-03-09 08:15:42]   EVAL: para_sim=0.600 wo_sim=0.864 unrelated_sim=0.567 | rank90=84 rank95=112 | slot_iso=0.033 (8/32 good) slot_assign=1/32
+[2026-03-09 08:15:42]     +0.5276  [paraphrase  ] the massive cat stepped on the rug <-> there was a rug that a massive cat stepped on
+[2026-03-09 08:15:42]     +0.6715  [paraphrase  ] the king died <-> the monarch passed away
+[2026-03-09 08:15:42]     +0.7203  [crosslingual] the cat sat on the mat <-> le chat etait assis sur le tapis
+[2026-03-09 08:15:42]     +0.5670  [unrelated   ] the cat sat on the mat <-> the stock market crashed today
+[2026-03-09 08:15:42]     +0.8838  [word_order  ] the dog bit the man <-> the man bit the dog
+[2026-03-09 08:15:42]     +0.7133  [binding     ] the purple man licked the sucker <-> the man licked a purple sucker
+[2026-03-09 08:15:42]     +0.7907  [word_order  ] alice likes bob <-> bob likes alice
+[2026-03-09 08:15:42]     +0.9175  [word_order  ] she gave him a book <-> he gave her a book
+[2026-03-09 08:15:42]   SLOT_STATS: 0:-0.01N 1:-0.02N 2:+0.10N 3:+0.02N 4:-0.00N 5:-0.03N 6:-0.04N 7:+0.01N 8:-0.13N 9:-0.03N 10:-0.06N 11:+0.05N 12:+0.07N 13:+0.03N 14:+0.25Y 15:-0.10N 16:+0.24N 17:+0.17N 18:+0.05N 19:-0.07N 20:+0.10N 21:-0.12N 22:+0.26N 23:-0.05N 24:+0.01N 25:+0.05N 26:-0.04N 27:-0.16N 28:+0.04N 29:-0.06N 30:+0.23N 31:+0.30N
+[2026-03-09 08:16:08] step    4550 | loss 7.4886 (recon=1.131 xrecon=2.981 nce=3.391 wo=0.147 decorr=0.235 iso=0.182 cls=5.427 scon=5.838 sts=0.268 m_para=0.242 m_neg=0.428 m_wo=0.510 sp=0.211 repul=0.495 hrepul=0.586) | p_sim=0.679 n_sim=0.552 wo_sim=0.910 sp_sim=0.658 r_sim=0.545 hr_max=0.677 cls_acc=0.107 | geo=0.00 lr 3.00e-04 | P1 2.3%
+[2026-03-09 08:16:35] step    4600 | loss 7.5032 (recon=0.890 xrecon=3.146 nce=3.520 wo=0.167 decorr=0.248 iso=0.142 cls=5.718 scon=3.967 sts=0.258 m_para=0.245 m_neg=0.432 m_wo=0.505 sp=0.204 repul=0.497 hrepul=0.610) | p_sim=0.675 n_sim=0.564 wo_sim=0.905 sp_sim=0.660 r_sim=0.546 hr_max=0.708 cls_acc=0.111 | geo=0.00 lr 3.00e-04 | P1 2.3%
+[2026-03-09 08:17:02] step    4650 | loss 7.3645 (recon=1.119 xrecon=2.912 nce=3.477 wo=0.211 decorr=0.249 iso=0.173 cls=5.997 scon=8.248 sts=0.225 m_para=0.240 m_neg=0.455 m_wo=0.517 sp=0.203 repul=0.514 hrepul=0.619) | p_sim=0.681 n_sim=0.557 wo_sim=0.917 sp_sim=0.664 r_sim=0.564 hr_max=0.709 cls_acc=0.122 | geo=0.00 lr 3.00e-04 | P1 2.3%
+[2026-03-09 08:17:30] step    4700 | loss 7.2311 (recon=0.959 xrecon=2.909 nce=3.424 wo=0.201 decorr=0.244 iso=0.163 cls=6.438 scon=6.721 sts=0.193 m_para=0.237 m_neg=0.452 m_wo=0.520 sp=0.203 repul=0.500 hrepul=0.615) | p_sim=0.685 n_sim=0.543 wo_sim=0.920 sp_sim=0.667 r_sim=0.550 hr_max=0.710 cls_acc=0.132 | geo=0.00 lr 3.00e-04 | P1 2.4%

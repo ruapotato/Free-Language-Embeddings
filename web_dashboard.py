@@ -66,13 +66,16 @@ def parse_step_data(log_path):
                         "m_neg": grab(r"m_neg=([\d.]+)", detail),
                         "m_wo": grab(r"m_wo=([\d.]+)", detail),
                         "sp": grab(r"sp=([\d.]+)", detail),
-                        "repul": grab(r"repul=([\d.]+)", detail),
+                        "repul": grab(r"(?<![h])repul=([\d.]+)", detail),
+                        "hrepul": grab(r"hrepul=([\d.]+)", detail),
                         "p_sim": grab(r"p_sim=([\d.]+)", sim_part),
                         "n_sim": grab(r"n_sim=([\d.]+)", sim_part),
                         "wo_sim": grab(r"wo_sim=([\d.]+)", sim_part),
                         "sp_sim": grab(r"sp_sim=([\d.]+)", sim_part),
                         "r_sim": grab(r"r_sim=([\d.]+)", sim_part),
+                        "hr_max": grab(r"hr_max=([\d.]+)", sim_part),
                         "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
+                        "geo_gate": grab(r"geo=([\d.]+)", sim_part),
                         "phase": phase_str,
                     })
                 except (ValueError, IndexError, AttributeError):
@@ -152,17 +155,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v8"
+    return "v9"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -326,6 +329,44 @@ body {
         </select>
     </div>
 </div>
+<details style="margin:8px 12px;color:#ccc;font-size:13px">
+<summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0">Metric Glossary (click to expand)</summary>
+<div style="columns:2;column-gap:24px;padding:8px 0;line-height:1.6">
+<b>Losses (want LOW):</b><br>
+<b>recon</b> — Reconstruction CE loss. Decoder predicts input tokens from concept vectors. Want &lt;0.1 for readable output.<br>
+<b>xrecon</b> — Cross-reconstruction. Encode sentence A, decode toward paraphrase B. Tests if concepts capture meaning, not surface form.<br>
+<b>nce</b> — InfoNCE contrastive loss. Pulls paraphrase pairs close, pushes non-matches apart in batch.<br>
+<b>wo</b> — Word-order contrastive. Makes shuffled sentences distinguishable from originals.<br>
+<b>decorr</b> — Slot decorrelation. Pushes the 32 concept slots to encode different information.<br>
+<b>iso</b> — Slot isolation. Each slot should only change when its assigned concept changes.<br>
+<b>cls</b> — Slot classifier. Auxiliary heads predict concept value from each slot vector.<br>
+<b>scon</b> — Per-slot contrastive. Within each slot: same concept value → close, different → far.<br>
+<b>sts</b> — Semantic Text Similarity. Predicted similarity should match human-rated similarity scores.<br>
+<b>m_para</b> — Margin paraphrase. Penalizes paraphrase sim below 0.92 target.<br>
+<b>m_neg</b> — Margin negative. Penalizes hard-negative sim above 0.2 target.<br>
+<b>m_wo</b> — Margin word-order. Penalizes shuffled sim above 0.4 target.<br>
+<b>sp</b> — Per-slot paraphrase on real data. Each slot's vector should match for paraphrases.<br>
+<b>repul</b> — Batch repulsion (mean). Pushes all random pair similarities below 0.05.<br>
+<b>hrepul</b> — Hard repulsion (V9). Targets the WORST offending pairs. Pushes clustering gap wider.<br>
+<br>
+<b>Similarities (batch metrics):</b><br>
+<b>p_sim</b> — Paraphrase pair similarity. Want HIGH (&gt;0.9). Same meaning = close vectors.<br>
+<b>n_sim</b> — Hard negative similarity. Want LOW (&lt;0.2). Different meaning = far apart.<br>
+<b>wo_sim</b> — Word-order pair similarity. Want MEDIUM (0.3-0.5). Word order matters but shares content.<br>
+<b>sp_sim</b> — Slot paraphrase similarity. Per-slot match for real paraphrase pairs.<br>
+<b>r_sim</b> — Random batch mean similarity. Want VERY LOW (&lt;0.05). Random texts should be far apart.<br>
+<b>hr_max</b> — Hard repulsion max sim. The worst (highest) similarity between random pairs. Want LOW.<br>
+<b>cls_acc</b> — Classifier accuracy. How well slot vectors predict concept values. Want &gt;0.95.<br>
+<b>geo</b> — Geometry gate (0-1). How much geometry losses are active. 0 = recon only, 1 = full geometry.<br>
+<br>
+<b>Eval metrics:</b><br>
+<b>clustering_gap</b> — Within-group sim minus between-group sim. Want HIGH (&gt;0.1). Measures if similar sentences cluster.<br>
+<b>dir_consistency</b> — Do concept changes (negation, tense) produce consistent directions? Want &gt;0.5.<br>
+<b>rank90/95</b> — Effective rank of concept space. How many dimensions are actually used.<br>
+<b>slot_iso</b> — Average slot isolation score. How well slots specialize for their assigned concept.<br>
+<b>slot_assign</b> — How many of 32 slots correctly respond most to their assigned concept. Want 32/32.<br>
+</div>
+</details>
 <div class="grid">
     <div class="card"><h3>Reconstruction Loss</h3><canvas id="chart-recon"></canvas></div>
     <div class="card"><h3>Geometry Losses</h3><canvas id="chart-geo-losses"></canvas></div>
@@ -473,10 +514,14 @@ function updateDashboard(response) {
     const reconDs = [ds('Recon', ema(steps.map(d => d.recon), sw), C.recon)];
     if (hasCmp && clippedCmpSteps.length) reconDs.push(cmpDs('Recon' + cmpLabel,
         ema(clippedCmpSteps.map(d => d.recon), ccw), C.cmpRecon));
+    // Geo gate on right axis (0-1 scale)
+    const geoGateVals = steps.map(d => d.geo_gate);
+    if (geoGateVals.some(v => v > 0))
+        reconDs.push(ds('Geo Gate', ema(geoGateVals, sw), '#ff9800', {yAxisID: 'y2', borderDash: [5, 3]}));
     mkChart('chart-recon', {
         type: 'line',
         data: { labels: hasCmp && clippedCmpSteps.length ? mergedLabels(s, ccs) : s, datasets: reconDs.map(d => {
-            if (hasCmp && clippedCmpSteps.length) {
+            if (hasCmp && clippedCmpSteps.length && !d.label.includes('Geo Gate')) {
                 const ml = mergedLabels(s, ccs);
                 const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
                 const srcSteps = isCmp ? ccs : s;
@@ -489,7 +534,7 @@ function updateDashboard(response) {
             }
             return d;
         }) },
-        options: chartOpts('Loss'),
+        options: dualAxisOpts('Loss', 'Geo Gate', undefined, undefined, 0, 1.05),
     });
 
     // 2. Geometry Losses
@@ -643,6 +688,7 @@ function updateDashboard(response) {
         addV7('m_wo', 'Margin WO', '#ffa726', 'y');
         addV7('sp', 'Slot Para', '#ab47bc', 'y');
         addV7('repul', 'Repulsion', '#78909c', 'y');
+        addV7('hrepul', 'Hard Repul', '#455a64', 'y');
         // sp_sim on right axis
         const spSimVals = steps.map(d => d.sp_sim);
         if (spSimVals.some(v => v > 0))
@@ -802,6 +848,8 @@ function updateDashboard(response) {
     html += `\n`;
     html += `<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
     html += `<span class="label"> Total:</span>     <span class="value">${fmt(latest.total_loss)}</span>\n`;
+    if (latest.geo_gate != null && latest.geo_gate > 0)
+        html += `<span class="label"> Geo Gate:</span>  <span class="${rating(latest.geo_gate, 0.8, 0.3)}">${pct(latest.geo_gate)}</span>\n`;
 
     if (le.clustering_gap != null) {
         html += `\n<span class="label"> Geometry:</span>\n`;
