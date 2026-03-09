@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: Active training (Concept Autoencoder V7).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
+> **Status: Active training (Concept Autoencoder V8).** Training a concept autoencoder that compresses language into geometric concept vectors — a bottleneck where meaning determines position, not surface form.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -56,33 +56,25 @@ Each slot owns one semantic family. Synthetic training data teaches the model wh
 | 14 | Location/Scene | 30 | Formality/Register |
 | 15 | Spatial Relations | 31 | Speech Act/Intent |
 
-### Training Losses (V7)
+### Training Losses (V8)
 
-**Key V7 innovations: flat cosine similarity, margin losses, real-data slot training, gradient taper.**
+V8 uses V7's 14 losses with **staged slot specialization** and stronger margin targets.
 
-V6 post-mortem: `slot_similarity_matrix` used mean-of-per-slot-cosines where dead slots contributed +1.0, creating a 0.625 similarity floor. InfoNCE hit ~0 loss without moving absolute similarities. Slot-structure losses only saw synthetic data.
+V7 post-mortem: slot structure developed (28/32 assigned, iso=0.63) but global flat cosine compressed into a narrow similarity band (para=0.94, unrelated=0.84, WO=0.71). pos_sim stuck at 0.74. Margin losses at weight 1.5 were overwhelmed by 8.4 total loss. Repulsion target 0.3 trivially satisfied. Clustering gap collapsed to 0.013.
 
-V7 fixes four root causes with 13 losses:
+V8 fixes with three training phases:
 
-**Encoder losses** (geometry — gradients to encoder+bottleneck):
-1. **Per-slot classifiers**: Auxiliary heads classify concept_value from slot vectors (synthetic).
-2. **Per-slot contrastive**: Same concept_value → similar slot vectors (synthetic).
-3. **Slot isolation**: Only target slot should change when one concept varies (synthetic).
-4. **Paraphrase InfoNCE**: Hard negatives, now using **flat cosine** (no dead-slot floor).
-5. **Word-order InfoNCE**: 2-token swap, **flat cosine**.
-6. **Slot decorrelation**: Penalizes correlation between concept slots.
-7. **STS graded similarity**: MSE between predicted and human-rated similarity.
-8. **Margin paraphrase** (V7 NEW): Absolute target — paraphrase sim > 0.85.
-9. **Margin negative** (V7 NEW): Absolute target — unrelated sim < 0.3.
-10. **Margin word-order** (V7 NEW): Absolute target — WO-swapped sim < 0.5.
-11. **Per-slot paraphrase** (V7 NEW): Each slot should match on REAL paraphrase pairs, bridging synthetic→real.
-12. **Batch repulsion** (V7 NEW): Push random text pairs below sim 0.3 — prevents clustering collapse where all representations drift toward high mutual similarity.
+**Phase 1 — Foundation** (30K steps): Normal training to establish reconstruction and basic slot structure.
 
-**Decoder losses** (reconstruction — gradient taper to encoder):
-12. **Self-reconstruction** (cross-entropy): Decode concept vectors back to original tokens.
-13. **Cross-reconstruction**: Encode paraphrase A, decode toward paraphrase B.
+**Phase 2 — Slot Focus** (16K steps): Cycles through each slot (500 steps each). Per-slot gradient scaling gives the focus slot full gradient (1.0) while others get reduced gradient (0.05). This **guides** specialization without destroying learned structure. Decoder keeps training all slots equally so reconstruction stays healthy.
 
-**Gradient taper** replaces V6's blunt 10% RECON_LEAK: 30% of reconstruction gradient reaches encoder (via autograd scaling).
+**Phase 3 — Joint Fine-tune** (remaining steps): All slots at full gradient, balanced refinement.
+
+**Stronger targets** (V8 vs V7): para>0.92 (was 0.85), neg<0.2 (was 0.3), WO<0.4 (was 0.5), repulsion<0.05 (was 0.3). Margin weights 5-8x (was 1-1.5). NCE temperature 0.04 (was 0.07).
+
+**Per-slot stats**: Dashboard shows per-slot isolation bar chart, color-coded by assignment status.
+
+**Gradient taper** (from V7): 30% of reconstruction gradient reaches encoder (via autograd scaling).
 
 ### Training Data (DFSG-compliant)
 
@@ -94,9 +86,9 @@ V7 fixes four root causes with 13 losses:
 | QQP | CC | 400K | Question paraphrases |
 | Tatoeba | CC-BY | 350K | Cross-lingual pairs |
 
-### Training Progress (Concept Autoencoder V7)
+### Training Progress (Concept Autoencoder V8)
 
-V7 uses flat cosine, margin losses, per-slot paraphrase on real data, and gradient taper.
+V8 uses staged slot specialization with three training phases.
 
 **Live Dashboard:** `python web_dashboard.py` then open http://localhost:8501
 
@@ -110,18 +102,25 @@ python generate_concept_data.py
 python build_pairs.py
 
 # 3. Train concept autoencoder
-python train_v7.py --fresh
+python train_v8.py --fresh         # from scratch
+python train_v8.py --from-v7      # init from V7 checkpoint
 
-# 4. Visualize concept space
-python plot_concepts.py                    # static plot (latest checkpoint)
-
-# 5. Training dashboard
-python plot_training.py                    # V5 dashboard (auto-detects latest)
+# 4. Training dashboard (auto-detects latest version)
+python web_dashboard.py
 ```
 
 ## Version History
 
-### Concept Autoencoder V7 (current) — Flat Cosine + Margin + Real Paraphrase
+### Concept Autoencoder V8 (current) — Staged Slot Specialization
+- Three training phases: Foundation → Slot Focus → Joint Fine-tune
+- Per-slot gradient scaling (soft guidance, not hard freezing) in Phase 2
+- Per-slot isolation stats on dashboard (bar chart with assignment status)
+- Stronger margin targets: para>0.92, neg<0.2, WO<0.4, repulsion<0.05
+- Much higher margin weights (5-8x vs V7's 1-1.5)
+- Lower NCE temperature (0.04 vs V7's 0.07) for sharper discrimination
+- V7 post-mortem: slot structure worked (28/32) but global similarity compressed into narrow band
+
+### Concept Autoencoder V7 (archived) — Flat Cosine + Margin + Real Paraphrase
 - Flat cosine similarity replaces mean-of-per-slot-cosines (eliminates dead-slot floor)
 - Margin losses: explicit absolute similarity targets (para>0.85, neg<0.3, WO<0.5)
 - Per-slot paraphrase loss on REAL data (bridges synthetic→real gap)
@@ -183,7 +182,8 @@ python plot_training.py                    # V5 dashboard (auto-detects latest)
 ```
 flm/
 ├── concept_model.py          # Concept autoencoder (54.3M, encoder-decoder)
-├── train_v7.py               # V7 training (flat cosine + margin + real paraphrase)
+├── train_v8.py               # V8 training (staged slot specialization)
+├── train_v7.py               # V7 training (archived)
 ├── train_v6.py               # V6 training (archived)
 ├── train_concept.py          # V5 training (archived)
 ├── generate_concept_data.py  # Synthetic concept axis dataset generator

@@ -41,6 +41,14 @@ def parse_step_data(log_path):
                         m = re.search(pattern, text)
                         return float(m.group(1)) if m else default
 
+                    # V8 phase tag (P1, P2s5, P3) — in last pipe section
+                    phase_str = ""
+                    if len(parts) >= 4:
+                        tail = parts[-1]
+                        pm = re.search(r"(P[123](?:s\d+)?)", tail)
+                        if pm:
+                            phase_str = pm.group(1)
+
                     rows.append({
                         "step": step,
                         "total_loss": total_loss,
@@ -53,7 +61,7 @@ def parse_step_data(log_path):
                         "scon": grab(r"scon=([\d.]+)", detail),
                         "xrecon": grab(r"xrecon=([\d.]+)", detail),
                         "sts": grab(r"sts=([\d.]+)", detail),
-                        # V7 fields
+                        # V7/V8 fields
                         "m_para": grab(r"m_para=([\d.]+)", detail),
                         "m_neg": grab(r"m_neg=([\d.]+)", detail),
                         "m_wo": grab(r"m_wo=([\d.]+)", detail),
@@ -65,6 +73,7 @@ def parse_step_data(log_path):
                         "sp_sim": grab(r"sp_sim=([\d.]+)", sim_part),
                         "r_sim": grab(r"r_sim=([\d.]+)", sim_part),
                         "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
+                        "phase": phase_str,
                     })
                 except (ValueError, IndexError, AttributeError):
                     continue
@@ -111,6 +120,16 @@ def parse_eval_data(log_path):
                 bt_m = re.search(r"between=([\d.]+)", line)
                 if bt_m:
                     current_eval["between_sim"] = float(bt_m.group(1))
+            if "SLOT_STATS:" in line:
+                current_eval = current_eval or {"step": last_step}
+                slot_isos = {}
+                for m in re.finditer(r"(\d+):([-+\d.]+)([YN])", line):
+                    slot_isos[int(m.group(1))] = {
+                        "iso": float(m.group(2)),
+                        "assigned": m.group(3) == "Y",
+                    }
+                if slot_isos:
+                    current_eval["slot_isos"] = slot_isos
             if current_eval and ("--- RECON" in line or
                                  ("step" in line and "loss" in line and "recon=" in line
                                   and current_eval["step"] != last_step)):
@@ -133,17 +152,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v7"
+    return "v8"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -317,6 +336,7 @@ body {
     <div class="card"><h3>V7: Margin Losses</h3><canvas id="chart-v7-margins"></canvas></div>
     <div class="card"><h3>Clustering & Direction</h3><canvas id="chart-v6-geo"></canvas></div>
     <div class="card"><h3>Slot Assignment</h3><canvas id="chart-v6-slots"></canvas></div>
+    <div class="card"><h3>Per-Slot Isolation</h3><canvas id="chart-slot-iso"></canvas></div>
     <div class="stats-card" id="stats-panel">Loading...</div>
 </div>
 
@@ -717,7 +737,55 @@ function updateDashboard(response) {
         });
     }
 
-    // 9. Stats panel
+    // 9. Per-Slot Isolation (V8) — bar chart showing latest isolation per slot
+    const lastEval = evals.length ? evals[evals.length - 1] : {};
+    if (lastEval.slot_isos) {
+        const slotIds = Object.keys(lastEval.slot_isos).map(Number).sort((a,b) => a - b);
+        const isoVals = slotIds.map(s => lastEval.slot_isos[s].iso);
+        const barColors = slotIds.map(s =>
+            lastEval.slot_isos[s].assigned ? '#66bb6a' :
+            lastEval.slot_isos[s].iso > 0.1 ? '#ffa726' : '#ef5350');
+        mkChart('chart-slot-iso', {
+            type: 'bar',
+            data: {
+                labels: slotIds.map(s => s.toString()),
+                datasets: [{
+                    label: 'Isolation',
+                    data: isoVals,
+                    backgroundColor: barColors,
+                    borderWidth: 0,
+                }],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: items => 'Slot ' + items[0].label,
+                            label: item => {
+                                const s = lastEval.slot_isos[parseInt(item.label)];
+                                return `iso=${item.raw.toFixed(3)} ${s.assigned ? '(assigned)' : '(not assigned)'}`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: { ticks: { color: '#666', font: { size: 8 } }, grid: { display: false } },
+                    y: { ticks: { color: '#666', font: { size: tickSize() } }, grid: { color: '#333' },
+                         title: { display: !isMobile(), text: 'Isolation', color: '#888' } },
+                },
+            },
+        });
+    } else {
+        mkChart('chart-slot-iso', {
+            type: 'line',
+            data: { labels: [0], datasets: [ds('No slot data', [0], '#666')] },
+            options: chartOpts('Isolation'),
+        });
+    }
+
+    // 10. Stats panel
     const le = evals.length ? evals[evals.length - 1] : {};
     const fmt = (v, d) => v != null ? v.toFixed(d || 3) : '--';
     const pct = v => v != null ? (v * 100).toFixed(1) + '%' : '--';
@@ -729,7 +797,9 @@ function updateDashboard(response) {
     let html = `<span class="value">flm (${run.toUpperCase()})</span>`;
     if (hasCmp) html += `  <span class="label">vs ${compare_run}</span>`;
     html += `\n${'='.repeat(40)}\n\n`;
-    html += `<span class="label"> Step:</span>      <span class="value">${latest.step.toLocaleString()}</span>\n`;
+    html += `<span class="label"> Step:</span>      <span class="value">${latest.step.toLocaleString()}</span>`;
+    if (latest.phase) html += `  <span class="value">${latest.phase}</span>`;
+    html += `\n`;
     html += `<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
     html += `<span class="label"> Total:</span>     <span class="value">${fmt(latest.total_loss)}</span>\n`;
 
