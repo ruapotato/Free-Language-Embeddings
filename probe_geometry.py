@@ -7,7 +7,7 @@ import numpy as np
 from transformers import BertTokenizerFast
 from concept_model import ConceptAutoencoder, ConceptConfig, flat_similarity_matrix
 
-CKPT = "checkpoints/concept_v8/latest.pt"
+CKPT = "checkpoints/concept_v9/latest.pt"
 DEVICE = "cpu"
 
 SLOT_NAMES = {

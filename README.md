@@ -90,7 +90,9 @@ V9 fixes with recon-gated dynamic phases:
 
 V9 uses recon-gated slot specialization with dynamic phases.
 
-**Live Dashboard:** `python web_dashboard.py` then open http://localhost:8501
+**[Training Dashboard (live charts)](https://ruapotato.github.io/chat_hamner/dashboard.html)** — interactive Chart.js dashboard with full reference guide, updated every push.
+
+**Local live monitor:** `python web_dashboard.py` then open http://localhost:8501 (auto-refreshes every 30s)
 
 ### Quick Start
 

@@ -14,6 +14,7 @@ Usage:
 import os
 import re
 import glob
+import json
 import argparse
 from flask import Flask, jsonify, render_template_string, request
 
@@ -75,7 +76,7 @@ def parse_step_data(log_path):
                         "r_sim": grab(r"r_sim=([\d.]+)", sim_part),
                         "hr_max": grab(r"hr_max=([\d.]+)", sim_part),
                         "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
-                        "geo_gate": grab(r"geo=([\d.]+)", sim_part),
+                        "geo_gate": grab(r"geo=([\d.]+)", parts[3] if len(parts) > 3 else ""),
                         "phase": phase_str,
                     })
                 except (ValueError, IndexError, AttributeError):
@@ -320,6 +321,22 @@ body {
         &nbsp;| <span id="last-update">--</span>
     </div>
 </div>
+<div id="stage-banner" style="margin:0 8px;padding:8px 12px;background:#1a1a2e;border-radius:6px;font-family:monospace;font-size:13px;color:#ccc;display:none">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span id="stage-phase" style="font-weight:bold;font-size:15px"></span>
+        <span id="stage-detail" style="color:#aaa"></span>
+        <div style="flex:1;min-width:120px">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#888">
+                <span>Geo Gate</span>
+                <span id="stage-geo-pct"></span>
+            </div>
+            <div style="background:#333;border-radius:3px;height:8px;overflow:hidden;margin-top:2px">
+                <div id="stage-geo-bar" style="height:100%;border-radius:3px;transition:width 0.5s"></div>
+            </div>
+        </div>
+        <div style="font-size:11px;color:#888" id="stage-recon-ema"></div>
+    </div>
+</div>
 <div class="controls">
     <label>Compare:</label>
     <div class="compare-toggle">
@@ -329,54 +346,115 @@ body {
         </select>
     </div>
 </div>
-<details style="margin:8px 12px;color:#ccc;font-size:13px">
-<summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0">Metric Glossary (click to expand)</summary>
-<div style="columns:2;column-gap:24px;padding:8px 0;line-height:1.6">
-<b>Losses (want LOW):</b><br>
-<b>recon</b> — Reconstruction CE loss. Decoder predicts input tokens from concept vectors. Want &lt;0.1 for readable output.<br>
+<details style="margin:8px 12px;color:#ccc;font-size:13px;line-height:1.7">
+<summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0;font-size:14px">&#9encyclop; Reference Guide (click to expand)</summary>
+
+<div style="padding:12px 0">
+<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works</h4>
+<p style="color:#bbb;margin:0 0 8px">
+The model compresses sentences into <b>32 concept slots</b> (each a 32-dimensional vector, 1024 dims total).
+The <b>encoder</b> reads a sentence and produces these concept vectors. The <b>decoder</b> reconstructs the original
+sentence from the vectors alone. If reconstruction works, the vectors must encode real meaning.
+</p>
+<p style="color:#bbb;margin:0 0 8px">
+On top of reconstruction, <b>geometry losses</b> shape how the concept space is organized: paraphrases should
+map to nearby vectors, unrelated sentences should be far apart, and each slot should specialize for one
+semantic dimension (size, color, tense, sentiment, etc.).
+</p>
+
+<h4 style="color:#ffa726;margin:12px 0 6px">Training Phases</h4>
+<table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:8px">
+<tr style="border-bottom:1px solid #333">
+  <td style="padding:4px 8px;color:#ef5350;font-weight:bold;white-space:nowrap">Phase 0</td>
+  <td style="padding:4px 8px;color:#ef5350;font-weight:bold">Pure Recon</td>
+  <td style="padding:4px 8px">Geo gate = 0. Only reconstruction trains. The decoder learns to read concept vectors.
+  No geometry pressure yet &mdash; the model first needs to encode information the decoder can use.</td>
+</tr>
+<tr style="border-bottom:1px solid #333">
+  <td style="padding:4px 8px;color:#ab47bc;font-weight:bold;white-space:nowrap">P0&rarr;P1</td>
+  <td style="padding:4px 8px;color:#ab47bc;font-weight:bold">Geo Gate Opens</td>
+  <td style="padding:4px 8px">Recon EMA drops enough that the geo gate starts opening. Geometry losses begin
+  flowing, gently at first. Marked with a purple line on charts.</td>
+</tr>
+<tr style="border-bottom:1px solid #333">
+  <td style="padding:4px 8px;color:#42a5f5;font-weight:bold;white-space:nowrap">Phase 1</td>
+  <td style="padding:4px 8px;color:#42a5f5;font-weight:bold">Recon + Geo Ramp</td>
+  <td style="padding:4px 8px">Geo gate between 0 and 1. Geometry losses scale with the gate. Decoder gets a
+  weight boost (3x when gate=0, tapering to 1x). Full gradient flows through bottleneck so the encoder
+  learns representations the decoder can actually use.</td>
+</tr>
+<tr style="border-bottom:1px solid #333">
+  <td style="padding:4px 8px;color:#ffa726;font-weight:bold;white-space:nowrap">Phase 2</td>
+  <td style="padding:4px 8px;color:#ffa726;font-weight:bold">Slot Focus</td>
+  <td style="padding:4px 8px">Geo gate hits 1.0 (recon EMA &lt; 0.1). Cycles through each of the 32 concept slots,
+  500 steps each. The focus slot gets full gradient (1.0), others get 5%. This guides each slot to specialize
+  for its assigned concept without destroying what other slots learned.</td>
+</tr>
+<tr>
+  <td style="padding:4px 8px;color:#66bb6a;font-weight:bold;white-space:nowrap">Phase 3</td>
+  <td style="padding:4px 8px;color:#66bb6a;font-weight:bold">Joint Fine-tune</td>
+  <td style="padding:4px 8px">All 32 slots done. All slots train equally. Balanced refinement of the full space.
+  If recon drifts up, the geo gate automatically backs off geometry to protect reconstruction.</td>
+</tr>
+</table>
+
+<h4 style="color:#66bb6a;margin:12px 0 6px">The Geo Gate</h4>
+<p style="color:#bbb;margin:0 0 8px">
+The <b>geometry gate</b> (geo) is a 0&ndash;1 scale that controls how much geometry losses affect training.
+It&rsquo;s computed from a smoothed average (EMA) of reconstruction loss:<br>
+<code style="color:#ffa726">geo_scale = clamp((0.5 - recon_ema) / (0.5 - 0.1), 0, 1)</code><br>
+When recon is bad (EMA &gt; 0.5), geo = 0 &mdash; only reconstruction trains.
+When recon is good (EMA &lt; 0.1), geo = 1 &mdash; full geometry.
+It&rsquo;s <b>dynamic</b>: if recon degrades, geometry automatically backs off.
+</p>
+
+<div style="columns:2;column-gap:24px;padding:8px 0">
+<h4 style="color:#ef5350;margin:8px 0 4px;column-span:all">Losses (want LOW)</h4>
+<b>recon</b> — Reconstruction cross-entropy. Decoder predicts input tokens from concept vectors. Want &lt;0.1 for readable autoregressive output. At 0.5 it&rsquo;s ~80% per-token accuracy, which cascades into gibberish.<br>
 <b>xrecon</b> — Cross-reconstruction. Encode sentence A, decode toward paraphrase B. Tests if concepts capture meaning, not surface form.<br>
-<b>nce</b> — InfoNCE contrastive loss. Pulls paraphrase pairs close, pushes non-matches apart in batch.<br>
-<b>wo</b> — Word-order contrastive. Makes shuffled sentences distinguishable from originals.<br>
-<b>decorr</b> — Slot decorrelation. Pushes the 32 concept slots to encode different information.<br>
-<b>iso</b> — Slot isolation. Each slot should only change when its assigned concept changes.<br>
-<b>cls</b> — Slot classifier. Auxiliary heads predict concept value from each slot vector.<br>
-<b>scon</b> — Per-slot contrastive. Within each slot: same concept value → close, different → far.<br>
-<b>sts</b> — Semantic Text Similarity. Predicted similarity should match human-rated similarity scores.<br>
-<b>m_para</b> — Margin paraphrase. Penalizes paraphrase sim below 0.92 target.<br>
-<b>m_neg</b> — Margin negative. Penalizes hard-negative sim above 0.2 target.<br>
-<b>m_wo</b> — Margin word-order. Penalizes shuffled sim above 0.4 target.<br>
-<b>sp</b> — Per-slot paraphrase on real data. Each slot's vector should match for paraphrases.<br>
-<b>repul</b> — Batch repulsion (mean). Pushes all random pair similarities below 0.05.<br>
-<b>hrepul</b> — Hard repulsion (V9). Targets the WORST offending pairs. Pushes clustering gap wider.<br>
-<br>
-<b>Similarities (batch metrics):</b><br>
-<b>p_sim</b> — Paraphrase pair similarity. Want HIGH (&gt;0.9). Same meaning = close vectors.<br>
-<b>n_sim</b> — Hard negative similarity. Want LOW (&lt;0.2). Different meaning = far apart.<br>
-<b>wo_sim</b> — Word-order pair similarity. Want MEDIUM (0.3-0.5). Word order matters but shares content.<br>
-<b>sp_sim</b> — Slot paraphrase similarity. Per-slot match for real paraphrase pairs.<br>
-<b>r_sim</b> — Random batch mean similarity. Want VERY LOW (&lt;0.05). Random texts should be far apart.<br>
-<b>hr_max</b> — Hard repulsion max sim. The worst (highest) similarity between random pairs. Want LOW.<br>
-<b>cls_acc</b> — Classifier accuracy. How well slot vectors predict concept values. Want &gt;0.95.<br>
-<b>geo</b> — Geometry gate (0-1). How much geometry losses are active. 0 = recon only, 1 = full geometry.<br>
-<br>
-<b>Eval metrics:</b><br>
-<b>clustering_gap</b> — Within-group sim minus between-group sim. Want HIGH (&gt;0.1). Measures if similar sentences cluster.<br>
-<b>dir_consistency</b> — Do concept changes (negation, tense) produce consistent directions? Want &gt;0.5.<br>
-<b>rank90/95</b> — Effective rank of concept space. How many dimensions are actually used.<br>
-<b>slot_iso</b> — Average slot isolation score. How well slots specialize for their assigned concept.<br>
-<b>slot_assign</b> — How many of 32 slots correctly respond most to their assigned concept. Want 32/32.<br>
+<b>nce</b> — InfoNCE contrastive. Pulls paraphrase pairs close, pushes non-matches apart in the batch.<br>
+<b>wo</b> — Word-order contrastive. Shuffled sentences should be distinguishable from originals.<br>
+<b>decorr</b> — Slot decorrelation. Pushes the 32 slots to encode different, non-redundant information.<br>
+<b>iso</b> — Slot isolation. Each slot should only change when its assigned concept (size, color, etc.) changes.<br>
+<b>cls</b> — Slot classifier. Auxiliary heads predict concept values from slot vectors.<br>
+<b>scon</b> — Slot contrastive. Within each slot: same concept value &rarr; close vectors, different value &rarr; far apart.<br>
+<b>sts</b> — Semantic Text Similarity. Model&rsquo;s predicted similarity should match human-rated similarity scores.<br>
+<b>m_para</b> — Margin: paraphrase. Penalizes paraphrase similarity below 0.92.<br>
+<b>m_neg</b> — Margin: negative. Penalizes hard-negative similarity above 0.2.<br>
+<b>m_wo</b> — Margin: word-order. Penalizes shuffled-sentence similarity above 0.4.<br>
+<b>sp</b> — Per-slot paraphrase on real text pairs. Each slot&rsquo;s vector should match for paraphrases.<br>
+<b>repul</b> — Batch repulsion (mean). Pushes average pairwise similarity of random texts below 0.05.<br>
+<b>hrepul</b> — Hard repulsion. Targets the top-k WORST offending pairs per sample, not the diluted mean. The main force pushing the clustering gap wider.<br>
+
+<h4 style="color:#42a5f5;margin:12px 0 4px">Similarities (want these targets)</h4>
+<b>p_sim</b> — Paraphrase similarity. <span style="color:#66bb6a">Want HIGH (&gt;0.9)</span>. Same meaning = close vectors.<br>
+<b>n_sim</b> — Hard negative similarity. <span style="color:#ef5350">Want LOW (&lt;0.2)</span>. Different meaning = far apart.<br>
+<b>wo_sim</b> — Word-order similarity. <span style="color:#ffa726">Want MEDIUM (0.3&ndash;0.5)</span>. Shared content but different meaning.<br>
+<b>sp_sim</b> — Slot paraphrase similarity. Per-slot agreement on real paraphrase pairs.<br>
+<b>r_sim</b> — Random batch similarity. <span style="color:#ef5350">Want VERY LOW (&lt;0.05)</span>. Random texts should be far apart.<br>
+<b>hr_max</b> — Worst-case random pair similarity. The hardest pair to push apart.<br>
+<b>cls_acc</b> — Classifier accuracy. <span style="color:#66bb6a">Want &gt;0.95</span>. How well slots predict their concept values.<br>
+<b>geo</b> — Geometry gate (0&ndash;1). How much geometry losses are active right now.<br>
+
+<h4 style="color:#ab47bc;margin:12px 0 4px">Eval Metrics</h4>
+<b>clustering_gap</b> — Within-group similarity minus between-group similarity. <span style="color:#66bb6a">Want &gt;0.1</span>. Measures if semantically similar sentences actually cluster together.<br>
+<b>dir_consistency</b> — Do concept changes (negation, tense) produce consistent vector directions across different sentences? <span style="color:#66bb6a">Want &gt;0.5</span>.<br>
+<b>rank90/95</b> — Effective rank of concept space. How many of the 1024 dimensions are actually used (at 90% / 95% variance explained).<br>
+<b>slot_iso</b> — Average slot isolation. How well each slot responds only to its assigned concept.<br>
+<b>slot_assign</b> — Slots correctly assigned. <span style="color:#66bb6a">Want 32/32</span>.<br>
+</div>
 </div>
 </details>
 <div class="grid">
-    <div class="card"><h3>Reconstruction Loss</h3><canvas id="chart-recon"></canvas></div>
-    <div class="card"><h3>Geometry Losses</h3><canvas id="chart-geo-losses"></canvas></div>
-    <div class="card"><h3>Batch Similarities</h3><canvas id="chart-batch-sim"></canvas></div>
-    <div class="card"><h3>Diagnostic Similarities</h3><canvas id="chart-diag-sim"></canvas></div>
-    <div class="card"><h3>Effective Rank & Slot Isolation</h3><canvas id="chart-rank"></canvas></div>
-    <div class="card"><h3>Classifier + Contrastive</h3><canvas id="chart-v6-cls"></canvas></div>
-    <div class="card"><h3>V7: Margin Losses</h3><canvas id="chart-v7-margins"></canvas></div>
-    <div class="card"><h3>Clustering & Direction</h3><canvas id="chart-v6-geo"></canvas></div>
-    <div class="card"><h3>Slot Assignment</h3><canvas id="chart-v6-slots"></canvas></div>
+    <div class="card"><h3>Reconstruction + Geo Gate</h3><canvas id="chart-recon"></canvas></div>
+    <div class="card"><h3>Geometry Losses (NCE, WO, Decorr)</h3><canvas id="chart-geo-losses"></canvas></div>
+    <div class="card"><h3>Batch Similarities (p_sim, n_sim, wo_sim)</h3><canvas id="chart-batch-sim"></canvas></div>
+    <div class="card"><h3>Eval Similarities (para, unrelated, WO)</h3><canvas id="chart-diag-sim"></canvas></div>
+    <div class="card"><h3>Effective Rank &amp; Slot Isolation</h3><canvas id="chart-rank"></canvas></div>
+    <div class="card"><h3>Classifiers + Contrastive</h3><canvas id="chart-v6-cls"></canvas></div>
+    <div class="card"><h3>Margin Losses + Repulsion</h3><canvas id="chart-v7-margins"></canvas></div>
+    <div class="card"><h3>Clustering Gap &amp; Direction</h3><canvas id="chart-v6-geo"></canvas></div>
+    <div class="card"><h3>Slot Assignment (out of 32)</h3><canvas id="chart-v6-slots"></canvas></div>
     <div class="card"><h3>Per-Slot Isolation</h3><canvas id="chart-slot-iso"></canvas></div>
     <div class="stats-card" id="stats-panel">Loading...</div>
 </div>
@@ -409,7 +487,10 @@ function chartOpts(yLabel, yMin, yMax) {
                    boxWidth: isMobile() ? 10 : 20 } } },
         scales: {
             x: { ticks: { color: '#666', font: { size: tickSize() }, maxTicksLimit: isMobile() ? 5 : 10,
-                  callback: v => v >= 1000 ? (v/1000).toFixed(0)+'K' : v },
+                  callback: function(val, idx) {
+                      const v = this.getLabelForValue(val);
+                      return v >= 1000 ? (v/1000).toFixed(v >= 10000 ? 0 : 1)+'K' : v;
+                  } },
                  grid: { color: '#333' } },
             y: { min: yMin, max: yMax, ticks: { color: '#666', font: { size: tickSize() } },
                  grid: { color: '#333' },
@@ -458,10 +539,96 @@ function cmpDs(label, data, color, opts) {
 }
 
 let charts = {};
+let _phaseTransitions = [];  // set during updateDashboard
+
+// Custom plugin: draws vertical phase lines on every chart
+const phaseLinePlugin = {
+    id: 'phaseLines',
+    afterDraw(chart) {
+        if (!_phaseTransitions.length) return;
+        const labels = chart.data.labels;
+        if (!labels || !labels.length) return;
+        const xScale = chart.scales.x;
+        const yScale = chart.scales.y;
+        if (!xScale || !yScale) return;
+
+        const ctx = chart.ctx;
+        for (const t of _phaseTransitions) {
+            // Find pixel position: interpolate between nearest labels
+            let pixelX = null;
+            // Check if step is within chart range
+            if (t.step < labels[0] || t.step > labels[labels.length - 1]) continue;
+            // Find bracketing labels
+            for (let i = 0; i < labels.length - 1; i++) {
+                if (labels[i] <= t.step && labels[i+1] >= t.step) {
+                    const frac = (t.step - labels[i]) / (labels[i+1] - labels[i] || 1);
+                    const px1 = xScale.getPixelForValue(i);
+                    const px2 = xScale.getPixelForValue(i + 1);
+                    pixelX = px1 + frac * (px2 - px1);
+                    break;
+                }
+            }
+            if (pixelX === null) continue;
+
+            // Draw dashed vertical line
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = t.color;
+            ctx.lineWidth = 2;
+            ctx.moveTo(pixelX, yScale.top);
+            ctx.lineTo(pixelX, yScale.bottom);
+            ctx.stroke();
+
+            // Draw label
+            ctx.setLineDash([]);
+            ctx.font = '10px monospace';
+            ctx.fillStyle = t.color + 'cc';
+            ctx.textAlign = 'left';
+            ctx.fillText(t.label, pixelX + 4, yScale.top + 12);
+            ctx.restore();
+        }
+    }
+};
+Chart.register(phaseLinePlugin);
+
 function mkChart(id, config) {
     if (charts[id]) charts[id].destroy();
     charts[id] = new Chart(document.getElementById(id), config);
 }
+
+// Detect phase transitions from step data
+function getPhaseTransitions(steps) {
+    if (!steps || !steps.length) return [];
+    const transitions = [];
+    const phaseColors = { P1: '#42a5f5', P2: '#ffa726', P3: '#66bb6a' };
+    const phaseLabels = { P1: 'Phase 1: Recon', P2: 'Phase 2: Slots', P3: 'Phase 3: Joint' };
+
+    let geoOpened = false;
+    for (let i = 1; i < steps.length; i++) {
+        // Detect geo gate first opening (0 → >0) = Phase 0 → Phase 1 transition
+        if (!geoOpened && steps[i].geo_gate > 0 && (steps[i-1].geo_gate === 0 || steps[i-1].geo_gate == null)) {
+            geoOpened = true;
+            transitions.push({
+                step: steps[i].step,
+                color: '#ab47bc',
+                label: 'P1: Geo Gate Opens',
+            });
+        }
+        // Detect major phase change (P1→P2, P2→P3)
+        const cur = (steps[i].phase || '').substring(0, 2);
+        const prev = (steps[i-1].phase || '').substring(0, 2);
+        if (cur && prev && cur !== prev) {
+            transitions.push({
+                step: steps[i].step,
+                color: phaseColors[cur] || '#fff',
+                label: phaseLabels[cur] || cur,
+            });
+        }
+    }
+    return transitions;
+}
+
 
 // Load available runs for comparison dropdown
 async function loadRuns() {
@@ -487,6 +654,7 @@ function updateDashboard(response) {
 
     const s = steps.map(d => d.step);
     const sw = Math.min(30, Math.max(5, Math.floor(steps.length / 10)));
+    _phaseTransitions = getPhaseTransitions(steps);  // for auto-injection in mkChart
     const latest = steps[steps.length - 1];
     const hasCmp = compare_steps && compare_steps.length > 0;
     const cs = hasCmp ? compare_steps.map(d => d.step) : [];
@@ -883,10 +1051,72 @@ function updateDashboard(response) {
     }
 
     document.getElementById('stats-panel').innerHTML = html;
+
+    // 11. Training stage banner
+    const banner = document.getElementById('stage-banner');
+    const geo = latest.geo_gate;
+    const phase = latest.phase || '';
+    if (geo != null || phase) {
+        banner.style.display = 'block';
+        const phaseEl = document.getElementById('stage-phase');
+        const detailEl = document.getElementById('stage-detail');
+        const geoPctEl = document.getElementById('stage-geo-pct');
+        const geoBarEl = document.getElementById('stage-geo-bar');
+        const reconEmaEl = document.getElementById('stage-recon-ema');
+
+        // Phase display
+        let phaseText = '', phaseColor = '#aaa', detailText = '';
+        if (phase.startsWith('P1') && geo != null && geo === 0) {
+            phaseText = 'Phase 0: Pure Recon';
+            phaseColor = '#ef5350';
+            detailText = 'Decoder-only training. Geometry fully suppressed until recon loss drops.';
+        } else if (phase.startsWith('P1')) {
+            phaseText = 'Phase 1: Recon + Geometry Ramp';
+            phaseColor = '#42a5f5';
+            detailText = 'Reconstruction driving training, geometry ramping up as recon improves.';
+        } else if (phase.startsWith('P2')) {
+            const slotMatch = phase.match(/P2s(\d+)/);
+            const slotNum = slotMatch ? slotMatch[1] : '?';
+            const slotNames = ['subject','object','animacy','age','size','color','shape','material',
+                'weight','temperature','action','manner','speed','direction','location','spatial',
+                'distance','tense','duration','time_ref','number','degree','sentiment','emotion',
+                'arousal','quality','difficulty','negation','certainty','causation','formality','speech_act'];
+            const slotName = slotNames[parseInt(slotNum)] || slotNum;
+            phaseText = 'Phase 2: Slot Focus';
+            phaseColor = '#ffa726';
+            detailText = `Training slot ${slotNum} (${slotName}) — full gradient on focus, 5% on others. ${slotNum}/32 done.`;
+        } else if (phase.startsWith('P3')) {
+            phaseText = 'Phase 3: Joint Fine-tune';
+            phaseColor = '#66bb6a';
+            detailText = 'All slots equal, balanced refinement.';
+        }
+        phaseEl.textContent = phaseText;
+        phaseEl.style.color = phaseColor;
+        detailEl.textContent = detailText;
+
+        // Geo gate bar
+        const geoPct = geo != null ? geo : 0;
+        geoPctEl.textContent = (geoPct * 100).toFixed(0) + '%';
+        geoBarEl.style.width = (geoPct * 100) + '%';
+        geoBarEl.style.background = geoPct >= 0.9 ? '#66bb6a' : geoPct >= 0.5 ? '#ffa726' : '#ef5350';
+
+        // Recon EMA estimate (geo_scale = (0.5 - ema) / 0.4, so ema = 0.5 - geo_scale * 0.4)
+        if (geo != null) {
+            const estEma = (0.5 - geoPct * 0.4).toFixed(3);
+            reconEmaEl.textContent = `Recon EMA ≈ ${estEma} (need < 0.1 for Phase 2)`;
+        }
+    } else {
+        banner.style.display = 'none';
+    }
 }
 
 async function refresh() {
     try {
+        // Static mode: use embedded data
+        if (window.__STATIC_DATA__) {
+            updateDashboard(window.__STATIC_DATA__);
+            return;
+        }
         const cmpEnabled = document.getElementById('compare-enabled').checked;
         const cmpRun = document.getElementById('compare-select').value;
         let url = '/api/data';
@@ -907,23 +1137,76 @@ document.getElementById('compare-enabled').addEventListener('change', function()
 document.getElementById('compare-select').addEventListener('change', refresh);
 
 // Init
-loadRuns();
-refresh();
-setInterval(refresh, 30000);
+if (window.__STATIC_DATA__) {
+    // Static mode: no polling, no run loading, hide compare controls
+    document.querySelector('.controls').style.display = 'none';
+    document.querySelector('.header .status .live').textContent = '\u25cf';
+    document.querySelector('.header .status .live').style.color = '#888';
+    refresh();
+} else {
+    loadRuns();
+    refresh();
+    setInterval(refresh, 30000);
+}
 </script>
 </body>
 </html>
 """
 
 
+def export_static(output_path, run=None):
+    """Generate a self-contained static HTML dashboard with embedded data."""
+    available = list_available_runs()
+    if not run:
+        run = detect_run()
+    log_path = available.get(run)
+    if not log_path:
+        log_path = os.path.join(LOG_DIR, f"concept_{run}.log")
+
+    step_data = downsample(parse_step_data(log_path))
+    eval_data = parse_eval_data(log_path)
+
+    data = {
+        "run": run,
+        "steps": step_data,
+        "evals": eval_data,
+        "compare_run": None,
+        "compare_steps": [],
+        "compare_evals": [],
+    }
+
+    # Inject static data into HTML before closing </head>
+    data_script = f'<script>window.__STATIC_DATA__ = {json.dumps(data, separators=(",", ":"))};</script>'
+    html = DASHBOARD_HTML.replace('</head>', data_script + '\n</head>', 1)
+
+    # Update title to indicate static snapshot
+    html = html.replace('<title>flm Dashboard</title>',
+                        f'<title>flm Dashboard — {run.upper()} (static)</title>')
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, 'w') as f:
+        f.write(html)
+
+    step_count = step_data[-1]['step'] if step_data else 0
+    size_kb = os.path.getsize(output_path) / 1024
+    print(f"Exported static dashboard: {output_path}")
+    print(f"  Run: {run.upper()}, Steps: {step_count:,}, Size: {size_kb:.0f} KB")
+
+
 def main():
     parser = argparse.ArgumentParser(description="flm web training dashboard")
     parser.add_argument("--port", type=int, default=8501, help="Port (default: 8501)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host (default: 0.0.0.0)")
+    parser.add_argument("--export", type=str, metavar="PATH",
+                        help="Export static HTML dashboard (e.g. docs/dashboard.html)")
+    parser.add_argument("--run", type=str, help="Run to display (default: auto-detect latest)")
     args = parser.parse_args()
 
-    print(f"flm Training Dashboard: http://localhost:{args.port}")
-    app.run(host=args.host, port=args.port, debug=False)
+    if args.export:
+        export_static(args.export, run=args.run)
+    else:
+        print(f"flm Training Dashboard: http://localhost:{args.port}")
+        app.run(host=args.host, port=args.port, debug=False)
 
 
 if __name__ == "__main__":
