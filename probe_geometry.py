@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Probe the geometry of the concept space — 32 slots x 32 dims."""
+"""Probe the geometry of the concept space — 32 slots x 32 dims.
+
+V11+: measures emergent geometry (no forced slot assignments).
+Tests analogies, clustering, direction consistency, reconstruction on diverse inputs.
+
+Usage:
+    python probe_geometry.py                                    # auto-detect latest
+    python probe_geometry.py checkpoints/concept_v11/step_600000.pt
+"""
 
 import sys
 import torch
@@ -9,30 +17,19 @@ from transformers import BertTokenizerFast
 from concept_model import (ConceptAutoencoder, ConceptAutoencoderV10,
                            ConceptConfig, flat_similarity_matrix)
 
-# Auto-detect latest checkpoint: prefer V10, fall back to V9
 import os
 CKPT = None
-for candidate in ["checkpoints/concept_v10/latest.pt",
+for candidate in ["checkpoints/concept_v11/latest.pt",
+                   "checkpoints/concept_v11/step_600000.pt",
+                   "checkpoints/concept_v10/latest.pt",
                    "checkpoints/concept_v9/latest.pt"]:
     if os.path.exists(candidate):
         CKPT = candidate
         break
-# Allow override via command line
 if len(sys.argv) > 1:
     CKPT = sys.argv[1]
 
 DEVICE = "cpu"
-
-SLOT_NAMES = {
-    0: "subject", 1: "object", 2: "animacy", 3: "age",
-    4: "size", 5: "color", 6: "shape", 7: "material",
-    8: "weight", 9: "temperature", 10: "action_type", 11: "manner",
-    12: "speed", 13: "direction", 14: "location", 15: "spatial",
-    16: "distance", 17: "tense", 18: "duration", 19: "time_ref",
-    20: "number", 21: "degree", 22: "sentiment", 23: "emotion",
-    24: "arousal", 25: "quality", 26: "difficulty", 27: "negation",
-    28: "certainty", 29: "causation", 30: "formality", 31: "speech_act",
-}
 
 
 def load_model():
@@ -51,6 +48,9 @@ def load_model():
     state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["model_state_dict"].items()}
     model.load_state_dict(state)
     model.eval()
+    step = ckpt.get("step", "?")
+    em_ema = ckpt.get("em_ema", "?")
+    print(f"  Step: {step}  EM EMA: {em_ema}")
     return model
 
 
@@ -63,13 +63,56 @@ def encode(model, tokenizer, texts):
     return F.normalize(flat, p=2, dim=-1), concepts
 
 
+def flat_cosine(a, b):
+    return F.cosine_similarity(a, b).item()
+
+
 def slot_cosine(a, b):
-    """Flat cosine similarity between two single-example concept tensors."""
     return flat_similarity_matrix(a, b).item()
 
 
-def flat_cosine(a, b):
-    return F.cosine_similarity(a, b).item()
+def reconstruct_batch(model, tokenizer, texts):
+    """Encode and decode a batch of texts, return list of decoded strings.
+
+    Batching is important: the parallel decoder's position queries are
+    sensitive to seq_len, so we need consistent padding across the batch
+    (matching how training works).
+    """
+    enc = tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors="pt")
+    is_v10 = isinstance(model, ConceptAutoencoderV10)
+    results = []
+    with torch.no_grad():
+        concepts = model.encode(enc["input_ids"], enc["attention_mask"])
+        if is_v10:
+            logits = model.decode_parallel(concepts, seq_len=enc["input_ids"].shape[1])
+            predicted = logits.argmax(dim=-1)
+            for i in range(len(texts)):
+                mask = enc["attention_mask"][i].bool()
+                pred = predicted[i][mask]
+                results.append(tokenizer.decode(pred, skip_special_tokens=True))
+        else:
+            for i in range(len(texts)):
+                bos_id = tokenizer.cls_token_id or 101
+                generated = [bos_id]
+                c = concepts[i:i+1]
+                for _ in range(len(enc["input_ids"][i]) + 10):
+                    dec_input = torch.tensor([generated])
+                    logits = model.decode(dec_input, c)
+                    next_token = logits[0, -1].argmax().item()
+                    if next_token == tokenizer.sep_token_id:
+                        break
+                    generated.append(next_token)
+                results.append(tokenizer.decode(generated[1:], skip_special_tokens=True))
+    return results
+
+
+def word_overlap(a, b):
+    """Token-level overlap percentage."""
+    wa, wb = a.lower().split(), b.lower().split()
+    if not wa:
+        return 0.0
+    matches = sum(1 for i, w in enumerate(wa) if i < len(wb) and wb[i] == w)
+    return matches / len(wa)
 
 
 def main():
@@ -77,11 +120,66 @@ def main():
     model = load_model()
     tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
 
+    scores = {}
+
     # ================================================================
-    # 1. Semantic Clustering — within-group vs between-group
+    # 1. ANALOGY TEST — a - b + c ≈ d?
     # ================================================================
     print("\n" + "=" * 60)
-    print("1. SEMANTIC CLUSTERING")
+    print("1. ANALOGY TEST (a - b + c ≈ d?)")
+    print("=" * 60)
+
+    analogies = [
+        # Tense
+        ("she ran", "she runs", "he walked", "he walks", "tense: ran/runs → walked/walks"),
+        ("they played outside", "they play outside", "she danced well", "she dances well", "tense: played/play → danced/dances"),
+        # Sentiment
+        ("the movie was great", "the movie was terrible", "the food was great", "the food was terrible", "sentiment: great/terrible (movie→food)"),
+        ("she loves the city", "she hates the city", "he loves the job", "he hates the job", "sentiment: loves/hates (city→job)"),
+        # Negation
+        ("she is not here", "she is here", "he is not there", "he is there", "negation: not here/here → not there/there"),
+        ("they did not win", "they did win", "she did not leave", "she did leave", "negation: did not/did (win→leave)"),
+        # Plurality
+        ("the cats", "the cat", "the dogs", "the dog", "plural: cats/cat → dogs/dog"),
+        ("the birds flew", "the bird flew", "the cars drove", "the car drove", "plural: birds/bird → cars/car"),
+        # Subject swap
+        ("he is happy", "she is happy", "he is tired", "she is tired", "subject: he/she (happy→tired)"),
+        ("alice likes bob", "bob likes alice", "the cat chased the mouse", "the mouse chased the cat", "role swap: subject↔object"),
+        # Size
+        ("big cat", "cat", "big dog", "dog", "size: big+cat/cat → big+dog/dog"),
+        ("the huge house", "the tiny house", "the huge tree", "the tiny tree", "size: huge/tiny (house→tree)"),
+        # Action
+        ("she ran to the store", "she walked to the store", "he ran to the park", "he walked to the park", "action: ran/walked (store→park)"),
+        # Formality / register
+        ("the experiment yielded results", "the test gave results", "the analysis yielded data", "the analysis gave data", "formality: yielded/gave"),
+    ]
+
+    analogy_scores = []
+    for a, b, c, expected_d, label in analogies:
+        va, _ = encode(model, tokenizer, [a])
+        vb, _ = encode(model, tokenizer, [b])
+        vc, _ = encode(model, tokenizer, [c])
+        vd, _ = encode(model, tokenizer, [expected_d])
+
+        predicted_flat = F.normalize(va - vb + vc, p=2, dim=-1)
+        sim = flat_cosine(predicted_flat, vd)
+        analogy_scores.append(sim)
+
+        quality = "★" if sim >= 0.9 else "●" if sim >= 0.7 else "○"
+        print(f"  {quality} {sim:.3f}  {label}")
+        print(f"          {a} - {b} + {c} ≈ {expected_d}")
+
+    avg = np.mean(analogy_scores)
+    scores["analogy_avg"] = avg
+    print(f"\n  AVERAGE: {avg:.3f}  (★ ≥0.9, ● ≥0.7, ○ <0.7)")
+    print(f"  ≥0.9: {sum(1 for s in analogy_scores if s >= 0.9)}/{len(analogy_scores)}")
+    print(f"  ≥0.7: {sum(1 for s in analogy_scores if s >= 0.7)}/{len(analogy_scores)}")
+
+    # ================================================================
+    # 2. SEMANTIC CLUSTERING
+    # ================================================================
+    print("\n" + "=" * 60)
+    print("2. SEMANTIC CLUSTERING")
     print("=" * 60)
 
     groups = {
@@ -102,7 +200,6 @@ def main():
         _, concepts = encode(model, tokenizer, sents)
         group_concepts[name] = concepts
 
-    print("\nWithin-group avg slot-aware similarity:")
     within_sims = []
     for name, concepts in group_concepts.items():
         sims = []
@@ -112,9 +209,8 @@ def main():
         avg = np.mean(sims)
         within_sims.append(avg)
         print(f"  {name:>12s}: {avg:.3f}  (range {min(sims):.3f} - {max(sims):.3f})")
-    print(f"  {'AVERAGE':>12s}: {np.mean(within_sims):.3f}")
+    print(f"  {'WITHIN AVG':>12s}: {np.mean(within_sims):.3f}")
 
-    print("\nBetween-group avg slot-aware similarity:")
     between_sims = []
     group_names = list(group_concepts.keys())
     for i in range(len(group_names)):
@@ -125,17 +221,18 @@ def main():
             for a in range(len(ca)):
                 for b in range(len(cb)):
                     sims.append(slot_cosine(ca[a:a+1], cb[b:b+1]))
-            avg = np.mean(sims)
-            between_sims.append(avg)
-    print(f"  {'AVERAGE':>12s}: {np.mean(between_sims):.3f}")
+            between_sims.append(np.mean(sims))
+    print(f"  {'BETWEEN AVG':>12s}: {np.mean(between_sims):.3f}")
+
     gap = np.mean(within_sims) - np.mean(between_sims)
-    print(f"\n  CLUSTERING GAP: {gap:+.3f} (within - between, want > 0)")
+    scores["clustering_gap"] = gap
+    print(f"\n  CLUSTERING GAP: {gap:+.4f}  (want > 0, ideally > 0.05)")
 
     # ================================================================
-    # 2. Direction Consistency — do concept changes form consistent directions?
+    # 3. DIRECTION CONSISTENCY (emergent — no slot name assumptions)
     # ================================================================
     print("\n" + "=" * 60)
-    print("2. DIRECTION CONSISTENCY (per-slot deltas)")
+    print("3. DIRECTION CONSISTENCY (emergent)")
     print("=" * 60)
 
     directions = {
@@ -171,125 +268,138 @@ def main():
         ],
     }
 
+    dir_scores = []
     for attr, pairs in directions.items():
-        # Flat-vector direction consistency
         flat_deltas = []
-        # Per-slot direction consistency
-        slot_deltas = []
         for pos, neg in pairs:
-            v_pos, c_pos = encode(model, tokenizer, [pos])
-            v_neg, c_neg = encode(model, tokenizer, [neg])
+            v_pos, _ = encode(model, tokenizer, [pos])
+            v_neg, _ = encode(model, tokenizer, [neg])
             flat_delta = F.normalize(v_pos - v_neg, p=2, dim=-1)
             flat_deltas.append(flat_delta)
-            slot_delta = c_pos - c_neg  # (1, 32, 32)
-            slot_deltas.append(slot_delta)
 
-        # Flat consistency
+        # Pairwise consistency of direction vectors
         flat_cons = []
         for i in range(len(flat_deltas)):
             for j in range(i + 1, len(flat_deltas)):
                 flat_cons.append(flat_cosine(flat_deltas[i], flat_deltas[j]))
 
-        # Find which slots change most for this attribute
-        avg_slot_change = torch.stack(slot_deltas).squeeze(1).abs().mean(dim=0).mean(dim=-1)  # (32,)
-        top_slots = avg_slot_change.topk(5)
-        slot_info = ", ".join(f"{SLOT_NAMES[idx.item()]}({avg_slot_change[idx].item():.3f})"
-                              for idx in top_slots.indices)
+        avg_con = np.mean(flat_cons)
+        dir_scores.append(avg_con)
+        quality = "★" if avg_con >= 0.5 else "●" if avg_con >= 0.2 else "○"
+        print(f"  {quality} {attr:>12s}: {avg_con:.3f}  (range {min(flat_cons):.3f} - {max(flat_cons):.3f})")
 
-        print(f"  {attr:>12s}: flat_consistency={np.mean(flat_cons):.3f}  "
-              f"(range {min(flat_cons):.3f}-{max(flat_cons):.3f})")
-        print(f"               top changing slots: {slot_info}")
+    avg_dir = np.mean(dir_scores)
+    scores["direction_consistency"] = avg_dir
+    print(f"\n  AVERAGE: {avg_dir:.3f}  (★ ≥0.5, ● ≥0.2, ○ <0.2)")
 
     # ================================================================
-    # 3. Slot Isolation — does changing one concept only affect its slot?
+    # 4. RECONSTRUCTION — diverse inputs (prose, code, math, logic)
     # ================================================================
     print("\n" + "=" * 60)
-    print("3. SLOT ISOLATION (single-concept changes)")
+    print("4. RECONSTRUCTION (diverse inputs)")
     print("=" * 60)
 
-    isolation_tests = [
-        # (sent_a, sent_b, expected_changing_concept, description)
-        ("the big cat sat", "the small cat sat", "size", "size change"),
-        ("the red car drove fast", "the blue car drove fast", "color", "color change"),
-        ("she ran to the store", "she walked to the store", "action_type", "action change"),
-        ("the cat is here", "the cat is not here", "negation", "negation flip"),
-        ("she ran yesterday", "she runs today", "tense", "tense change"),
-        ("the happy man smiled", "the sad man smiled", "emotion", "emotion change"),
-        ("three cats played", "seven cats played", "number", "number change"),
-        ("it is certainly true", "it might be true", "certainty", "certainty change"),
-        ("the movie was great", "the movie was terrible", "sentiment", "sentiment change"),
-        ("he walked quickly", "he walked slowly", "manner", "manner change"),
+    recon_tests = [
+        # Short prose
+        ("the cat sat on the mat", "short prose"),
+        ("she runs every morning before breakfast", "medium prose"),
+        ("the dog bit the man", "short prose"),
+        ("the man bit the dog", "short prose (word order)"),
+        # Longer prose
+        ("he certainly did not enjoy the terrible movie yesterday", "long prose"),
+        ("alice likes bob but bob does not like alice", "logic/names"),
+        ("the quick brown fox jumps over the lazy dog near the river", "long prose"),
+        ("three big red cars drove quickly north", "adjective stack"),
+        ("the purple man licked the sucker", "unusual content"),
+        # Code
+        ("def fibonacci ( n ) : return n if n < 2 else fibonacci ( n - 1 ) + fibonacci ( n - 2 )", "code: recursion"),
+        ("for i in range ( 10 ) : print ( i * 2 )", "code: loop"),
+        ("x = [ i for i in range ( n ) if i % 2 == 0 ]", "code: list comp"),
+        ("import os ; path = os . path . join ( dir , file )", "code: import"),
+        # Math
+        ("the derivative of x squared plus three x equals two x plus three", "math: calculus"),
+        ("the sum of one plus two plus three equals six", "math: arithmetic"),
+        ("if x is greater than zero then x squared is positive", "math: logic"),
+        # Logic
+        ("if all dogs are animals and all animals breathe then all dogs breathe", "logic: syllogism"),
+        ("either it rains or it does not rain", "logic: excluded middle"),
+        ("if she studies then she passes the exam", "logic: conditional"),
+        # Technical
+        ("the tcp handshake requires three packets syn synack and ack", "technical: networking"),
+        ("malloc allocates memory on the heap and returns a pointer", "technical: systems"),
     ]
 
-    for sent_a, sent_b, expected_slot_name, desc in isolation_tests:
-        _, c_a = encode(model, tokenizer, [sent_a])
-        _, c_b = encode(model, tokenizer, [sent_b])
+    texts = [t for t, _ in recon_tests]
+    categories = [c for _, c in recon_tests]
+    decoded_all = reconstruct_batch(model, tokenizer, texts)
 
-        # Per-slot cosine similarity
-        per_slot_sim = []
-        for s in range(32):
-            sim = F.cosine_similarity(c_a[0, s:s+1], c_b[0, s:s+1], dim=-1).item()
-            per_slot_sim.append(sim)
+    perfect = 0
+    high = 0  # >=90%
+    total = len(recon_tests)
+    recon_scores = []
 
-        # Find most-changed slots
-        per_slot_sim = np.array(per_slot_sim)
-        changed_mask = per_slot_sim < 0.90
-        changed_slots = np.where(changed_mask)[0]
-        unchanged_mean = per_slot_sim[~changed_mask].mean() if (~changed_mask).any() else 0
+    for text, category, decoded in zip(texts, categories, decoded_all):
+        overlap = word_overlap(text, decoded)
+        recon_scores.append(overlap)
 
-        # Check if expected slot is among the most changed
-        expected_idx = [k for k, v in SLOT_NAMES.items() if v == expected_slot_name][0]
-        expected_sim = per_slot_sim[expected_idx]
-        min_slot = np.argmin(per_slot_sim)
+        if overlap >= 1.0:
+            perfect += 1
+            marker = "  ✓"
+        elif overlap >= 0.9:
+            high += 1
+            marker = f"  ~ {overlap:.0%}"
+        else:
+            marker = f"  ✗ {overlap:.0%}"
 
-        status = "OK" if expected_idx == min_slot or expected_sim < 0.85 else "??"
-        changed_names = [SLOT_NAMES[i] for i in changed_slots[:5]]
+        if overlap < 1.0:
+            print(f"  [{category}]{marker}")
+            print(f"    IN:  {text}")
+            print(f"    OUT: {decoded}")
+        else:
+            print(f"  [{category}]{marker}")
 
-        print(f"  [{status}] {desc:>18s}: expected={expected_slot_name}(sim={expected_sim:.2f}), "
-              f"most_changed={SLOT_NAMES[min_slot]}(sim={per_slot_sim[min_slot]:.2f}), "
-              f"unchanged_mean={unchanged_mean:.3f}")
-        if len(changed_slots) > 1:
-            print(f"      all changed (<0.90): {changed_names}")
+    avg_recon = np.mean(recon_scores)
+    scores["recon_avg"] = avg_recon
+    scores["recon_perfect"] = perfect
+    print(f"\n  PERFECT: {perfect}/{total} ({perfect/total:.0%})")
+    print(f"  ≥90%:   {perfect + high}/{total} ({(perfect + high)/total:.0%})")
+    print(f"  AVG OVERLAP: {avg_recon:.3f}")
 
     # ================================================================
-    # 4. Analogy Test — a - b + c ≈ d?
+    # 5. WORD ORDER SENSITIVITY
     # ================================================================
     print("\n" + "=" * 60)
-    print("4. ANALOGY TEST (a - b + c ≈ d?)")
+    print("5. WORD ORDER SENSITIVITY")
     print("=" * 60)
 
-    analogies = [
-        ("she ran", "she runs", "he walked", "he walks", "tense transfer"),
-        ("big cat", "cat", "big dog", "dog", "size transfer"),
-        ("he is happy", "he is sad", "she is happy", "she is sad", "emotion transfer"),
-        ("the cats", "the cat", "the dogs", "the dog", "plural transfer"),
-        ("she is not here", "she is here", "he is not there", "he is there", "negation transfer"),
-        ("the movie was great", "the movie was terrible",
-         "the food was great", "the food was terrible", "sentiment transfer"),
+    wo_pairs = [
+        ("the dog bit the man", "the man bit the dog"),
+        ("alice likes bob", "bob likes alice"),
+        ("she gave him a book", "he gave her a book"),
+        ("the teacher praised the student", "the student praised the teacher"),
+        ("the cat chased the mouse", "the mouse chased the cat"),
     ]
 
-    for a, b, c, expected_d, label in analogies:
-        va, ca = encode(model, tokenizer, [a])
-        vb, cb = encode(model, tokenizer, [b])
-        vc, cc = encode(model, tokenizer, [c])
-        vd, cd = encode(model, tokenizer, [expected_d])
+    wo_sims = []
+    for a, b in wo_pairs:
+        va, _ = encode(model, tokenizer, [a])
+        vb, _ = encode(model, tokenizer, [b])
+        sim = flat_cosine(va, vb)
+        wo_sims.append(sim)
+        # Lower = better differentiation
+        quality = "★" if sim < 0.85 else "●" if sim < 0.95 else "○"
+        print(f"  {quality} {sim:.3f}  '{a}' vs '{b}'")
 
-        # Flat-space analogy
-        predicted_flat = F.normalize(va - vb + vc, p=2, dim=-1)
-        flat_sim = flat_cosine(predicted_flat, vd)
-
-        # Slot-space analogy
-        predicted_concepts = ca - cb + cc  # (1, 32, 32)
-        slot_sim = slot_cosine(predicted_concepts, cd)
-
-        print(f"  {label:>20s}: flat={flat_sim:.3f}  slot_aware={slot_sim:.3f}  "
-              f"| {a} - {b} + {c} ≈ {expected_d}")
+    avg_wo = np.mean(wo_sims)
+    scores["word_order_avg_sim"] = avg_wo
+    print(f"\n  AVG SIMILARITY: {avg_wo:.3f}  (lower = better differentiation)")
+    print(f"  (★ <0.85 = distinct, ● <0.95 = some distinction, ○ ≥0.95 = too similar)")
 
     # ================================================================
-    # 5. Effective Rank
+    # 6. EFFECTIVE RANK
     # ================================================================
     print("\n" + "=" * 60)
-    print("5. EFFECTIVE RANK")
+    print("6. EFFECTIVE RANK")
     print("=" * 60)
 
     all_sents = []
@@ -310,117 +420,35 @@ def main():
     ]
     all_sents.extend(extras)
 
-    vecs, concepts_all = encode(model, tokenizer, all_sents)
-
-    # Full-space rank
+    vecs, _ = encode(model, tokenizer, all_sents)
     vecs_np = vecs.numpy()
     vecs_np = vecs_np - vecs_np.mean(axis=0)
     _, s, _ = np.linalg.svd(vecs_np, full_matrices=False)
     var = s ** 2
     cumvar = np.cumsum(var / var.sum())
-    rank90 = np.searchsorted(cumvar, 0.90) + 1
-    rank95 = np.searchsorted(cumvar, 0.95) + 1
-    rank99 = np.searchsorted(cumvar, 0.99) + 1
+    rank90 = int(np.searchsorted(cumvar, 0.90) + 1)
+    rank95 = int(np.searchsorted(cumvar, 0.95) + 1)
+    rank99 = int(np.searchsorted(cumvar, 0.99) + 1)
+    scores["rank90"] = rank90
+    scores["rank95"] = rank95
+
     print(f"  Full space (1024 dims, {len(all_sents)} samples):")
     print(f"    rank90={rank90}  rank95={rank95}  rank99={rank99}")
     print(f"    Top 10 singular values: {', '.join(f'{v:.2f}' for v in s[:10])}")
 
-    # Per-slot rank
-    print(f"\n  Per-slot effective rank (32 dims each):")
-    slot_ranks = []
-    for slot in range(32):
-        slot_vecs = concepts_all[:, slot, :].numpy()
-        slot_vecs = slot_vecs - slot_vecs.mean(axis=0)
-        _, ss, _ = np.linalg.svd(slot_vecs, full_matrices=False)
-        svar = ss ** 2
-        scumvar = np.cumsum(svar / svar.sum())
-        sr90 = np.searchsorted(scumvar, 0.90) + 1
-        slot_ranks.append(sr90)
-    # Print in a compact grid
-    for row in range(4):
-        parts = []
-        for col in range(8):
-            idx = row * 8 + col
-            name = SLOT_NAMES[idx]
-            parts.append(f"{name[:6]:>6s}:{slot_ranks[idx]:2d}")
-        print(f"    {' | '.join(parts)}")
-
     # ================================================================
-    # 6. Reconstruction Spot-check
+    # SUMMARY
     # ================================================================
     print("\n" + "=" * 60)
-    print("6. RECONSTRUCTION SPOT-CHECK")
+    print("SUMMARY")
     print("=" * 60)
-
-    recon_tests = [
-        "the cat sat on the mat",
-        "she runs every morning before breakfast",
-        "the dog bit the man",
-        "the man bit the dog",
-        "artificial intelligence will change the world",
-        "three big red cars drove quickly north",
-        "he certainly did not enjoy the terrible movie yesterday",
-    ]
-    is_v10 = isinstance(model, ConceptAutoencoderV10)
-    for sent in recon_tests:
-        enc = tokenizer(sent, padding=True, truncation=True, max_length=64, return_tensors="pt")
-        with torch.no_grad():
-            concepts = model.encode(enc["input_ids"], enc["attention_mask"])
-            if is_v10:
-                # Parallel decode — all positions at once
-                logits = model.decode_parallel(concepts, seq_len=enc["input_ids"].shape[1])
-                predicted = logits[0].argmax(dim=-1)
-                decoded = tokenizer.decode(predicted, skip_special_tokens=True)
-            else:
-                # Autoregressive decode
-                bos_id = tokenizer.cls_token_id or 101
-                generated = [bos_id]
-                for _ in range(len(enc["input_ids"][0]) + 10):
-                    dec_input = torch.tensor([generated])
-                    logits = model.decode(dec_input, concepts)
-                    next_token = logits[0, -1].argmax().item()
-                    if next_token == tokenizer.sep_token_id:
-                        break
-                    generated.append(next_token)
-                decoded = tokenizer.decode(generated[1:], skip_special_tokens=True)
-        print(f"  IN:  {sent}")
-        print(f"  OUT: {decoded}")
-        print()
-
-    # ================================================================
-    # 7. Word Order Sensitivity
-    # ================================================================
-    print("=" * 60)
-    print("7. WORD ORDER SENSITIVITY")
-    print("=" * 60)
-
-    wo_pairs = [
-        ("the dog bit the man", "the man bit the dog"),
-        ("alice likes bob", "bob likes alice"),
-        ("she gave him a book", "he gave her a book"),
-        ("the teacher praised the student", "the student praised the teacher"),
-        ("the cat chased the mouse", "the mouse chased the cat"),
-    ]
-
-    for a, b in wo_pairs:
-        _, ca = encode(model, tokenizer, [a])
-        _, cb = encode(model, tokenizer, [b])
-        s_sim = slot_cosine(ca, cb)
-
-        # Which slots differ most?
-        per_slot = []
-        for s in range(32):
-            sim = F.cosine_similarity(ca[0, s:s+1], cb[0, s:s+1], dim=-1).item()
-            per_slot.append(sim)
-        per_slot = np.array(per_slot)
-        changed = np.where(per_slot < 0.90)[0]
-        changed_names = [f"{SLOT_NAMES[i]}({per_slot[i]:.2f})" for i in changed[:6]]
-
-        print(f"  slot_sim={s_sim:.3f}  '{a}' vs '{b}'")
-        if changed_names:
-            print(f"    changed slots: {', '.join(changed_names)}")
-        else:
-            print(f"    no slots changed <0.90 (min={per_slot.min():.2f} at {SLOT_NAMES[per_slot.argmin()]})")
+    print(f"  Analogy avg:          {scores['analogy_avg']:.3f}  (want > 0.8)")
+    print(f"  Clustering gap:       {scores['clustering_gap']:+.4f}  (want > 0.05)")
+    print(f"  Direction consistency: {scores['direction_consistency']:.3f}  (want > 0.3)")
+    print(f"  Recon perfect:        {scores['recon_perfect']}/{total}  ({scores['recon_perfect']/total:.0%})")
+    print(f"  Recon avg overlap:    {scores['recon_avg']:.3f}")
+    print(f"  Word order sim:       {scores['word_order_avg_sim']:.3f}  (want < 0.85)")
+    print(f"  Effective rank:       {scores['rank90']}/{scores['rank95']} (90%/95%)")
 
 
 if __name__ == "__main__":

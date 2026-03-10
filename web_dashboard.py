@@ -48,17 +48,22 @@ def parse_step_data(log_path):
                     is_v10 = "em_ema=" in line
 
                     if is_v10:
-                        # V10/V11: step N | loss X (recon=X) | em_ema=X | lr X | X%
+                        # V10/V11/V12/V13: step N | loss X (recon=X fr=X) | em_ema=X | lr X | X%
                         lr_val = grab(r"lr ([\d.eE+-]+)", full_line)
                         progress = grab(r"([\d.]+)%", full_line)
-                        rows.append({
+                        row = {
                             "step": step,
                             "total_loss": total_loss,
                             "recon": grab(r"recon=([\d.]+)", detail),
                             "em_ema": grab(r"em_ema=([\d.]+)", full_line),
                             "lr": lr_val,
                             "progress": progress,
-                        })
+                        }
+                        # V13 FR loss
+                        fr_val = grab(r"fr=([\d.]+)", detail)
+                        if fr_val > 0:
+                            row["fr_loss"] = fr_val
+                        rows.append(row)
                     else:
                         # V5-V9 format
                         sim_part = parts[2] if len(parts) > 2 else ""
@@ -423,53 +428,53 @@ concepts can&rsquo;t just store English surface tokens because the FR decoder ne
 Word order differs between languages, so the bottleneck must capture structure, not just bags of words.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-Trains on <b>diverse EN data</b> (~8.4M texts) + <b>190K EN&harr;FR translation pairs</b> from Europarl.
-Every 3rd step is a translation step (EN recon + FR translation loss); other steps are EN-only reconstruction.
+Trains on <b>3.2M EN&harr;FR translation pairs</b> (Europarl + Tatoeba + WikiMatrix, all DFSG-compliant).
+Every step trains both decoders: EN reconstruction + FR translation from the same pairs.
 </p>
 
 <h4 style="color:#ffa726;margin:12px 0 6px">Training Setup</h4>
 <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:8px">
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Architecture</td>
-  <td style="padding:4px 8px">~80M params (EN enc+dec + FR dec), 32 slots &times; 32 dims = 1024-dim bottleneck</td>
+  <td style="padding:4px 8px">82.8M params &mdash; EN encoder (6L) + bottleneck (32&times;32=1024d) + EN decoder (6L) + FR decoder (6L)</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Schedule</td>
-  <td style="padding:4px 8px">600K steps, cosine LR 2e-4 &rarr; 1e-5, batch size 48, translation every 3rd step</td>
+  <td style="padding:4px 8px">600K steps, cosine LR 2e-4 &rarr; 1e-5, batch size 48</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
-  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Dynamic Sampling</td>
-  <td style="padding:4px 8px">Oversamples weak length buckets (short/medium/long). Weight &prop; (1&minus;em)^&alpha; with floor.
-  Shifts training focus to lengths that aren&rsquo;t solved yet.</td>
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Data</td>
+  <td style="padding:4px 8px">3.2M EN&harr;FR pairs: WikiMatrix (2.7M, CC-BY-SA), Tatoeba (275K, CC-BY), Europarl (190K, public domain)</td>
 </tr>
 <tr>
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Loss</td>
-  <td style="padding:4px 8px">EN reconstruction + FR translation cross-entropy. Dual decoder, shared bottleneck.</td>
+  <td style="padding:4px 8px">EN recon CE + 1.0 &times; FR translation CE, both from shared concept bottleneck</td>
 </tr>
 </table>
 
-<div style="columns:2;column-gap:24px;padding:8px 0">
-<h4 style="color:#ef5350;margin:8px 0 4px;column-span:all">Metrics</h4>
-<b>recon</b> &mdash; EN reconstruction cross-entropy loss. Lower is better.<br>
-<b>fr_loss</b> &mdash; FR translation cross-entropy loss (V13). Lower means better EN&rarr;FR translation.<br>
-<b>token_acc</b> &mdash; Per-token EN accuracy. What fraction of tokens does the EN decoder get right?<br>
-<b>fr_token_acc</b> &mdash; Per-token FR accuracy (V13). How well does the FR decoder translate?<br>
-<b>exact_match</b> &mdash; Full-sentence EN exact match. The entire output matches the input word-for-word.<br>
-<b>em_ema</b> &mdash; Exponential moving average of exact match (decay=0.9). Smoothed training signal.<br>
-<b>short/med/long</b> &mdash; Per-bucket metrics. Short = 1&ndash;4 tokens, medium = 5&ndash;8, long = 9+.<br>
-<b>dynamic weights</b> &mdash; Sampling weights for each bucket. Higher weight = more training focus.<br>
-<b>lr</b> &mdash; Learning rate. Cosine schedule from 3e-4 peak down to 1e-5 minimum.<br>
-<b>analogy_avg</b> &mdash; Average cosine similarity for a&minus;b+c&cong;d analogies (want &gt;0.8).<br>
-<b>clustering_gap</b> &mdash; Within-group minus between-group similarity (want &gt;0.05).<br>
-<b>direction_consistency</b> &mdash; How consistent attribute directions are across examples (want &gt;0.3).<br>
-<b>word_order_sim</b> &mdash; Similarity between word-order swapped pairs (want &lt;0.85 = good differentiation).<br>
-<b>effective_rank</b> &mdash; SVD dimensions needed for 90%/95% variance. Higher = richer space utilization.<br>
+<div style="padding:8px 0">
+<h4 style="color:#ef5350;margin:8px 0 4px">Metrics</h4>
+<div style="columns:2;column-gap:24px">
+<b style="color:#ef5350">EN Recon Loss</b> &mdash; EN reconstruction cross-entropy. Lower = better.<br>
+<b style="color:#ab47bc">FR Trans Loss</b> &mdash; FR translation cross-entropy. Lower = better translation.<br>
+<b>EN Token Acc</b> &mdash; Fraction of EN tokens the decoder gets right.<br>
+<b>FR Token Acc</b> &mdash; Fraction of FR tokens the decoder gets right.<br>
+<b>Exact Match</b> &mdash; Full EN sentence reconstructed perfectly.<br>
+<b>EM EMA</b> &mdash; Exponential moving average of exact match (decay=0.9).<br>
+</div>
 
-<h4 style="color:#42a5f5;margin:12px 0 4px">Diagnostic Sentences</h4>
-<b>[OK]</b> &mdash; Perfectly reconstructed. <span style="color:#66bb6a">Green = working.</span><br>
-<b>[DIFF] (X%)</b> &mdash; X% token overlap. Shows input &rarr; output to track what the model gets wrong.<br>
-Diagnostics include prose, code (<code>def fibonacci...</code>), math (<code>derivative of x squared...</code>),
-and logic (<code>if all dogs are animals...</code>).
+<h4 style="color:#42a5f5;margin:12px 0 4px">Geometry Probes</h4>
+<div style="columns:2;column-gap:24px">
+<b>Analogy</b> &mdash; a&minus;b+c&cong;d cosine score. Want &gt;0.8.<br>
+<b>Clustering Gap</b> &mdash; Within-group &minus; between-group sim. Want &gt;0.05.<br>
+<b>Dir Consistency</b> &mdash; Same attribute = same direction? Want &gt;0.3.<br>
+<b>Word Order Sim</b> &mdash; Swapped-order pair similarity. Want &lt;0.85.<br>
+<b>Effective Rank</b> &mdash; SVD dims for 90%/95% variance. Higher = richer.<br>
+</div>
+
+<h4 style="color:#66bb6a;margin:12px 0 4px">Diagnostic Output</h4>
+<b>[OK]</b> = perfect reconstruction. <b>[DIFF] (X%)</b> = X% token overlap.<br>
+EN diagnostics: prose, code, math, logic. FR diagnostics: Europarl reference translations.
 </div>
 </div>
 </details>
@@ -709,7 +714,11 @@ function updateDashboard(response) {
     const ccw = clippedCmpSteps.length > 10 ? Math.min(30, Math.max(5, Math.floor(clippedCmpSteps.length / 10))) : csw;
 
     // 1. Reconstruction Loss (comparison clipped to current max step)
-    const reconDs = [ds('Recon', ema(steps.map(d => d.recon), sw), C.recon)];
+    const reconDs = [ds('EN Recon', ema(steps.map(d => d.recon), sw), C.recon)];
+    // V13: FR translation loss
+    const frLossVals = steps.map(d => d.fr_loss || 0);
+    if (frLossVals.some(v => v > 0))
+        reconDs.push(ds('FR Trans', ema(frLossVals, sw), '#ab47bc'));
     if (hasCmp && clippedCmpSteps.length) reconDs.push(cmpDs('Recon' + cmpLabel,
         ema(clippedCmpSteps.map(d => d.recon), ccw), C.cmpRecon));
     // Geo gate on right axis (0-1 scale)
@@ -1195,42 +1204,42 @@ function updateDashboard(response) {
         return v >= good ? 'good' : v >= bad ? 'warn' : 'bad';
     };
 
+    const hasFr = latest.fr_loss > 0 || (le.fr_token_acc != null);
+
     let html = `<span class="value">flm (${run.toUpperCase()})</span>`;
     if (hasCmp) html += `  <span class="label">vs ${compare_run}</span>`;
-    html += `\n${'='.repeat(40)}\n\n`;
-    html += `<span class="label"> Step:</span>      <span class="value">${latest.step.toLocaleString()}</span>`;
-    if (latest.phase) html += `  <span class="value">${latest.phase}</span>`;
-    html += `\n`;
-    html += `<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
-    html += `<span class="label"> Total:</span>     <span class="value">${fmt(latest.total_loss)}</span>\n`;
+    html += `\n${'='.repeat(40)}\n`;
+    html += `<span class="label"> Step:</span>  <span class="value">${latest.step.toLocaleString()}</span>`;
+    html += `  <span class="label">LR:</span> <span class="value">${(latest.lr || 0).toExponential(2)}</span>`;
+    html += `  <span class="label">Progress:</span> <span class="value">${(latest.progress || 0).toFixed(1)}%</span>\n`;
 
-    if (isV10) {
-        // V10/V11: show pure reconstruction metrics
+    // --- EN Recon + FR Translation side by side ---
+    if (hasFr) {
+        html += `\n<span class="label">           EN Recon        FR Translation</span>\n`;
+        html += `<span class="label"> Loss:</span>    <span class="value">${fmt(latest.recon, 4).padEnd(16)}</span>`;
+        html += `  <span class="value">${fmt(latest.fr_loss, 4)}</span>\n`;
+        if (le.token_acc != null || le.fr_token_acc != null) {
+            html += `<span class="label"> Tok Acc:</span> <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc).padEnd(16)}</span>`;
+            html += `  <span class="${rating(le.fr_token_acc, 0.5, 0.2)}">${pct(le.fr_token_acc)}</span>\n`;
+        }
+        if (le.exact_match != null)
+            html += `<span class="label"> EM:</span>      <span class="${rating(le.exact_match, 0.9, 0.5)}">${pct(le.exact_match)}</span>\n`;
+        html += `<span class="label"> EM EMA:</span>  <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
+    } else if (isV10) {
+        html += `\n<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
         html += `<span class="label"> EM EMA:</span>    <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
-        html += `<span class="label"> LR:</span>        <span class="value">${(latest.lr || 0).toExponential(2)}</span>\n`;
-        html += `<span class="label"> Progress:</span>  <span class="value">${(latest.progress || 0).toFixed(1)}%</span>\n`;
-        if (le.token_acc != null) {
-            html += `\n<span class="label"> Eval Metrics:</span>\n`;
-            html += `  Token Acc:   <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>\n`;
-            html += `  Exact Match: <span class="${rating(le.exact_match, 0.9, 0.5)}">${pct(le.exact_match)}</span>\n`;
-            if (le.acc_short != null)
-                html += `  Short:  acc=<span class="value">${pct(le.acc_short)}</span> em=<span class="value">${pct(le.em_short)}</span>\n`;
-            if (le.acc_medium != null)
-                html += `  Medium: acc=<span class="value">${pct(le.acc_medium)}</span> em=<span class="value">${pct(le.em_medium)}</span>\n`;
-            if (le.acc_long != null)
-                html += `  Long:   acc=<span class="value">${pct(le.acc_long)}</span> em=<span class="value">${pct(le.em_long)}</span>\n`;
-        }
-        // Dynamic weights
-        if (le.dw_short != null) {
-            html += `\n<span class="label"> Sampling Weights:</span>\n`;
-            html += `  Short:  <span class="value">${(le.dw_short * 100).toFixed(0)}%</span>`;
-            html += `  Med: <span class="value">${(le.dw_medium * 100).toFixed(0)}%</span>`;
-            html += `  Long: <span class="value">${(le.dw_long * 100).toFixed(0)}%</span>\n`;
-        }
-    } else if (latest.geo_gate != null && latest.geo_gate > 0) {
-        html += `<span class="label"> Geo Gate:</span>  <span class="${rating(latest.geo_gate, 0.8, 0.3)}">${pct(latest.geo_gate)}</span>\n`;
+        if (le.token_acc != null)
+            html += `<span class="label"> Token Acc:</span> <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>\n`;
+        if (le.exact_match != null)
+            html += `<span class="label"> Exact Match:</span> <span class="${rating(le.exact_match, 0.9, 0.5)}">${pct(le.exact_match)}</span>\n`;
+    } else {
+        html += `\n<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
+        html += `<span class="label"> Total:</span>     <span class="value">${fmt(latest.total_loss)}</span>\n`;
+        if (latest.geo_gate != null && latest.geo_gate > 0)
+            html += `<span class="label"> Geo Gate:</span>  <span class="${rating(latest.geo_gate, 0.8, 0.3)}">${pct(latest.geo_gate)}</span>\n`;
     }
 
+    // --- Geometry ---
     if (le.clustering_gap != null || le.analogy_avg != null) {
         html += `\n<span class="label"> Geometry:</span>\n`;
         if (le.analogy_avg != null)
@@ -1243,30 +1252,14 @@ function updateDashboard(response) {
         if (le.rank90 != null)
             html += `  Rank:     <span class="value">${le.rank90}/${le.rank95 || '?'}</span> (90%/95%)\n`;
     }
-    if (le.slot_assign != null)
-        html += `  Slots: <span class="${rating(le.slot_assign, 28, 16)}">${le.slot_assign}/32</span>\n`;
 
-    if (le.fr_token_acc != null) {
-        html += `\n<span class="label"> FR Translation:</span>\n`;
-        html += `  FR Acc:  <span class="${rating(le.fr_token_acc, 0.5, 0.2)}">${pct(le.fr_token_acc)}</span>\n`;
-    }
-
-    if (latest.cls > 0) {
-        html += `\n<span class="label"> V6 Losses:</span>\n`;
-        html += `  Cls:   <span class="value">${fmt(latest.cls)}</span>  `;
-        html += `Acc: <span class="${rating(latest.cls_acc, 0.95, 0.5)}">${pct(latest.cls_acc)}</span>\n`;
-        html += `  SCon:  <span class="value">${fmt(latest.scon)}</span>  `;
-        html += `XRec: <span class="value">${fmt(latest.xrecon)}</span>\n`;
-    }
-
-    // Comparison stats
+    // --- Comparison ---
     if (hasCmp && compare_steps.length) {
         const cl = compare_steps[compare_steps.length - 1];
         const ce = compare_evals.length ? compare_evals[compare_evals.length - 1] : {};
         html += `\n<span class="label"> ${compare_run} (${cl.step.toLocaleString()} steps):</span>\n`;
         html += `  Recon: <span class="value">${fmt(cl.recon)}</span>`;
         if (cl.em_ema != null) html += `  EM: <span class="value">${pct(cl.em_ema)}</span>`;
-        if (cl.scon != null) html += `  SCon: <span class="value">${fmt(cl.scon)}</span>`;
         html += `\n`;
         if (ce.analogy_avg != null)
             html += `  Analogy: <span class="value">${fmt(ce.analogy_avg)}</span>  `;
@@ -1282,8 +1275,6 @@ function updateDashboard(response) {
             html += `Rank: <span class="value">${ce.rank90}/${ce.rank95 || '?'}</span>`;
         if (ce.word_order_sim != null || ce.rank90 != null)
             html += `\n`;
-        if (ce.slot_assign != null)
-            html += `  Slots: <span class="value">${ce.slot_assign}/32</span>\n`;
     }
 
     document.getElementById('stats-panel').innerHTML = html;
@@ -1305,9 +1296,15 @@ function updateDashboard(response) {
         if (isV10) {
             const emEma = latest.em_ema || 0;
             const progress = latest.progress || 0;
-            phaseText = 'Pure Reconstruction';
-            phaseColor = '#4fc3f7';
-            detailText = `Parallel decoder + padding mask fix, diverse data. EM EMA: ${(emEma*100).toFixed(1)}% | Progress: ${progress.toFixed(1)}%`;
+            if (hasFr) {
+                phaseText = 'Dual Decoder (EN + FR)';
+                phaseColor = '#ab47bc';
+                detailText = `EN recon: ${fmt(latest.recon, 3)} | FR trans: ${fmt(latest.fr_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
+            } else {
+                phaseText = 'Pure Reconstruction';
+                phaseColor = '#4fc3f7';
+                detailText = `Parallel decoder, diverse data. EM EMA: ${(emEma*100).toFixed(1)}%`;
+            }
             // Use bar for training progress
             geoPctEl.textContent = progress.toFixed(1) + '%';
             geoBarEl.style.width = Math.min(progress, 100) + '%';

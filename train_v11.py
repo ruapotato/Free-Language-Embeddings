@@ -366,7 +366,7 @@ def evaluate_reconstruction(model, tokenizer, device="cuda"):
     attention_mask = enc["attention_mask"]
 
     concepts = m.encode(input_ids, attention_mask)
-    logits = m.decode_parallel(concepts, seq_len=input_ids.shape[1])
+    logits = m.decode_parallel(concepts, seq_len=input_ids.shape[1], attention_mask=attention_mask)
     predicted = logits.argmax(dim=-1)
 
     results = []
@@ -437,7 +437,7 @@ def evaluate_batch_metrics(model, tokenizer, dataset, device="cuda",
         attention_mask = enc["attention_mask"].to(device)
 
         concepts = m.encode(input_ids, attention_mask)
-        logits = m.decode_parallel(concepts, seq_len=input_ids.shape[1])
+        logits = m.decode_parallel(concepts, seq_len=input_ids.shape[1], attention_mask=attention_mask)
         predicted = logits.argmax(dim=-1)
 
         for i in range(input_ids.shape[0]):
