@@ -48,12 +48,16 @@ def parse_step_data(log_path):
                     is_v10 = "em_ema=" in line
 
                     if is_v10:
-                        # V10: step N | loss X (recon=X) | em_ema=X | lr X | X%
+                        # V10/V11: step N | loss X (recon=X) | em_ema=X | lr X | X%
+                        lr_val = grab(r"lr ([\d.eE+-]+)", full_line)
+                        progress = grab(r"([\d.]+)%", full_line)
                         rows.append({
                             "step": step,
                             "total_loss": total_loss,
                             "recon": grab(r"recon=([\d.]+)", detail),
                             "em_ema": grab(r"em_ema=([\d.]+)", full_line),
+                            "lr": lr_val,
+                            "progress": progress,
                         })
                     else:
                         # V5-V9 format
@@ -112,8 +116,9 @@ def parse_eval_data(log_path):
         for line in f:
             if "step" in line and "loss" in line and "recon=" in line:
                 try:
-                    last_step = int(line.split("|")[0].split("step")[1].strip())
-                except (ValueError, IndexError):
+                    step_str = line.split("|")[0].split("step")[1].strip()
+                    last_step = int(re.search(r"(\d+)", step_str).group(1))
+                except (ValueError, IndexError, AttributeError):
                     pass
             # V10 eval format: "EVAL: token_acc=X exact_match=X em_ema=X"
             if "EVAL:" in line and "token_acc=" in line:
@@ -166,9 +171,15 @@ def parse_eval_data(log_path):
                     }
                 if slot_isos:
                     current_eval["slot_isos"] = slot_isos
-            if current_eval and ("--- RECON" in line or "[DIFF]" in line or "[OK]" in line or
-                                 ("step" in line and "loss" in line and "recon=" in line
-                                  and current_eval["step"] != last_step)):
+            # Dynamic weights line: "Dynamic weights: short=X | medium=X | long=X"
+            if current_eval and "Dynamic weights:" in line:
+                for bucket in ["short", "medium", "long"]:
+                    wm = re.search(rf"{bucket}=([\d.]+)", line)
+                    if wm:
+                        current_eval[f"dw_{bucket}"] = float(wm.group(1))
+            # Flush eval when we hit the next step line (not on [DIFF]/[OK] which are part of the eval block)
+            if current_eval and ("step" in line and "loss" in line and "recon=" in line
+                                 and current_eval["step"] != last_step):
                 rows.append(current_eval)
                 current_eval = None
     if current_eval:
@@ -359,7 +370,7 @@ body {
         <span id="stage-detail" style="color:#aaa"></span>
         <div style="flex:1;min-width:120px">
             <div style="display:flex;justify-content:space-between;font-size:11px;color:#888">
-                <span>Geo Gate</span>
+                <span id="stage-bar-label">Progress</span>
                 <span id="stage-geo-pct"></span>
             </div>
             <div style="background:#333;border-radius:3px;height:8px;overflow:hidden;margin-top:2px">
@@ -382,112 +393,72 @@ body {
 <summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0;font-size:14px">&#9encyclop; Reference Guide (click to expand)</summary>
 
 <div style="padding:12px 0">
-<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works</h4>
+<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V11)</h4>
 <p style="color:#bbb;margin:0 0 8px">
-The model compresses sentences into <b>32 concept slots</b> (each a 32-dimensional vector, 1024 dims total).
-The <b>encoder</b> reads a sentence and produces these concept vectors. The <b>decoder</b> reconstructs the original
-sentence from the vectors alone. If reconstruction works, the vectors must encode real meaning.
+The model compresses text into <b>32 concept slots</b> (each a 32-dimensional vector, 1024 dims total).
+The <b>encoder</b> reads text and produces these concept vectors. A <b>non-autoregressive parallel decoder</b>
+reconstructs the original text from the vectors alone &mdash; all tokens decoded simultaneously, no teacher forcing.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-On top of reconstruction, <b>geometry losses</b> shape how the concept space is organized: paraphrases should
-map to nearby vectors, unrelated sentences should be far apart, and each slot should specialize for one
-semantic dimension (size, color, tense, sentiment, etc.).
+<b>Key insight:</b> Geometry (paraphrase similarity, clustering, word-order sensitivity) emerges naturally
+from reconstruction with a parallel decoder. No explicit geometry losses are needed. V10 probing at 50K steps
+showed analogies 0.74&ndash;0.92 with zero geometry training.
+</p>
+<p style="color:#bbb;margin:0 0 8px">
+V11 trains on <b>diverse data</b>: prose, code, math, technical docs, conversations, RFCs, man pages, kernel source,
+arxiv papers, StackExchange, and more (~8.4M texts). Sentences/paragraphs are chunked into full ideas.
 </p>
 
-<h4 style="color:#ffa726;margin:12px 0 6px">Training Phases</h4>
+<h4 style="color:#ffa726;margin:12px 0 6px">Training Setup</h4>
 <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:8px">
 <tr style="border-bottom:1px solid #333">
-  <td style="padding:4px 8px;color:#ef5350;font-weight:bold;white-space:nowrap">Phase 0</td>
-  <td style="padding:4px 8px;color:#ef5350;font-weight:bold">Pure Recon</td>
-  <td style="padding:4px 8px">Geo gate = 0. Only reconstruction trains. The decoder learns to read concept vectors.
-  No geometry pressure yet &mdash; the model first needs to encode information the decoder can use.</td>
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Architecture</td>
+  <td style="padding:4px 8px">54.3M params, 32 slots &times; 32 dims = 1024-dim bottleneck</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
-  <td style="padding:4px 8px;color:#ab47bc;font-weight:bold;white-space:nowrap">P0&rarr;P1</td>
-  <td style="padding:4px 8px;color:#ab47bc;font-weight:bold">Geo Gate Opens</td>
-  <td style="padding:4px 8px">Recon EMA drops enough that the geo gate starts opening. Geometry losses begin
-  flowing, gently at first. Marked with a purple line on charts.</td>
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Schedule</td>
+  <td style="padding:4px 8px">300K steps, cosine LR 3e-4 &rarr; 1e-5, batch size 64</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
-  <td style="padding:4px 8px;color:#42a5f5;font-weight:bold;white-space:nowrap">Phase 1</td>
-  <td style="padding:4px 8px;color:#42a5f5;font-weight:bold">Recon + Geo Ramp</td>
-  <td style="padding:4px 8px">Geo gate between 0 and 1. Geometry losses scale with the gate. Decoder gets a
-  weight boost (3x when gate=0, tapering to 1x). Full gradient flows through bottleneck so the encoder
-  learns representations the decoder can actually use.</td>
-</tr>
-<tr style="border-bottom:1px solid #333">
-  <td style="padding:4px 8px;color:#ffa726;font-weight:bold;white-space:nowrap">Phase 2</td>
-  <td style="padding:4px 8px;color:#ffa726;font-weight:bold">Slot Focus</td>
-  <td style="padding:4px 8px">Geo gate hits 1.0 (recon EMA &lt; 0.1). Cycles through each of the 32 concept slots,
-  500 steps each. The focus slot gets full gradient (1.0), others get 5%. This guides each slot to specialize
-  for its assigned concept without destroying what other slots learned.</td>
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Dynamic Sampling</td>
+  <td style="padding:4px 8px">Oversamples weak length buckets (short/medium/long). Weight &prop; (1&minus;em)^&alpha; with floor.
+  Shifts training focus to lengths that aren&rsquo;t solved yet.</td>
 </tr>
 <tr>
-  <td style="padding:4px 8px;color:#66bb6a;font-weight:bold;white-space:nowrap">Phase 3</td>
-  <td style="padding:4px 8px;color:#66bb6a;font-weight:bold">Joint Fine-tune</td>
-  <td style="padding:4px 8px">All 32 slots done. All slots train equally. Balanced refinement of the full space.
-  If recon drifts up, the geo gate automatically backs off geometry to protect reconstruction.</td>
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Loss</td>
+  <td style="padding:4px 8px">Pure reconstruction cross-entropy. No geometry losses, no phases, no gates.</td>
 </tr>
 </table>
 
-<h4 style="color:#66bb6a;margin:12px 0 6px">The Geo Gate</h4>
-<p style="color:#bbb;margin:0 0 8px">
-The <b>geometry gate</b> (geo) is a 0&ndash;1 scale that controls how much geometry losses affect training.
-It&rsquo;s computed from a smoothed average (EMA) of reconstruction loss:<br>
-<code style="color:#ffa726">geo_scale = clamp((0.5 - recon_ema) / (0.5 - 0.1), 0, 1)</code><br>
-When recon is bad (EMA &gt; 0.5), geo = 0 &mdash; only reconstruction trains.
-When recon is good (EMA &lt; 0.1), geo = 1 &mdash; full geometry.
-It&rsquo;s <b>dynamic</b>: if recon degrades, geometry automatically backs off.
-</p>
-
 <div style="columns:2;column-gap:24px;padding:8px 0">
-<h4 style="color:#ef5350;margin:8px 0 4px;column-span:all">Losses (want LOW)</h4>
-<b>recon</b> — Reconstruction cross-entropy. Decoder predicts input tokens from concept vectors. Want &lt;0.1 for readable autoregressive output. At 0.5 it&rsquo;s ~80% per-token accuracy, which cascades into gibberish.<br>
-<b>xrecon</b> — Cross-reconstruction. Encode sentence A, decode toward paraphrase B. Tests if concepts capture meaning, not surface form.<br>
-<b>nce</b> — InfoNCE contrastive. Pulls paraphrase pairs close, pushes non-matches apart in the batch.<br>
-<b>wo</b> — Word-order contrastive. Shuffled sentences should be distinguishable from originals.<br>
-<b>decorr</b> — Slot decorrelation. Pushes the 32 slots to encode different, non-redundant information.<br>
-<b>iso</b> — Slot isolation. Each slot should only change when its assigned concept (size, color, etc.) changes.<br>
-<b>cls</b> — Slot classifier. Auxiliary heads predict concept values from slot vectors.<br>
-<b>scon</b> — Slot contrastive. Within each slot: same concept value &rarr; close vectors, different value &rarr; far apart.<br>
-<b>sts</b> — Semantic Text Similarity. Model&rsquo;s predicted similarity should match human-rated similarity scores.<br>
-<b>m_para</b> — Margin: paraphrase. Penalizes paraphrase similarity below 0.92.<br>
-<b>m_neg</b> — Margin: negative. Penalizes hard-negative similarity above 0.2.<br>
-<b>m_wo</b> — Margin: word-order. Penalizes shuffled-sentence similarity above 0.4.<br>
-<b>sp</b> — Per-slot paraphrase on real text pairs. Each slot&rsquo;s vector should match for paraphrases.<br>
-<b>repul</b> — Batch repulsion (mean). Pushes average pairwise similarity of random texts below 0.05.<br>
-<b>hrepul</b> — Hard repulsion. Targets the top-k WORST offending pairs per sample, not the diluted mean. The main force pushing the clustering gap wider.<br>
+<h4 style="color:#ef5350;margin:8px 0 4px;column-span:all">Metrics</h4>
+<b>recon</b> &mdash; Reconstruction cross-entropy loss. The only training signal. Lower is better.<br>
+<b>token_acc</b> &mdash; Per-token accuracy. What fraction of tokens does the decoder get right?<br>
+<b>exact_match</b> &mdash; Full-sentence exact match. The entire output matches the input word-for-word.<br>
+<b>em_ema</b> &mdash; Exponential moving average of exact match (decay=0.9). Smoothed training signal.<br>
+<b>short/med/long</b> &mdash; Per-bucket metrics. Short = 1&ndash;4 tokens, medium = 5&ndash;8, long = 9+.<br>
+<b>dynamic weights</b> &mdash; Sampling weights for each bucket. Higher weight = more training focus.<br>
+<b>lr</b> &mdash; Learning rate. Cosine schedule from 3e-4 peak down to 1e-5 minimum.<br>
 
-<h4 style="color:#42a5f5;margin:12px 0 4px">Similarities (want these targets)</h4>
-<b>p_sim</b> — Paraphrase similarity. <span style="color:#66bb6a">Want HIGH (&gt;0.9)</span>. Same meaning = close vectors.<br>
-<b>n_sim</b> — Hard negative similarity. <span style="color:#ef5350">Want LOW (&lt;0.2)</span>. Different meaning = far apart.<br>
-<b>wo_sim</b> — Word-order similarity. <span style="color:#ffa726">Want MEDIUM (0.3&ndash;0.5)</span>. Shared content but different meaning.<br>
-<b>sp_sim</b> — Slot paraphrase similarity. Per-slot agreement on real paraphrase pairs.<br>
-<b>r_sim</b> — Random batch similarity. <span style="color:#ef5350">Want VERY LOW (&lt;0.05)</span>. Random texts should be far apart.<br>
-<b>hr_max</b> — Worst-case random pair similarity. The hardest pair to push apart.<br>
-<b>cls_acc</b> — Classifier accuracy. <span style="color:#66bb6a">Want &gt;0.95</span>. How well slots predict their concept values.<br>
-<b>geo</b> — Geometry gate (0&ndash;1). How much geometry losses are active right now.<br>
-
-<h4 style="color:#ab47bc;margin:12px 0 4px">Eval Metrics</h4>
-<b>clustering_gap</b> — Within-group similarity minus between-group similarity. <span style="color:#66bb6a">Want &gt;0.1</span>. Measures if semantically similar sentences actually cluster together.<br>
-<b>dir_consistency</b> — Do concept changes (negation, tense) produce consistent vector directions across different sentences? <span style="color:#66bb6a">Want &gt;0.5</span>.<br>
-<b>rank90/95</b> — Effective rank of concept space. How many of the 1024 dimensions are actually used (at 90% / 95% variance explained).<br>
-<b>slot_iso</b> — Average slot isolation. How well each slot responds only to its assigned concept.<br>
-<b>slot_assign</b> — Slots correctly assigned. <span style="color:#66bb6a">Want 32/32</span>.<br>
+<h4 style="color:#42a5f5;margin:12px 0 4px">Diagnostic Sentences</h4>
+<b>[OK]</b> &mdash; Perfectly reconstructed. <span style="color:#66bb6a">Green = working.</span><br>
+<b>[DIFF] (X%)</b> &mdash; X% token overlap. Shows input &rarr; output to track what the model gets wrong.<br>
+Diagnostics include prose, code (<code>def fibonacci...</code>), math (<code>derivative of x squared...</code>),
+and logic (<code>if all dogs are animals...</code>).
 </div>
 </div>
 </details>
 <div class="grid">
-    <div class="card"><h3>Reconstruction + Geo Gate</h3><canvas id="chart-recon"></canvas></div>
-    <div class="card"><h3>Geometry Losses (NCE, WO, Decorr)</h3><canvas id="chart-geo-losses"></canvas></div>
-    <div class="card"><h3>Batch Similarities (p_sim, n_sim, wo_sim)</h3><canvas id="chart-batch-sim"></canvas></div>
-    <div class="card"><h3>Eval Similarities (para, unrelated, WO)</h3><canvas id="chart-diag-sim"></canvas></div>
-    <div class="card"><h3>Effective Rank &amp; Slot Isolation</h3><canvas id="chart-rank"></canvas></div>
-    <div class="card"><h3>Classifiers + Contrastive</h3><canvas id="chart-v6-cls"></canvas></div>
-    <div class="card"><h3>Margin Losses + Repulsion</h3><canvas id="chart-v7-margins"></canvas></div>
-    <div class="card"><h3>Clustering Gap &amp; Direction</h3><canvas id="chart-v6-geo"></canvas></div>
-    <div class="card"><h3>Slot Assignment (out of 32)</h3><canvas id="chart-v6-slots"></canvas></div>
-    <div class="card"><h3>Per-Slot Isolation</h3><canvas id="chart-slot-iso"></canvas></div>
+    <div class="card"><h3 id="h-recon">Reconstruction Loss</h3><canvas id="chart-recon"></canvas></div>
+    <div class="card"><h3 id="h-geo-losses">EM EMA / Geometry Losses</h3><canvas id="chart-geo-losses"></canvas></div>
+    <div class="card"><h3 id="h-batch-sim">Token Accuracy / Batch Similarities</h3><canvas id="chart-batch-sim"></canvas></div>
+    <div class="card"><h3 id="h-diag-sim">Exact Match / Eval Similarities</h3><canvas id="chart-diag-sim"></canvas></div>
+    <div class="card"><h3 id="h-lr">Learning Rate Schedule</h3><canvas id="chart-rank"></canvas></div>
+    <div class="card"><h3 id="h-dyn-weights">Dynamic Sampling Weights</h3><canvas id="chart-v6-cls"></canvas></div>
+    <div class="card"><h3 id="h-margins">Margin Losses + Repulsion</h3><canvas id="chart-v7-margins"></canvas></div>
+    <div class="card"><h3 id="h-geo">Clustering Gap &amp; Direction</h3><canvas id="chart-v6-geo"></canvas></div>
+    <div class="card"><h3 id="h-slots">Slot Assignment (out of 32)</h3><canvas id="chart-v6-slots"></canvas></div>
+    <div class="card"><h3 id="h-slot-iso">Per-Slot Isolation</h3><canvas id="chart-slot-iso"></canvas></div>
     <div class="stats-card" id="stats-panel">Loading...</div>
 </div>
 
@@ -738,13 +709,21 @@ function updateDashboard(response) {
         options: dualAxisOpts('Loss', 'Geo Gate', undefined, undefined, 0, 1.05),
     });
 
-    // 2. V10: Exact Match EMA (replaces geometry losses chart for V10)
+    // V10/V11: Update chart headings
+    if (isV10) {
+        document.getElementById('h-recon').textContent = 'Reconstruction Loss';
+        document.getElementById('h-geo-losses').textContent = 'EM EMA (Training)';
+        document.getElementById('h-batch-sim').textContent = 'Token & Bucket Accuracy';
+        document.getElementById('h-diag-sim').textContent = 'Per-Bucket Exact Match';
+        document.getElementById('h-lr').textContent = 'Learning Rate Schedule';
+        document.getElementById('h-dyn-weights').textContent = 'Dynamic Sampling Weights';
+    }
+
+    // 2. V10/V11: Exact Match EMA
     if (isV10) {
         const emDs = [
             ds('EM EMA', steps.map(d => d.em_ema || 0), '#66bb6a'),
         ];
-        // Add 90% gate line
-        emDs.push(ds('Gate (90%)', steps.map(() => 0.9), '#ef5350', {borderDash: [5, 3], pointRadius: 0}));
         mkChart('chart-geo-losses', {
             type: 'line',
             data: { labels: s, datasets: emDs },
@@ -885,8 +864,16 @@ function updateDashboard(response) {
         });
     }
 
-    // 5. Effective Rank & Slot Isolation
-    if (evals.length && evals.some(d => d.rank90)) {
+    // 5. LR Schedule (V10/V11) or Effective Rank (V5-V9)
+    if (isV10 && steps.some(d => d.lr > 0)) {
+        mkChart('chart-rank', {
+            type: 'line',
+            data: { labels: s, datasets: [
+                ds('Learning Rate', steps.map(d => d.lr || 0), '#4fc3f7'),
+            ] },
+            options: chartOpts('LR'),
+        });
+    } else if (evals.length && evals.some(d => d.rank90)) {
         const es = evals.map(d => d.step);
         const rkDs = [
             ds('Rank 90%', evals.map(d => d.rank90 || 0), C.rank90, {pointRadius: 3}),
@@ -901,33 +888,55 @@ function updateDashboard(response) {
         });
     }
 
-    // 6. V6 Classifier + Contrastive + Cross-Recon
-    const v6Ds = [];
-    const addV6 = (key, label, color, axis) => {
-        const vals = steps.map(d => d[key]);
-        if (vals.some(v => v > 0))
-            v6Ds.push(ds(label, ema(vals, sw), color, {yAxisID: axis || 'y'}));
-    };
-    addV6('cls', 'Classifier', C.cls, 'y');
-    addV6('scon', 'Slot Con', C.scon, 'y');
-    addV6('xrecon', 'Cross-Recon', C.xrecon, 'y');
-    addV6('cls_acc', 'Cls Acc', C.clsAcc, 'y2');
-    if (hasCmp && clippedCmpSteps.length) {
-        const cmpClsAcc = clippedCmpSteps.map(d => d.cls_acc);
-        if (cmpClsAcc.some(v => v > 0))
-            v6Ds.push(cmpDs('Acc' + cmpLabel, ema(cmpClsAcc, ccw), C.cmpClsAcc, {yAxisID: 'y2'}));
-        const cmpXr = clippedCmpSteps.map(d => d.xrecon);
-        if (cmpXr.some(v => v > 0))
-            v6Ds.push(cmpDs('XRecon' + cmpLabel, ema(cmpXr, ccw), C.cmpXrecon));
+    // 6. Dynamic Sampling Weights (V10/V11) or V6 Classifier (V5-V9)
+    if (isV10 && evals.length && evals.some(d => d.dw_short != null)) {
+        const dwEvals = evals.filter(d => d.dw_short != null);
+        const dwEs = dwEvals.map(d => d.step);
+        mkChart('chart-v6-cls', {
+            type: 'line',
+            data: { labels: dwEs, datasets: [
+                ds('Short', dwEvals.map(d => d.dw_short), '#ab47bc', {pointRadius: 3}),
+                ds('Medium', dwEvals.map(d => d.dw_medium), '#ffa726', {pointRadius: 3}),
+                ds('Long', dwEvals.map(d => d.dw_long), '#ef5350', {pointRadius: 3}),
+                ds('Uniform', dwEvals.map(() => 0.333), '#666', {borderDash: [5, 3], pointRadius: 0}),
+            ] },
+            options: chartOpts('Weight', 0, 1.05),
+        });
+    } else if (!isV10) {
+        const v6Ds = [];
+        const addV6 = (key, label, color, axis) => {
+            const vals = steps.map(d => d[key]);
+            if (vals.some(v => v > 0))
+                v6Ds.push(ds(label, ema(vals, sw), color, {yAxisID: axis || 'y'}));
+        };
+        addV6('cls', 'Classifier', C.cls, 'y');
+        addV6('scon', 'Slot Con', C.scon, 'y');
+        addV6('xrecon', 'Cross-Recon', C.xrecon, 'y');
+        addV6('cls_acc', 'Cls Acc', C.clsAcc, 'y2');
+        if (hasCmp && clippedCmpSteps.length) {
+            const cmpClsAcc = clippedCmpSteps.map(d => d.cls_acc);
+            if (cmpClsAcc.some(v => v > 0))
+                v6Ds.push(cmpDs('Acc' + cmpLabel, ema(cmpClsAcc, ccw), C.cmpClsAcc, {yAxisID: 'y2'}));
+            const cmpXr = clippedCmpSteps.map(d => d.xrecon);
+            if (cmpXr.some(v => v > 0))
+                v6Ds.push(cmpDs('XRecon' + cmpLabel, ema(cmpXr, ccw), C.cmpXrecon));
+        }
+        mkChart('chart-v6-cls', {
+            type: 'line',
+            data: { labels: s, datasets: v6Ds },
+            options: dualAxisOpts('Loss', 'Accuracy', undefined, undefined, 0, 1.05),
+        });
     }
-    mkChart('chart-v6-cls', {
-        type: 'line',
-        data: { labels: s, datasets: v6Ds },
-        options: dualAxisOpts('Loss', 'Accuracy', undefined, undefined, 0, 1.05),
-    });
 
-    // 6b. V7: Margin Losses + Slot Paraphrase
-    const hasV7 = steps.some(d => d.m_para > 0 || d.sp > 0);
+    // 6b. V7: Margin Losses + Slot Paraphrase (V5-V9 only)
+    if (isV10) {
+        // Hide V5-V9-only charts for V10/V11
+        ['chart-v7-margins', 'chart-v6-geo', 'chart-v6-slots', 'chart-slot-iso'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.closest('.card').style.display = 'none';
+        });
+    }
+    const hasV7 = !isV10 && steps.some(d => d.m_para > 0 || d.sp > 0);
     if (hasV7) {
         const v7Ds = [];
         const addV7 = (key, label, color, axis) => {
@@ -1102,8 +1111,10 @@ function updateDashboard(response) {
     html += `<span class="label"> Total:</span>     <span class="value">${fmt(latest.total_loss)}</span>\n`;
 
     if (isV10) {
-        // V10: show exact-match EMA and per-bucket metrics
-        html += `<span class="label"> EM EMA:</span>    <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>  (gate: 90%)\n`;
+        // V10/V11: show pure reconstruction metrics
+        html += `<span class="label"> EM EMA:</span>    <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
+        html += `<span class="label"> LR:</span>        <span class="value">${(latest.lr || 0).toExponential(2)}</span>\n`;
+        html += `<span class="label"> Progress:</span>  <span class="value">${(latest.progress || 0).toFixed(1)}%</span>\n`;
         if (le.token_acc != null) {
             html += `\n<span class="label"> Eval Metrics:</span>\n`;
             html += `  Token Acc:   <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>\n`;
@@ -1114,6 +1125,13 @@ function updateDashboard(response) {
                 html += `  Medium: acc=<span class="value">${pct(le.acc_medium)}</span> em=<span class="value">${pct(le.em_medium)}</span>\n`;
             if (le.acc_long != null)
                 html += `  Long:   acc=<span class="value">${pct(le.acc_long)}</span> em=<span class="value">${pct(le.em_long)}</span>\n`;
+        }
+        // Dynamic weights
+        if (le.dw_short != null) {
+            html += `\n<span class="label"> Sampling Weights:</span>\n`;
+            html += `  Short:  <span class="value">${(le.dw_short * 100).toFixed(0)}%</span>`;
+            html += `  Med: <span class="value">${(le.dw_medium * 100).toFixed(0)}%</span>`;
+            html += `  Long: <span class="value">${(le.dw_long * 100).toFixed(0)}%</span>\n`;
         }
     } else if (latest.geo_gate != null && latest.geo_gate > 0) {
         html += `<span class="label"> Geo Gate:</span>  <span class="${rating(latest.geo_gate, 0.8, 0.3)}">${pct(latest.geo_gate)}</span>\n`;
@@ -1168,21 +1186,15 @@ function updateDashboard(response) {
         let phaseText = '', phaseColor = '#aaa', detailText = '';
         if (isV10) {
             const emEma = latest.em_ema || 0;
-            if (emEma < 0.9) {
-                phaseText = 'Phase 1: Reconstruction Only';
-                phaseColor = '#42a5f5';
-                detailText = `Non-autoregressive parallel decoder. EM EMA: ${(emEma*100).toFixed(1)}% (need 90% for geometry).`;
-            } else {
-                phaseText = 'Phase 2: Geometry Unlocked';
-                phaseColor = '#66bb6a';
-                detailText = `Reconstruction solid (EM ${(emEma*100).toFixed(1)}%). Geometry losses active.`;
-            }
-            // Use geo bar for EM progress
-            const emPct = Math.min(emEma / 0.9, 1.0);
-            geoPctEl.textContent = (emEma * 100).toFixed(0) + '% EM';
-            geoBarEl.style.width = (emPct * 100) + '%';
-            geoBarEl.style.background = emEma >= 0.9 ? '#66bb6a' : emEma >= 0.5 ? '#ffa726' : '#ef5350';
-            reconEmaEl.textContent = `EM EMA: ${(emEma*100).toFixed(1)}% — geometry unlocks at 90%`;
+            const progress = latest.progress || 0;
+            phaseText = 'Pure Reconstruction';
+            phaseColor = '#4fc3f7';
+            detailText = `Parallel decoder, diverse data. EM EMA: ${(emEma*100).toFixed(1)}% | Progress: ${progress.toFixed(1)}%`;
+            // Use bar for training progress
+            geoPctEl.textContent = progress.toFixed(1) + '%';
+            geoBarEl.style.width = Math.min(progress, 100) + '%';
+            geoBarEl.style.background = progress >= 75 ? '#66bb6a' : progress >= 25 ? '#ffa726' : '#4fc3f7';
+            reconEmaEl.textContent = `LR: ${(latest.lr || 0).toExponential(2)} | Step ${latest.step.toLocaleString()} / 300K`;
         } else if (phase.startsWith('P1') && geo != null && geo === 0) {
             phaseText = 'Phase 0: Pure Recon';
             phaseColor = '#ef5350';
