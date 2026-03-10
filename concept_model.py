@@ -237,6 +237,50 @@ class ConceptBottleneck(nn.Module):
 # Decoder
 # ═══════════════════════════════════════════════════════════════════════
 
+class ParallelDecoderBlock(nn.Module):
+    """Non-autoregressive decoder block: bidirectional self-attention + cross-attention to concept stack + FFN.
+
+    Unlike DecoderBlock, there is NO causal mask. Positions can see all other
+    positions, but the only information source is concept vectors (no input tokens).
+    This forces concept vectors to carry all meaning.
+    """
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        # Bidirectional self-attention (no causal mask)
+        self.self_attn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.self_attn = SelfAttention(config.dec_hidden, config.dec_heads, config.dropout)
+
+        # Cross-attention to concept stack
+        self.cross_attn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.cross_attn = CrossAttention(
+            q_dim=config.dec_hidden,
+            kv_dim=config.concept_dim,
+            num_heads=config.dec_heads,
+            dropout=config.dropout,
+        )
+
+        # FFN
+        self.ffn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.ffn = SwiGLUFFN(config.dec_hidden, config.dec_intermediate, config.dropout)
+
+    def forward(self, x, concepts, rope_cos, rope_sin):
+        """
+        x: (batch, seq_len, dec_hidden) — position query hidden states
+        concepts: (batch, num_concepts, concept_dim) — the concept stack
+        No causal mask — all positions see each other.
+        """
+        # Bidirectional self-attention (positions coordinate with each other)
+        x = x + self.self_attn(self.self_attn_norm(x), rope_cos, rope_sin, attention_mask=None)
+
+        # Cross-attention to concepts
+        x = x + self.cross_attn(self.cross_attn_norm(x), concepts)
+
+        # FFN
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
+
+
 class DecoderBlock(nn.Module):
     """Decoder block: causal self-attention + cross-attention to concept stack + FFN."""
 
@@ -436,6 +480,148 @@ class ConceptAutoencoder(nn.Module):
         """
         concepts = self.encode(input_ids, attention_mask)  # (B, K, D)
         flat = concepts.view(concepts.shape[0], -1)  # (B, K*D)
+        return F.normalize(flat, p=2, dim=-1)
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V10 — Non-Autoregressive Concept Autoencoder
+# ═══════════════════════════════════════════════════════════════════════
+
+class ConceptAutoencoderV10(nn.Module):
+    """
+    Text → concept stack → text (parallel decode).
+
+    V10 replaces the autoregressive decoder with a non-autoregressive parallel
+    decoder. Learned position queries cross-attend to concept vectors, and each
+    position independently predicts its token. No teacher forcing, no causal mask.
+
+    This forces the concept stack to encode EVERYTHING — word order, binding,
+    structure — because the decoder has no other information source.
+    """
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+
+        # Shared token embedding (encoder only in V10)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+
+        # Encoder (bidirectional) — same as V5-V9
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+
+        # Bottleneck — same as V5-V9
+        self.bottleneck = ConceptBottleneck(config)
+
+        # Parallel decoder (non-autoregressive)
+        # Learned position queries — one per output position
+        self.position_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        # Initialize with sinusoidal pattern for diversity
+        self._init_position_queries()
+
+        dec_head_dim = config.dec_hidden // config.dec_heads
+        dec_rope_cos, dec_rope_sin = precompute_rope(dec_head_dim, config.max_seq_len)
+        self.register_buffer("dec_rope_cos", dec_rope_cos, persistent=False)
+        self.register_buffer("dec_rope_sin", dec_rope_sin, persistent=False)
+
+        self.par_dec_layers = nn.ModuleList([
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+
+        # Output head
+        self.lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+
+        self.apply(self._init_weights)
+        # Re-init position queries after _init_weights would have overwritten
+        self._init_position_queries()
+
+    def _init_position_queries(self):
+        """Initialize position queries with sinusoidal pattern for diversity."""
+        d = self.config.dec_hidden
+        pos = torch.arange(self.config.max_seq_len).float().unsqueeze(1)
+        div = torch.exp(torch.arange(0, d, 2).float() * -(math.log(10000.0) / d))
+        self.position_queries.data[:, 0::2] = torch.sin(pos * div)
+        self.position_queries.data[:, 1::2] = torch.cos(pos * div)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        """Encode text into concept stack. Same as V5-V9."""
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+
+        x = self.enc_norm(x)
+        concepts = self.bottleneck(x)
+        return concepts
+
+    def decode_parallel(self, concepts, seq_len):
+        """
+        Non-autoregressive decode from concept stack.
+
+        Args:
+            concepts: (batch, num_concepts, concept_dim)
+            seq_len: int — number of output positions to predict
+
+        Returns:
+            logits: (batch, seq_len, vocab_size)
+        """
+        bsz = concepts.shape[0]
+
+        # Slice position queries to actual sequence length
+        x = self.position_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+
+        for layer in self.par_dec_layers:
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin)
+
+        x = self.dec_norm(x)
+        logits = self.lm_head(x)
+        return logits
+
+    def forward(self, input_ids, attention_mask=None):
+        """
+        Full forward: encode then parallel decode.
+
+        Returns:
+            logits: (batch, seq_len, vocab_size) — one prediction per input position
+            concepts: (batch, num_concepts, concept_dim)
+        """
+        concepts = self.encode(input_ids, attention_mask)
+        logits = self.decode_parallel(concepts, seq_len=input_ids.shape[1])
+        return logits, concepts
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        """Get flattened, L2-normalized concept vector for similarity comparison."""
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
         return F.normalize(flat, p=2, dim=-1)
 
     def count_parameters(self):

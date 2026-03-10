@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """Probe the geometry of the concept space — 32 slots x 32 dims."""
 
+import sys
 import torch
 import torch.nn.functional as F
 import numpy as np
 from transformers import BertTokenizerFast
-from concept_model import ConceptAutoencoder, ConceptConfig, flat_similarity_matrix
+from concept_model import (ConceptAutoencoder, ConceptAutoencoderV10,
+                           ConceptConfig, flat_similarity_matrix)
 
-CKPT = "checkpoints/concept_v9/latest.pt"
+# Auto-detect latest checkpoint: prefer V10, fall back to V9
+import os
+CKPT = None
+for candidate in ["checkpoints/concept_v10/latest.pt",
+                   "checkpoints/concept_v9/latest.pt"]:
+    if os.path.exists(candidate):
+        CKPT = candidate
+        break
+# Allow override via command line
+if len(sys.argv) > 1:
+    CKPT = sys.argv[1]
+
 DEVICE = "cpu"
 
 SLOT_NAMES = {
@@ -23,10 +36,20 @@ SLOT_NAMES = {
 
 
 def load_model():
+    if not CKPT:
+        raise FileNotFoundError("No checkpoint found")
+    print(f"  Checkpoint: {CKPT}")
     ckpt = torch.load(CKPT, map_location=DEVICE, weights_only=False)
     config = ConceptConfig(**ckpt["config"])
-    model = ConceptAutoencoder(config)
-    model.load_state_dict(ckpt["model_state_dict"])
+    version = ckpt.get("version", "")
+    if version == "v10" or "par_dec_layers" in str(list(ckpt["model_state_dict"].keys())):
+        print("  Model: ConceptAutoencoderV10 (parallel decoder)")
+        model = ConceptAutoencoderV10(config)
+    else:
+        print("  Model: ConceptAutoencoder (autoregressive decoder)")
+        model = ConceptAutoencoder(config)
+    state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["model_state_dict"].items()}
+    model.load_state_dict(state)
     model.eval()
     return model
 
@@ -338,20 +361,28 @@ def main():
         "three big red cars drove quickly north",
         "he certainly did not enjoy the terrible movie yesterday",
     ]
+    is_v10 = isinstance(model, ConceptAutoencoderV10)
     for sent in recon_tests:
         enc = tokenizer(sent, padding=True, truncation=True, max_length=64, return_tensors="pt")
         with torch.no_grad():
             concepts = model.encode(enc["input_ids"], enc["attention_mask"])
-            bos_id = tokenizer.cls_token_id or 101
-            generated = [bos_id]
-            for _ in range(len(enc["input_ids"][0]) + 10):
-                dec_input = torch.tensor([generated])
-                logits = model.decode(dec_input, concepts)
-                next_token = logits[0, -1].argmax().item()
-                if next_token == tokenizer.sep_token_id:
-                    break
-                generated.append(next_token)
-        decoded = tokenizer.decode(generated[1:], skip_special_tokens=True)
+            if is_v10:
+                # Parallel decode — all positions at once
+                logits = model.decode_parallel(concepts, seq_len=enc["input_ids"].shape[1])
+                predicted = logits[0].argmax(dim=-1)
+                decoded = tokenizer.decode(predicted, skip_special_tokens=True)
+            else:
+                # Autoregressive decode
+                bos_id = tokenizer.cls_token_id or 101
+                generated = [bos_id]
+                for _ in range(len(enc["input_ids"][0]) + 10):
+                    dec_input = torch.tensor([generated])
+                    logits = model.decode(dec_input, concepts)
+                    next_token = logits[0, -1].argmax().item()
+                    if next_token == tokenizer.sep_token_id:
+                        break
+                    generated.append(next_token)
+                decoded = tokenizer.decode(generated[1:], skip_special_tokens=True)
         print(f"  IN:  {sent}")
         print(f"  OUT: {decoded}")
         print()

@@ -33,52 +33,69 @@ def parse_step_data(log_path):
             if "step" in line and "loss" in line and "recon=" in line:
                 try:
                     parts = line.split("|")
-                    step = int(parts[0].split("step")[1].strip())
+                    step_str = parts[0].split("step")[1].strip()
+                    step = int(re.search(r"(\d+)", step_str).group(1))
                     total_loss = float(parts[1].split("loss")[1].split("(")[0].strip())
                     detail = parts[1].split("(")[1].split(")")[0]
-                    sim_part = parts[2]
 
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
                         return float(m.group(1)) if m else default
 
-                    # V8 phase tag (P1, P2s5, P3) — in last pipe section
-                    phase_str = ""
-                    if len(parts) >= 4:
-                        tail = parts[-1]
-                        pm = re.search(r"(P[123](?:s\d+)?)", tail)
-                        if pm:
-                            phase_str = pm.group(1)
+                    full_line = line
 
-                    rows.append({
-                        "step": step,
-                        "total_loss": total_loss,
-                        "recon": grab(r"recon=([\d.]+)", detail),
-                        "nce": grab(r"nce=([\d.]+)", detail),
-                        "wo": grab(r"wo=([\d.]+)", detail),
-                        "decorr": grab(r"decorr=([\d.]+)", detail),
-                        "iso": grab(r"iso=([\d.]+)", detail),
-                        "cls": grab(r"cls=([\d.]+)", detail),
-                        "scon": grab(r"scon=([\d.]+)", detail),
-                        "xrecon": grab(r"xrecon=([\d.]+)", detail),
-                        "sts": grab(r"sts=([\d.]+)", detail),
-                        # V7/V8 fields
-                        "m_para": grab(r"m_para=([\d.]+)", detail),
-                        "m_neg": grab(r"m_neg=([\d.]+)", detail),
-                        "m_wo": grab(r"m_wo=([\d.]+)", detail),
-                        "sp": grab(r"sp=([\d.]+)", detail),
-                        "repul": grab(r"(?<![h])repul=([\d.]+)", detail),
-                        "hrepul": grab(r"hrepul=([\d.]+)", detail),
-                        "p_sim": grab(r"p_sim=([\d.]+)", sim_part),
-                        "n_sim": grab(r"n_sim=([\d.]+)", sim_part),
-                        "wo_sim": grab(r"wo_sim=([\d.]+)", sim_part),
-                        "sp_sim": grab(r"sp_sim=([\d.]+)", sim_part),
-                        "r_sim": grab(r"r_sim=([\d.]+)", sim_part),
-                        "hr_max": grab(r"hr_max=([\d.]+)", sim_part),
-                        "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
-                        "geo_gate": grab(r"geo=([\d.]+)", parts[3] if len(parts) > 3 else ""),
-                        "phase": phase_str,
-                    })
+                    # Detect V10 format: "em_ema=" present, no geometry losses
+                    is_v10 = "em_ema=" in line
+
+                    if is_v10:
+                        # V10: step N | loss X (recon=X) | em_ema=X | lr X | X%
+                        rows.append({
+                            "step": step,
+                            "total_loss": total_loss,
+                            "recon": grab(r"recon=([\d.]+)", detail),
+                            "em_ema": grab(r"em_ema=([\d.]+)", full_line),
+                        })
+                    else:
+                        # V5-V9 format
+                        sim_part = parts[2] if len(parts) > 2 else ""
+
+                        # V8 phase tag (P1, P2s5, P3) — in last pipe section
+                        phase_str = ""
+                        if len(parts) >= 4:
+                            tail = parts[-1]
+                            pm = re.search(r"(P[123](?:s\d+)?)", tail)
+                            if pm:
+                                phase_str = pm.group(1)
+
+                        rows.append({
+                            "step": step,
+                            "total_loss": total_loss,
+                            "recon": grab(r"recon=([\d.]+)", detail),
+                            "nce": grab(r"nce=([\d.]+)", detail),
+                            "wo": grab(r"wo=([\d.]+)", detail),
+                            "decorr": grab(r"decorr=([\d.]+)", detail),
+                            "iso": grab(r"iso=([\d.]+)", detail),
+                            "cls": grab(r"cls=([\d.]+)", detail),
+                            "scon": grab(r"scon=([\d.]+)", detail),
+                            "xrecon": grab(r"xrecon=([\d.]+)", detail),
+                            "sts": grab(r"sts=([\d.]+)", detail),
+                            # V7/V8 fields
+                            "m_para": grab(r"m_para=([\d.]+)", detail),
+                            "m_neg": grab(r"m_neg=([\d.]+)", detail),
+                            "m_wo": grab(r"m_wo=([\d.]+)", detail),
+                            "sp": grab(r"sp=([\d.]+)", detail),
+                            "repul": grab(r"(?<![h])repul=([\d.]+)", detail),
+                            "hrepul": grab(r"hrepul=([\d.]+)", detail),
+                            "p_sim": grab(r"p_sim=([\d.]+)", sim_part),
+                            "n_sim": grab(r"n_sim=([\d.]+)", sim_part),
+                            "wo_sim": grab(r"wo_sim=([\d.]+)", sim_part),
+                            "sp_sim": grab(r"sp_sim=([\d.]+)", sim_part),
+                            "r_sim": grab(r"r_sim=([\d.]+)", sim_part),
+                            "hr_max": grab(r"hr_max=([\d.]+)", sim_part),
+                            "cls_acc": grab(r"cls_acc=([\d.]+)", sim_part),
+                            "geo_gate": grab(r"geo=([\d.]+)", parts[3] if len(parts) > 3 else ""),
+                            "phase": phase_str,
+                        })
                 except (ValueError, IndexError, AttributeError):
                     continue
     return rows
@@ -98,7 +115,22 @@ def parse_eval_data(log_path):
                     last_step = int(line.split("|")[0].split("step")[1].strip())
                 except (ValueError, IndexError):
                     pass
-            if "EVAL:" in line:
+            # V10 eval format: "EVAL: token_acc=X exact_match=X em_ema=X"
+            if "EVAL:" in line and "token_acc=" in line:
+                current_eval = {"step": last_step}
+                for key in ["token_acc", "exact_match", "em_ema"]:
+                    m = re.search(rf"{key}=([\d.]+)", line)
+                    if m:
+                        current_eval[key] = float(m.group(1))
+            # V10 per-bucket line: "short: acc=X em=X | medium: ..."
+            elif current_eval and "short:" in line and "medium:" in line:
+                for bucket in ["short", "medium", "long"]:
+                    am = re.search(rf"{bucket}: acc=([\d.]+) em=([\d.]+)", line)
+                    if am:
+                        current_eval[f"acc_{bucket}"] = float(am.group(1))
+                        current_eval[f"em_{bucket}"] = float(am.group(2))
+            # V5-V9 eval format: "EVAL: para_sim=X wo_sim=X ..."
+            elif "EVAL:" in line and "para_sim" in line:
                 current_eval = {"step": last_step}
                 for m in re.finditer(r"(\w+_sim)=([-\d.]+)", line):
                     current_eval[m.group(1)] = float(m.group(2))
@@ -134,7 +166,7 @@ def parse_eval_data(log_path):
                     }
                 if slot_isos:
                     current_eval["slot_isos"] = slot_isos
-            if current_eval and ("--- RECON" in line or
+            if current_eval and ("--- RECON" in line or "[DIFF]" in line or "[OK]" in line or
                                  ("step" in line and "loss" in line and "recon=" in line
                                   and current_eval["step"] != last_step)):
                 rows.append(current_eval)
@@ -156,17 +188,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v9"
+    return "v10"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -656,6 +688,7 @@ function updateDashboard(response) {
     const sw = Math.min(30, Math.max(5, Math.floor(steps.length / 10)));
     _phaseTransitions = getPhaseTransitions(steps);  // for auto-injection in mkChart
     const latest = steps[steps.length - 1];
+    const isV10 = latest.em_ema != null;
     const hasCmp = compare_steps && compare_steps.length > 0;
     const cs = hasCmp ? compare_steps.map(d => d.step) : [];
     const csw = hasCmp ? Math.min(30, Math.max(5, Math.floor(compare_steps.length / 10))) : 30;
@@ -705,7 +738,56 @@ function updateDashboard(response) {
         options: dualAxisOpts('Loss', 'Geo Gate', undefined, undefined, 0, 1.05),
     });
 
-    // 2. Geometry Losses
+    // 2. V10: Exact Match EMA (replaces geometry losses chart for V10)
+    if (isV10) {
+        const emDs = [
+            ds('EM EMA', steps.map(d => d.em_ema || 0), '#66bb6a'),
+        ];
+        // Add 90% gate line
+        emDs.push(ds('Gate (90%)', steps.map(() => 0.9), '#ef5350', {borderDash: [5, 3], pointRadius: 0}));
+        mkChart('chart-geo-losses', {
+            type: 'line',
+            data: { labels: s, datasets: emDs },
+            options: chartOpts('Exact Match', 0, 1.05),
+        });
+    }
+
+    // 2b. V10: Per-bucket accuracy (replaces batch similarities for V10)
+    if (isV10 && evals.length && evals.some(d => d.token_acc != null)) {
+        const v10Evals = evals.filter(d => d.token_acc != null);
+        const v10Es = v10Evals.map(d => d.step);
+        const accDs = [
+            ds('Token Acc', v10Evals.map(d => d.token_acc || 0), '#4fc3f7', {pointRadius: 3}),
+            ds('Exact Match', v10Evals.map(d => d.exact_match || 0), '#66bb6a', {pointRadius: 3}),
+        ];
+        if (v10Evals.some(d => d.acc_short != null)) {
+            accDs.push(ds('Short Acc', v10Evals.map(d => d.acc_short || 0), '#ab47bc', {pointRadius: 2, borderDash: [3, 2]}));
+            accDs.push(ds('Med Acc', v10Evals.map(d => d.acc_medium || 0), '#ffa726', {pointRadius: 2, borderDash: [3, 2]}));
+            accDs.push(ds('Long Acc', v10Evals.map(d => d.acc_long || 0), '#ef5350', {pointRadius: 2, borderDash: [3, 2]}));
+        }
+        mkChart('chart-batch-sim', {
+            type: 'line',
+            data: { labels: v10Es, datasets: accDs },
+            options: chartOpts('Accuracy', 0, 1.05),
+        });
+
+        // Per-bucket exact match (replaces diagnostic similarities)
+        if (v10Evals.some(d => d.em_short != null)) {
+            const emDs2 = [
+                ds('Short EM', v10Evals.map(d => d.em_short || 0), '#ab47bc', {pointRadius: 3}),
+                ds('Medium EM', v10Evals.map(d => d.em_medium || 0), '#ffa726', {pointRadius: 3}),
+                ds('Long EM', v10Evals.map(d => d.em_long || 0), '#ef5350', {pointRadius: 3}),
+            ];
+            mkChart('chart-diag-sim', {
+                type: 'line',
+                data: { labels: v10Es, datasets: emDs2 },
+                options: chartOpts('Exact Match', 0, 1.05),
+            });
+        }
+    }
+
+    // 2. Geometry Losses (V5-V9 only)
+    if (!isV10) {
     const geoDs = [];
     const addGeo = (key, label, color) => {
         const vals = steps.map(d => d[key]);
@@ -718,7 +800,6 @@ function updateDashboard(response) {
     addGeo('iso', 'Slot Isolation', C.iso);
     addGeo('cls', 'Classifier', C.cls);
     addGeo('scon', 'Slot Contrastive', C.scon);
-    // Add comparison scon overlay (clipped to current max step)
     if (hasCmp && clippedCmpSteps.length) {
         const cmpScon = clippedCmpSteps.map(d => d.scon);
         if (cmpScon.some(v => v > 0))
@@ -729,8 +810,10 @@ function updateDashboard(response) {
         data: { labels: s, datasets: geoDs },
         options: chartOpts('Loss'),
     });
+    }
 
-    // 3. Batch Similarities
+    // 3. Batch Similarities (V5-V9 only)
+    if (!isV10) {
     const bsDs = [
         ds('Pos sim', ema(steps.map(d => d.p_sim), sw), C.pSim),
         ds('Neg sim', ema(steps.map(d => d.n_sim), sw), C.nSim),
@@ -764,9 +847,10 @@ function updateDashboard(response) {
         }) },
         options: chartOpts('Cosine Sim', -0.1, 1.05),
     });
+    }
 
-    // 4. Diagnostic Similarities
-    if (evals.length) {
+    // 4. Diagnostic Similarities (V5-V9 only)
+    if (!isV10 && evals.length) {
         const es = evals.map(d => d.step);
         const diagDs = [
             ds('Paraphrase', evals.map(d => d.para_sim || 0), C.para, {pointRadius: 3}),
@@ -1016,8 +1100,24 @@ function updateDashboard(response) {
     html += `\n`;
     html += `<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
     html += `<span class="label"> Total:</span>     <span class="value">${fmt(latest.total_loss)}</span>\n`;
-    if (latest.geo_gate != null && latest.geo_gate > 0)
+
+    if (isV10) {
+        // V10: show exact-match EMA and per-bucket metrics
+        html += `<span class="label"> EM EMA:</span>    <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>  (gate: 90%)\n`;
+        if (le.token_acc != null) {
+            html += `\n<span class="label"> Eval Metrics:</span>\n`;
+            html += `  Token Acc:   <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>\n`;
+            html += `  Exact Match: <span class="${rating(le.exact_match, 0.9, 0.5)}">${pct(le.exact_match)}</span>\n`;
+            if (le.acc_short != null)
+                html += `  Short:  acc=<span class="value">${pct(le.acc_short)}</span> em=<span class="value">${pct(le.em_short)}</span>\n`;
+            if (le.acc_medium != null)
+                html += `  Medium: acc=<span class="value">${pct(le.acc_medium)}</span> em=<span class="value">${pct(le.em_medium)}</span>\n`;
+            if (le.acc_long != null)
+                html += `  Long:   acc=<span class="value">${pct(le.acc_long)}</span> em=<span class="value">${pct(le.em_long)}</span>\n`;
+        }
+    } else if (latest.geo_gate != null && latest.geo_gate > 0) {
         html += `<span class="label"> Geo Gate:</span>  <span class="${rating(latest.geo_gate, 0.8, 0.3)}">${pct(latest.geo_gate)}</span>\n`;
+    }
 
     if (le.clustering_gap != null) {
         html += `\n<span class="label"> Geometry:</span>\n`;
@@ -1056,7 +1156,7 @@ function updateDashboard(response) {
     const banner = document.getElementById('stage-banner');
     const geo = latest.geo_gate;
     const phase = latest.phase || '';
-    if (geo != null || phase) {
+    if (isV10 || geo != null || phase) {
         banner.style.display = 'block';
         const phaseEl = document.getElementById('stage-phase');
         const detailEl = document.getElementById('stage-detail');
@@ -1066,7 +1166,24 @@ function updateDashboard(response) {
 
         // Phase display
         let phaseText = '', phaseColor = '#aaa', detailText = '';
-        if (phase.startsWith('P1') && geo != null && geo === 0) {
+        if (isV10) {
+            const emEma = latest.em_ema || 0;
+            if (emEma < 0.9) {
+                phaseText = 'Phase 1: Reconstruction Only';
+                phaseColor = '#42a5f5';
+                detailText = `Non-autoregressive parallel decoder. EM EMA: ${(emEma*100).toFixed(1)}% (need 90% for geometry).`;
+            } else {
+                phaseText = 'Phase 2: Geometry Unlocked';
+                phaseColor = '#66bb6a';
+                detailText = `Reconstruction solid (EM ${(emEma*100).toFixed(1)}%). Geometry losses active.`;
+            }
+            // Use geo bar for EM progress
+            const emPct = Math.min(emEma / 0.9, 1.0);
+            geoPctEl.textContent = (emEma * 100).toFixed(0) + '% EM';
+            geoBarEl.style.width = (emPct * 100) + '%';
+            geoBarEl.style.background = emEma >= 0.9 ? '#66bb6a' : emEma >= 0.5 ? '#ffa726' : '#ef5350';
+            reconEmaEl.textContent = `EM EMA: ${(emEma*100).toFixed(1)}% — geometry unlocks at 90%`;
+        } else if (phase.startsWith('P1') && geo != null && geo === 0) {
             phaseText = 'Phase 0: Pure Recon';
             phaseColor = '#ef5350';
             detailText = 'Decoder-only training. Geometry fully suppressed until recon loss drops.';
