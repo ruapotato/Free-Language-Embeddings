@@ -43,6 +43,8 @@ class ConceptConfig:
     dec_layers: int = 6
     dec_heads: int = 6
     dec_intermediate: int = 1536
+    # FR decoder (V13)
+    fr_vocab_size: int = 32005   # CamemBERT vocab
     # Shared
     max_seq_len: int = 128
     dropout: float = 0.1
@@ -264,14 +266,15 @@ class ParallelDecoderBlock(nn.Module):
         self.ffn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
         self.ffn = SwiGLUFFN(config.dec_hidden, config.dec_intermediate, config.dropout)
 
-    def forward(self, x, concepts, rope_cos, rope_sin):
+    def forward(self, x, concepts, rope_cos, rope_sin, attention_mask=None):
         """
         x: (batch, seq_len, dec_hidden) — position query hidden states
         concepts: (batch, num_concepts, concept_dim) — the concept stack
-        No causal mask — all positions see each other.
+        attention_mask: optional (batch, 1, 1, seq_len) additive mask for padding
+        No causal mask — all positions see each other, but padding is masked out.
         """
         # Bidirectional self-attention (positions coordinate with each other)
-        x = x + self.self_attn(self.self_attn_norm(x), rope_cos, rope_sin, attention_mask=None)
+        x = x + self.self_attn(self.self_attn_norm(x), rope_cos, rope_sin, attention_mask=attention_mask)
 
         # Cross-attention to concepts
         x = x + self.cross_attn(self.cross_attn_norm(x), concepts)
@@ -583,13 +586,16 @@ class ConceptAutoencoderV10(nn.Module):
         concepts = self.bottleneck(x)
         return concepts
 
-    def decode_parallel(self, concepts, seq_len):
+    def decode_parallel(self, concepts, seq_len, attention_mask=None):
         """
         Non-autoregressive decode from concept stack.
 
         Args:
             concepts: (batch, num_concepts, concept_dim)
             seq_len: int — number of output positions to predict
+            attention_mask: optional (batch, seq_len) with 1=real, 0=padding.
+                Masks padding positions in decoder self-attention so the model
+                doesn't depend on batch padding context.
 
         Returns:
             logits: (batch, seq_len, vocab_size)
@@ -599,8 +605,15 @@ class ConceptAutoencoderV10(nn.Module):
         # Slice position queries to actual sequence length
         x = self.position_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
 
+        # Build additive attention mask for padding
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+
         for layer in self.par_dec_layers:
-            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin)
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
 
         x = self.dec_norm(x)
         logits = self.lm_head(x)
@@ -615,7 +628,8 @@ class ConceptAutoencoderV10(nn.Module):
             concepts: (batch, num_concepts, concept_dim)
         """
         concepts = self.encode(input_ids, attention_mask)
-        logits = self.decode_parallel(concepts, seq_len=input_ids.shape[1])
+        logits = self.decode_parallel(concepts, seq_len=input_ids.shape[1],
+                                      attention_mask=attention_mask)
         return logits, concepts
 
     def concept_vector(self, input_ids, attention_mask=None):
@@ -1101,3 +1115,184 @@ def per_slot_paraphrase_loss(concepts_a, concepts_b):
     # Each slot should be close for paraphrases — target sim ~0.9
     loss = F.relu(0.85 - slot_sims).mean()
     return loss, slot_sims.mean().item()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V13 — Dual-Decoder Concept Autoencoder (EN→concepts→EN + EN→concepts→FR)
+# ═══════════════════════════════════════════════════════════════════════
+
+class ConceptAutoencoderV13(nn.Module):
+    """
+    Text → concept stack → (EN reconstruction + FR translation).
+
+    V13 adds a second parallel decoder that translates from concept vectors
+    to French. Both decoders share the SAME concept bottleneck. This forces
+    language-independent meaning encoding because:
+      - The FR decoder can't rely on English surface tokens
+      - Word order differs between EN and FR
+      - The encoder must capture meaning, not just token patterns
+
+    Encoder + bottleneck + EN decoder: same as V10/V12
+    FR decoder: separate parallel decoder with its own embeddings and output head
+    """
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+
+        # --- Encoder (same as V10) ---
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+
+        # --- Bottleneck (same as V10) ---
+        self.bottleneck = ConceptBottleneck(config)
+
+        # --- EN Parallel Decoder (same as V10) ---
+        self.position_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+
+        dec_head_dim = config.dec_hidden // config.dec_heads
+        dec_rope_cos, dec_rope_sin = precompute_rope(dec_head_dim, config.max_seq_len)
+        self.register_buffer("dec_rope_cos", dec_rope_cos, persistent=False)
+        self.register_buffer("dec_rope_sin", dec_rope_sin, persistent=False)
+
+        self.par_dec_layers = nn.ModuleList([
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+
+        # --- FR Parallel Decoder (NEW) ---
+        self.fr_vocab_size = config.fr_vocab_size
+        self.position_queries_fr = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+
+        self.fr_dec_layers = nn.ModuleList([
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.fr_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.fr_lm_head = nn.Linear(config.dec_hidden, config.fr_vocab_size, bias=False)
+
+        self.apply(self._init_weights)
+        # Re-init position queries after _init_weights
+        self._init_position_queries(self.position_queries)
+        self._init_position_queries(self.position_queries_fr)
+
+    def _init_position_queries(self, param):
+        d = self.config.dec_hidden
+        pos = torch.arange(self.config.max_seq_len).float().unsqueeze(1)
+        div = torch.exp(torch.arange(0, d, 2).float() * -(math.log(10000.0) / d))
+        param.data[:, 0::2] = torch.sin(pos * div)
+        param.data[:, 1::2] = torch.cos(pos * div)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        """Encode EN text into concept stack."""
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+
+        x = self.enc_norm(x)
+        concepts = self.bottleneck(x)
+        return concepts
+
+    def decode_parallel(self, concepts, seq_len, attention_mask=None):
+        """EN parallel decode from concept stack (same as V10)."""
+        bsz = concepts.shape[0]
+        x = self.position_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+
+        for layer in self.par_dec_layers:
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
+
+        x = self.dec_norm(x)
+        logits = self.lm_head(x)
+        return logits
+
+    def decode_parallel_fr(self, concepts, seq_len, attention_mask=None):
+        """FR parallel decode from concept stack."""
+        bsz = concepts.shape[0]
+        x = self.position_queries_fr[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+
+        for layer in self.fr_dec_layers:
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
+
+        x = self.fr_dec_norm(x)
+        logits = self.fr_lm_head(x)
+        return logits
+
+    def forward(self, input_ids, attention_mask=None,
+                fr_seq_len=None, fr_attention_mask=None):
+        """
+        Full forward: encode EN, decode EN + optionally decode FR.
+
+        Returns:
+            en_logits: (batch, en_seq_len, en_vocab_size)
+            fr_logits: (batch, fr_seq_len, fr_vocab_size) or None
+            concepts: (batch, num_concepts, concept_dim)
+        """
+        concepts = self.encode(input_ids, attention_mask)
+        en_logits = self.decode_parallel(concepts, seq_len=input_ids.shape[1],
+                                         attention_mask=attention_mask)
+
+        fr_logits = None
+        if fr_seq_len is not None:
+            fr_logits = self.decode_parallel_fr(concepts, seq_len=fr_seq_len,
+                                                attention_mask=fr_attention_mask)
+
+        return en_logits, fr_logits, concepts
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        """Get flattened, L2-normalized concept vector for similarity comparison."""
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
+        return F.normalize(flat, p=2, dim=-1)
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
+
+
+def translation_loss(logits, targets, pad_token_id=1):
+    """Cross-entropy for FR decoder output vs FR target tokens."""
+    return F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),
+        targets.reshape(-1),
+        ignore_index=pad_token_id,
+    )

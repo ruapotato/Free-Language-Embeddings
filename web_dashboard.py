@@ -161,6 +161,24 @@ def parse_eval_data(log_path):
                 bt_m = re.search(r"between=([\d.]+)", line)
                 if bt_m:
                     current_eval["between_sim"] = float(bt_m.group(1))
+            # V12 geometry line: "GEOMETRY: analogy=X cluster_gap=X dir_con=X wo_sim=X rank90=X rank95=X"
+            if "GEOMETRY:" in line:
+                current_eval = current_eval or {"step": last_step}
+                for key, field in [("analogy", "analogy_avg"), ("cluster_gap", "clustering_gap"),
+                                   ("dir_con", "dir_consistency"), ("wo_sim", "word_order_sim")]:
+                    m = re.search(rf"{key}=([-+\d.]+)", line)
+                    if m:
+                        current_eval[field] = float(m.group(1))
+                for key in ["rank90", "rank95"]:
+                    m = re.search(rf"{key}=(\d+)", line)
+                    if m:
+                        current_eval[key] = int(m.group(1))
+            # V13 FR eval: "FR EVAL: token_acc=X"
+            if "FR EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["fr_token_acc"] = float(m.group(1))
             if "SLOT_STATS:" in line:
                 current_eval = current_eval or {"step": last_step}
                 slot_isos = {}
@@ -199,17 +217,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v11"
+    return "v13"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -393,31 +411,31 @@ body {
 <summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0;font-size:14px">&#9encyclop; Reference Guide (click to expand)</summary>
 
 <div style="padding:12px 0">
-<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V11)</h4>
+<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V13 — Dual Decoder)</h4>
 <p style="color:#bbb;margin:0 0 8px">
-The model compresses text into <b>32 concept slots</b> (each a 32-dimensional vector, 1024 dims total).
-The <b>encoder</b> reads text and produces these concept vectors. A <b>non-autoregressive parallel decoder</b>
-reconstructs the original text from the vectors alone &mdash; all tokens decoded simultaneously, no teacher forcing.
+The model compresses English text into <b>32 concept slots</b> (each a 32-dimensional vector, 1024 dims total).
+Two <b>non-autoregressive parallel decoders</b> share the same concept bottleneck:
+(1) <b>EN decoder</b> reconstructs the original English, (2) <b>FR decoder</b> translates to French.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-<b>Key insight:</b> Geometry (paraphrase similarity, clustering, word-order sensitivity) emerges naturally
-from reconstruction with a parallel decoder. No explicit geometry losses are needed. V10 probing at 50K steps
-showed analogies 0.74&ndash;0.92 with zero geometry training.
+<b>V13 key idea:</b> The French decoder forces <b>language-independent meaning encoding</b> &mdash;
+concepts can&rsquo;t just store English surface tokens because the FR decoder needs actual meaning to produce French.
+Word order differs between languages, so the bottleneck must capture structure, not just bags of words.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-V11 trains on <b>diverse data</b>: prose, code, math, technical docs, conversations, RFCs, man pages, kernel source,
-arxiv papers, StackExchange, and more (~8.4M texts). Sentences/paragraphs are chunked into full ideas.
+Trains on <b>diverse EN data</b> (~8.4M texts) + <b>190K EN&harr;FR translation pairs</b> from Europarl.
+Every 3rd step is a translation step (EN recon + FR translation loss); other steps are EN-only reconstruction.
 </p>
 
 <h4 style="color:#ffa726;margin:12px 0 6px">Training Setup</h4>
 <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:8px">
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Architecture</td>
-  <td style="padding:4px 8px">54.3M params, 32 slots &times; 32 dims = 1024-dim bottleneck</td>
+  <td style="padding:4px 8px">~80M params (EN enc+dec + FR dec), 32 slots &times; 32 dims = 1024-dim bottleneck</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Schedule</td>
-  <td style="padding:4px 8px">300K steps, cosine LR 3e-4 &rarr; 1e-5, batch size 64</td>
+  <td style="padding:4px 8px">600K steps, cosine LR 2e-4 &rarr; 1e-5, batch size 48, translation every 3rd step</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Dynamic Sampling</td>
@@ -426,19 +444,26 @@ arxiv papers, StackExchange, and more (~8.4M texts). Sentences/paragraphs are ch
 </tr>
 <tr>
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Loss</td>
-  <td style="padding:4px 8px">Pure reconstruction cross-entropy. No geometry losses, no phases, no gates.</td>
+  <td style="padding:4px 8px">EN reconstruction + FR translation cross-entropy. Dual decoder, shared bottleneck.</td>
 </tr>
 </table>
 
 <div style="columns:2;column-gap:24px;padding:8px 0">
 <h4 style="color:#ef5350;margin:8px 0 4px;column-span:all">Metrics</h4>
-<b>recon</b> &mdash; Reconstruction cross-entropy loss. The only training signal. Lower is better.<br>
-<b>token_acc</b> &mdash; Per-token accuracy. What fraction of tokens does the decoder get right?<br>
-<b>exact_match</b> &mdash; Full-sentence exact match. The entire output matches the input word-for-word.<br>
+<b>recon</b> &mdash; EN reconstruction cross-entropy loss. Lower is better.<br>
+<b>fr_loss</b> &mdash; FR translation cross-entropy loss (V13). Lower means better EN&rarr;FR translation.<br>
+<b>token_acc</b> &mdash; Per-token EN accuracy. What fraction of tokens does the EN decoder get right?<br>
+<b>fr_token_acc</b> &mdash; Per-token FR accuracy (V13). How well does the FR decoder translate?<br>
+<b>exact_match</b> &mdash; Full-sentence EN exact match. The entire output matches the input word-for-word.<br>
 <b>em_ema</b> &mdash; Exponential moving average of exact match (decay=0.9). Smoothed training signal.<br>
 <b>short/med/long</b> &mdash; Per-bucket metrics. Short = 1&ndash;4 tokens, medium = 5&ndash;8, long = 9+.<br>
 <b>dynamic weights</b> &mdash; Sampling weights for each bucket. Higher weight = more training focus.<br>
 <b>lr</b> &mdash; Learning rate. Cosine schedule from 3e-4 peak down to 1e-5 minimum.<br>
+<b>analogy_avg</b> &mdash; Average cosine similarity for a&minus;b+c&cong;d analogies (want &gt;0.8).<br>
+<b>clustering_gap</b> &mdash; Within-group minus between-group similarity (want &gt;0.05).<br>
+<b>direction_consistency</b> &mdash; How consistent attribute directions are across examples (want &gt;0.3).<br>
+<b>word_order_sim</b> &mdash; Similarity between word-order swapped pairs (want &lt;0.85 = good differentiation).<br>
+<b>effective_rank</b> &mdash; SVD dimensions needed for 90%/95% variance. Higher = richer space utilization.<br>
 
 <h4 style="color:#42a5f5;margin:12px 0 4px">Diagnostic Sentences</h4>
 <b>[OK]</b> &mdash; Perfectly reconstructed. <span style="color:#66bb6a">Green = working.</span><br>
@@ -457,8 +482,8 @@ and logic (<code>if all dogs are animals...</code>).
     <div class="card"><h3 id="h-dyn-weights">Dynamic Sampling Weights</h3><canvas id="chart-v6-cls"></canvas></div>
     <div class="card"><h3 id="h-margins">Margin Losses + Repulsion</h3><canvas id="chart-v7-margins"></canvas></div>
     <div class="card"><h3 id="h-geo">Clustering Gap &amp; Direction</h3><canvas id="chart-v6-geo"></canvas></div>
-    <div class="card"><h3 id="h-slots">Slot Assignment (out of 32)</h3><canvas id="chart-v6-slots"></canvas></div>
-    <div class="card"><h3 id="h-slot-iso">Per-Slot Isolation</h3><canvas id="chart-slot-iso"></canvas></div>
+    <div class="card"><h3 id="h-slots">Analogy &amp; Word Order</h3><canvas id="chart-v6-slots"></canvas></div>
+    <div class="card"><h3 id="h-slot-iso">Effective Rank</h3><canvas id="chart-slot-iso"></canvas></div>
     <div class="stats-card" id="stats-panel">Loading...</div>
 </div>
 
@@ -476,6 +501,7 @@ const C = {
     cmpWoSim: '#ffa72688', cmpScon: '#5c6bc088', cmpCls: '#26a69a88',
     cmpXrecon: '#ffca2888', cmpClsAcc: '#66bb6a88',
     cmpClsGap: '#ef535088', cmpDirCon: '#42a5f588', cmpSlots: '#66bb6a88',
+    analogy: '#66bb6a', woSim2: '#ffa726', rank90c: '#42a5f5', rank95c: '#66bb6a',
 };
 
 // Responsive legend/tick sizing
@@ -930,11 +956,13 @@ function updateDashboard(response) {
 
     // 6b. V7: Margin Losses + Slot Paraphrase (V5-V9 only)
     if (isV10) {
-        // Hide V5-V9-only charts for V10/V11
-        ['chart-v7-margins', 'chart-v6-geo', 'chart-v6-slots', 'chart-slot-iso'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.closest('.card').style.display = 'none';
-        });
+        // V10/V11/V12: hide only the margins chart (repurpose geo/slots/iso for geometry)
+        const marginsEl = document.getElementById('chart-v7-margins');
+        if (marginsEl) marginsEl.closest('.card').style.display = 'none';
+        // Update headings for geometry charts
+        document.getElementById('h-geo').textContent = 'Clustering Gap & Direction Consistency';
+        document.getElementById('h-slots').textContent = 'Analogy Score & Word Order';
+        document.getElementById('h-slot-iso').textContent = 'Effective Rank';
     }
     const hasV7 = !isV10 && steps.some(d => d.m_para > 0 || d.sp > 0);
     if (hasV7) {
@@ -1008,12 +1036,45 @@ function updateDashboard(response) {
             }) },
             options: chartOpts('Score'),
         });
+    } else if (isV10) {
+        // V10/V11/V12 with no geometry data yet — show placeholder
+        mkChart('chart-v6-geo', {
+            type: 'line',
+            data: { labels: [0], datasets: [ds('Waiting for geometry data...', [0], '#666')] },
+            options: chartOpts('Score'),
+        });
     }
 
-    // 8. Slot Assignment
+    // 8. Analogy Score & Word Order (V12) or Slot Assignment (V5-V9)
+    const hasAnalogy = evals.length && evals.some(d => d.analogy_avg != null);
+    const hasCmpAnalogy = hasCmp && clippedCmpEvals.length && clippedCmpEvals.some(d => d.analogy_avg != null);
     const hasSlot = evals.length && evals.some(d => d.slot_assign != null);
     const hasCmpSlot = hasCmp && clippedCmpEvals.length && clippedCmpEvals.some(d => d.slot_assign != null);
-    if (hasSlot || hasCmpSlot) {
+
+    if (hasAnalogy || hasCmpAnalogy) {
+        // V12 geometry: Analogy + Word Order
+        const aEvals = evals.filter(d => d.analogy_avg != null);
+        const aEs = aEvals.map(d => d.step);
+        const aDs = [
+            ds('Analogy Avg', aEvals.map(d => d.analogy_avg), '#66bb6a', {pointRadius: 3}),
+        ];
+        if (aEvals.some(d => d.word_order_sim != null))
+            aDs.push(ds('Word Order Sim', aEvals.map(d => d.word_order_sim || 0), '#ffa726', {pointRadius: 3}));
+        // Reference lines
+        aDs.push(ds('Target (analogy ≥0.8)', aEvals.map(() => 0.8), '#66bb6a44', {borderDash: [5, 3], pointRadius: 0}));
+        aDs.push(ds('Target (WO <0.85)', aEvals.map(() => 0.85), '#ffa72644', {borderDash: [5, 3], pointRadius: 0}));
+        if (hasCmpAnalogy) {
+            const ce = clippedCmpEvals.filter(d => d.analogy_avg != null);
+            aDs.push(cmpDs('Analogy' + cmpLabel, ce.map(d => d.analogy_avg), '#66bb6a88', {pointRadius: 2}));
+            if (ce.some(d => d.word_order_sim != null))
+                aDs.push(cmpDs('WO Sim' + cmpLabel, ce.map(d => d.word_order_sim || 0), '#ffa72688', {pointRadius: 2}));
+        }
+        mkChart('chart-v6-slots', {
+            type: 'line',
+            data: { labels: aEs, datasets: aDs },
+            options: chartOpts('Score', 0, 1.05),
+        });
+    } else if (hasSlot || hasCmpSlot) {
         const slotDs = [];
         if (hasSlot) {
             const se = evals.filter(d => d.slot_assign != null);
@@ -1042,11 +1103,38 @@ function updateDashboard(response) {
             }) },
             options: chartOpts('Slots', 0, 33),
         });
+    } else if (isV10) {
+        // V10/V11/V12 with no geometry data yet — show placeholder
+        mkChart('chart-v6-slots', {
+            type: 'line',
+            data: { labels: [0], datasets: [ds('Waiting for geometry data...', [0], '#666')] },
+            options: chartOpts('Score', 0, 1.05),
+        });
     }
 
-    // 9. Per-Slot Isolation (V8) — bar chart showing latest isolation per slot
+    // 9. Effective Rank (V12) or Per-Slot Isolation (V8)
+    const hasRank = evals.length && evals.some(d => d.rank90 != null);
+    const hasCmpRank = hasCmp && clippedCmpEvals.length && clippedCmpEvals.some(d => d.rank90 != null);
     const lastEval = evals.length ? evals[evals.length - 1] : {};
-    if (lastEval.slot_isos) {
+
+    if (hasRank || hasCmpRank) {
+        const rEvals = evals.filter(d => d.rank90 != null);
+        const rEs = rEvals.map(d => d.step);
+        const rDs = [
+            ds('Rank 90%', rEvals.map(d => d.rank90), '#42a5f5', {pointRadius: 3}),
+            ds('Rank 95%', rEvals.map(d => d.rank95 || 0), '#66bb6a', {pointRadius: 3}),
+        ];
+        if (hasCmpRank) {
+            const ce = clippedCmpEvals.filter(d => d.rank90 != null);
+            rDs.push(cmpDs('Rank90' + cmpLabel, ce.map(d => d.rank90), '#42a5f588', {pointRadius: 2}));
+            rDs.push(cmpDs('Rank95' + cmpLabel, ce.map(d => d.rank95 || 0), '#66bb6a88', {pointRadius: 2}));
+        }
+        mkChart('chart-slot-iso', {
+            type: 'line',
+            data: { labels: rEs, datasets: rDs },
+            options: chartOpts('Rank (dimensions)'),
+        });
+    } else if (lastEval.slot_isos) {
         const slotIds = Object.keys(lastEval.slot_isos).map(Number).sort((a,b) => a - b);
         const isoVals = slotIds.map(s => lastEval.slot_isos[s].iso);
         const barColors = slotIds.map(s =>
@@ -1083,6 +1171,12 @@ function updateDashboard(response) {
                          title: { display: !isMobile(), text: 'Isolation', color: '#888' } },
                 },
             },
+        });
+    } else if (isV10) {
+        mkChart('chart-slot-iso', {
+            type: 'line',
+            data: { labels: [0], datasets: [ds('Waiting for geometry data...', [0], '#666')] },
+            options: chartOpts('Rank'),
         });
     } else {
         mkChart('chart-slot-iso', {
@@ -1137,13 +1231,25 @@ function updateDashboard(response) {
         html += `<span class="label"> Geo Gate:</span>  <span class="${rating(latest.geo_gate, 0.8, 0.3)}">${pct(latest.geo_gate)}</span>\n`;
     }
 
-    if (le.clustering_gap != null) {
+    if (le.clustering_gap != null || le.analogy_avg != null) {
         html += `\n<span class="label"> Geometry:</span>\n`;
-        html += `  Gap:   <span class="${rating(le.clustering_gap, 0.1, 0.03)}">${fmt(le.clustering_gap, 4)}</span> (>0.1)\n`;
-        html += `  Dir:   <span class="${rating(le.dir_consistency, 0.5, 0.2)}">${fmt(le.dir_consistency, 4)}</span> (>0.5)\n`;
+        if (le.analogy_avg != null)
+            html += `  Analogy:  <span class="${rating(le.analogy_avg, 0.8, 0.6)}">${fmt(le.analogy_avg)}</span> (>0.8)\n`;
+        html += `  Gap:      <span class="${rating(le.clustering_gap, 0.1, 0.03)}">${fmt(le.clustering_gap, 4)}</span> (>0.05)\n`;
+        if (le.dir_consistency != null)
+            html += `  Dir Con:  <span class="${rating(le.dir_consistency, 0.5, 0.2)}">${fmt(le.dir_consistency)}</span> (>0.3)\n`;
+        if (le.word_order_sim != null)
+            html += `  WO Sim:   <span class="${rating(1 - le.word_order_sim, 0.15, 0.05)}">${fmt(le.word_order_sim)}</span> (<0.85)\n`;
+        if (le.rank90 != null)
+            html += `  Rank:     <span class="value">${le.rank90}/${le.rank95 || '?'}</span> (90%/95%)\n`;
     }
     if (le.slot_assign != null)
         html += `  Slots: <span class="${rating(le.slot_assign, 28, 16)}">${le.slot_assign}/32</span>\n`;
+
+    if (le.fr_token_acc != null) {
+        html += `\n<span class="label"> FR Translation:</span>\n`;
+        html += `  FR Acc:  <span class="${rating(le.fr_token_acc, 0.5, 0.2)}">${pct(le.fr_token_acc)}</span>\n`;
+    }
 
     if (latest.cls > 0) {
         html += `\n<span class="label"> V6 Losses:</span>\n`;
@@ -1158,12 +1264,24 @@ function updateDashboard(response) {
         const cl = compare_steps[compare_steps.length - 1];
         const ce = compare_evals.length ? compare_evals[compare_evals.length - 1] : {};
         html += `\n<span class="label"> ${compare_run} (${cl.step.toLocaleString()} steps):</span>\n`;
-        html += `  Recon: <span class="value">${fmt(cl.recon)}</span>  `;
-        html += `SCon: <span class="value">${fmt(cl.scon)}</span>\n`;
+        html += `  Recon: <span class="value">${fmt(cl.recon)}</span>`;
+        if (cl.em_ema != null) html += `  EM: <span class="value">${pct(cl.em_ema)}</span>`;
+        if (cl.scon != null) html += `  SCon: <span class="value">${fmt(cl.scon)}</span>`;
+        html += `\n`;
+        if (ce.analogy_avg != null)
+            html += `  Analogy: <span class="value">${fmt(ce.analogy_avg)}</span>  `;
         if (ce.clustering_gap != null)
-            html += `  Gap:   <span class="value">${fmt(ce.clustering_gap, 4)}</span>  `;
+            html += `Gap: <span class="value">${fmt(ce.clustering_gap, 4)}</span>  `;
         if (ce.dir_consistency != null)
-            html += `Dir: <span class="value">${fmt(ce.dir_consistency, 4)}</span>\n`;
+            html += `Dir: <span class="value">${fmt(ce.dir_consistency)}</span>`;
+        if (ce.analogy_avg != null || ce.clustering_gap != null)
+            html += `\n`;
+        if (ce.word_order_sim != null)
+            html += `  WO: <span class="value">${fmt(ce.word_order_sim)}</span>  `;
+        if (ce.rank90 != null)
+            html += `Rank: <span class="value">${ce.rank90}/${ce.rank95 || '?'}</span>`;
+        if (ce.word_order_sim != null || ce.rank90 != null)
+            html += `\n`;
         if (ce.slot_assign != null)
             html += `  Slots: <span class="value">${ce.slot_assign}/32</span>\n`;
     }
@@ -1189,12 +1307,12 @@ function updateDashboard(response) {
             const progress = latest.progress || 0;
             phaseText = 'Pure Reconstruction';
             phaseColor = '#4fc3f7';
-            detailText = `Parallel decoder, diverse data. EM EMA: ${(emEma*100).toFixed(1)}% | Progress: ${progress.toFixed(1)}%`;
+            detailText = `Parallel decoder + padding mask fix, diverse data. EM EMA: ${(emEma*100).toFixed(1)}% | Progress: ${progress.toFixed(1)}%`;
             // Use bar for training progress
             geoPctEl.textContent = progress.toFixed(1) + '%';
             geoBarEl.style.width = Math.min(progress, 100) + '%';
             geoBarEl.style.background = progress >= 75 ? '#66bb6a' : progress >= 25 ? '#ffa726' : '#4fc3f7';
-            reconEmaEl.textContent = `LR: ${(latest.lr || 0).toExponential(2)} | Step ${latest.step.toLocaleString()} / 300K`;
+            reconEmaEl.textContent = `LR: ${(latest.lr || 0).toExponential(2)} | Step ${latest.step.toLocaleString()} / 600K`;
         } else if (phase.startsWith('P1') && geo != null && geo === 0) {
             phaseText = 'Phase 0: Pure Recon';
             phaseColor = '#ef5350';
