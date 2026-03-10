@@ -1,5 +1,5 @@
 """
-FLM V10 — Non-Autoregressive Concept Autoencoder (Pure Reconstruction)
+FLM V11 — Non-Autoregressive Concept Autoencoder (Pure Reconstruction)
 ================================================================================
 Key insight: the parallel decoder forces concept vectors to encode ALL meaning.
 Geometry (analogies, word-order sensitivity, slot structure) emerges naturally
@@ -10,10 +10,10 @@ Full sentences/paragraphs in, same out. The bottleneck must learn to compress
 any structured information into 32 slots x 32 dims = 1024 dimensions.
 
 Usage:
-    python train_v10.py --fresh          # start from scratch
-    python train_v10.py --resume         # resume from V10 checkpoint
-    python train_v10.py --from-v9        # warm-start encoder from V9, fresh decoder
-    python train_v10.py --eval-only      # diagnostics only
+    python train_v11.py --fresh          # start from scratch
+    python train_v11.py --resume         # resume from V11 checkpoint
+    python train_v11.py --from-v9        # warm-start encoder from V9, fresh decoder
+    python train_v11.py --eval-only      # diagnostics only
 """
 
 import os
@@ -38,7 +38,7 @@ from concept_model import ConceptConfig, ConceptAutoencoderV10, reconstruction_l
 # Config
 # ---------------------------------------------------------------------------
 
-CHECKPOINT_DIR = "checkpoints/concept_v10"
+CHECKPOINT_DIR = "checkpoints/concept_v11"
 LOG_DIR = "logs"
 
 MODEL_CONFIG = dict(
@@ -87,8 +87,8 @@ LENGTH_BUCKETS = {
 }
 
 LOG_PATHS = {
-    "log": f"{LOG_DIR}/concept_v10.log",
-    "metrics": f"{LOG_DIR}/concept_v10_metrics.csv",
+    "log": f"{LOG_DIR}/concept_v11.log",
+    "metrics": f"{LOG_DIR}/concept_v11_metrics.csv",
 }
 
 # Diagnostic sentences for reconstruction spot-checks
@@ -224,6 +224,8 @@ class ReconstructionDataset:
         log(f"  Pair texts: {pair_count:,}")
 
         # 2. Pretrain data (diverse: code, math, docs, prose)
+        # Cap per source to avoid loading 30GB+ into RAM
+        MAX_CHUNKS_PER_SOURCE = 500_000
         pretrain_count = 0
         pretrain_dir = Path("data/pretrain")
         if pretrain_dir.exists():
@@ -232,15 +234,18 @@ class ReconstructionDataset:
                 count = 0
                 with open(path) as f:
                     for line in f:
+                        if count >= MAX_CHUNKS_PER_SOURCE:
+                            break
                         try:
                             doc = json.loads(line)
                             text = doc.get("text", "").strip()
                             if len(text) < 20:
                                 continue
-                            # Split long docs into sentence/paragraph chunks
                             for chunk in _split_into_chunks(text):
                                 self._bucket_text(chunk)
                                 count += 1
+                                if count >= MAX_CHUNKS_PER_SOURCE:
+                                    break
                         except (json.JSONDecodeError, KeyError):
                             continue
                 pretrain_count += count
@@ -504,7 +509,7 @@ def save_checkpoint(model, optimizer, scaler, config, step, loss,
         "step": step,
         "loss": loss,
         "exact_match_ema": exact_match_ema,
-        "version": "v10",
+        "version": "v11",
         "timestamp": datetime.datetime.now().isoformat(),
     }
     path = os.path.join(checkpoint_dir, f"step_{step:06d}.pt")
@@ -582,7 +587,7 @@ def train(resume_from=None, fresh=False, eval_only=False, from_v9=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     log("=" * 70)
-    log("FLM V10 — NON-AUTOREGRESSIVE CONCEPT AUTOENCODER (Pure Recon)")
+    log("FLM V11 — NON-AUTOREGRESSIVE CONCEPT AUTOENCODER (Pure Recon)")
     log("=" * 70)
 
     from transformers import AutoTokenizer
@@ -652,7 +657,7 @@ def train(resume_from=None, fresh=False, eval_only=False, from_v9=None):
         log("ERROR: No training texts found.")
         return
 
-    log(f"\nTraining plan (V10 — Pure Reconstruction):")
+    log(f"\nTraining plan (V11 — Pure Reconstruction):")
     log(f"  Encoder: {config.enc_hidden}h x {config.enc_layers}L x {config.enc_heads}heads")
     log(f"  Decoder: PARALLEL {config.dec_hidden}h x {config.dec_layers}L x {config.dec_heads}heads")
     log(f"  Bottleneck: {config.num_concepts} x {config.concept_dim} = {config.total_concept_dim} dims")
@@ -791,7 +796,7 @@ def train(resume_from=None, fresh=False, eval_only=False, from_v9=None):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Train concept autoencoder V10")
+    parser = argparse.ArgumentParser(description="Train concept autoencoder V11")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--from-v9", type=str, default=None,
