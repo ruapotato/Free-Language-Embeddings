@@ -6,13 +6,17 @@ A fully free AI project trained from scratch on a single RTX 3090. Every dataset
 
 **Free as in freedom** — the name is a direct reference to the Free Software Foundation's philosophy that software freedom is a matter of liberty, not price.
 
+## The Goal
+
+Build a geometric language representation — a 1024-dimensional space where meaning has shape. Sentences map to points, similar meanings cluster together, semantic relationships form consistent directions, and word-order changes that alter meaning are distinguishable. This representation becomes the input layer to a small language model (SLM) that reasons over geometry instead of raw tokens.
+
+Right now the project is focused entirely on stage 1: getting the concept autoencoder to produce a space with good clustering, consistent directions, and real semantic structure. Stage 2 (the SLM that reasons in concept space) comes later.
+
 ## Concept Autoencoder — Current Architecture (V13)
 
 ### The Idea
 
-Encode language into a compressed geometric space where meaning determines position, not surface form. A dual-decoder forces language-independent encoding: the same 1024-dim concept bottleneck must support both English reconstruction AND French translation. The French decoder can't rely on English surface tokens, so the concept space must encode actual meaning.
-
-A stage 2 model (future) can then reason purely in concept space, never touching raw language.
+Compress English into a 1024-dim geometric bottleneck, then decode it back to both English and French. The dual-decoder forces language-independent encoding — the French decoder can't rely on English surface tokens, so the concept space must encode actual meaning, not just token patterns.
 
 ### Why Dual-Decoder?
 
