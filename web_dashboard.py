@@ -269,7 +269,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -279,7 +279,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
