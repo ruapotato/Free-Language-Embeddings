@@ -1603,22 +1603,24 @@ class ConceptAutoencoderV14(nn.Module):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# V16 — Lean Hydra: 3 heads (EN + Para + Parse), deeper decoders (6L)
+# V16 — Full Hydra: 5 heads (EN + FR + ES + Para + Parse), deeper decoders (6L)
+#        + programmatic geometry data, no geo gate
 # ═══════════════════════════════════════════════════════════════════════
 
 class ConceptAutoencoderV16(nn.Module):
     """
-    V16: Lean Hydra with 3 decoder heads and deeper decoders.
+    V16: Full Hydra with 5 decoder heads and deeper decoders.
 
-    Drops FR and ES heads (not project goals), keeps:
+    All 5 heads from V14, but with 6-layer decoders:
       1. EN reconstruction (BERT vocab)
-      2. EN paraphrase (BERT vocab, different surface form)
-      3. Semantic parse (BERT vocab, structured output)
+      2. FR translation (CamemBERT vocab)
+      3. ES translation (BETO vocab)
+      4. EN paraphrase (BERT vocab, different surface form)
+      5. Semantic parse (BERT vocab, structured output)
 
     Key changes from V14:
-      - 3 heads instead of 5 (smaller model, faster training)
       - 6 decoder layers instead of 4 (deeper reasoning per head)
-      - Designed for programmatic geometry data (train/test vocab splits)
+      - Programmatic geometry data (train/test vocab splits)
       - No geo gate — geometry warmup from step 0
     """
 
@@ -1657,7 +1659,25 @@ class ConceptAutoencoderV16(nn.Module):
         self.en_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
         self.en_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
 
-        # --- Head 2: EN Paraphrase ---
+        # --- Head 2: FR Translation ---
+        self.fr_pos_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        self.fr_dec_layers = nn.ModuleList([
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.fr_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.fr_lm_head = nn.Linear(config.dec_hidden, config.fr_vocab_size, bias=False)
+
+        # --- Head 3: ES Translation ---
+        self.es_pos_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        self.es_dec_layers = nn.ModuleList([
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.es_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.es_lm_head = nn.Linear(config.dec_hidden, config.es_vocab_size, bias=False)
+
+        # --- Head 4: EN Paraphrase ---
         self.para_pos_queries = nn.Parameter(
             torch.zeros(config.max_seq_len, config.dec_hidden))
         self.para_dec_layers = nn.ModuleList([
@@ -1666,7 +1686,7 @@ class ConceptAutoencoderV16(nn.Module):
         self.para_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
         self.para_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
 
-        # --- Head 3: Semantic Parse ---
+        # --- Head 5: Semantic Parse ---
         self.parse_pos_queries = nn.Parameter(
             torch.zeros(config.max_seq_len, config.dec_hidden))
         self.parse_dec_layers = nn.ModuleList([
@@ -1676,7 +1696,8 @@ class ConceptAutoencoderV16(nn.Module):
         self.parse_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
 
         self.apply(self._init_weights)
-        for pq in [self.en_pos_queries, self.para_pos_queries, self.parse_pos_queries]:
+        for pq in [self.en_pos_queries, self.fr_pos_queries, self.es_pos_queries,
+                    self.para_pos_queries, self.parse_pos_queries]:
             self._init_position_queries(pq)
 
     def _init_position_queries(self, param):
@@ -1733,6 +1754,16 @@ class ConceptAutoencoderV16(nn.Module):
                                  self.en_dec_layers, self.en_dec_norm,
                                  self.en_lm_head, attention_mask)
 
+    def decode_fr(self, concepts, seq_len, attention_mask=None):
+        return self._decode_head(concepts, seq_len, self.fr_pos_queries,
+                                 self.fr_dec_layers, self.fr_dec_norm,
+                                 self.fr_lm_head, attention_mask)
+
+    def decode_es(self, concepts, seq_len, attention_mask=None):
+        return self._decode_head(concepts, seq_len, self.es_pos_queries,
+                                 self.es_dec_layers, self.es_dec_norm,
+                                 self.es_lm_head, attention_mask)
+
     def decode_para(self, concepts, seq_len, attention_mask=None):
         return self._decode_head(concepts, seq_len, self.para_pos_queries,
                                  self.para_dec_layers, self.para_dec_norm,
@@ -1750,7 +1781,7 @@ class ConceptAutoencoderV16(nn.Module):
     def forward(self, input_ids, attention_mask=None, targets=None):
         """
         Forward pass. targets is a dict with optional keys:
-            'para': (ids, mask), 'parse': (ids, mask)
+            'fr': (ids, mask), 'es': (ids, mask), 'para': (ids, mask), 'parse': (ids, mask)
         Returns dict of logits + concepts.
         """
         concepts = self.encode(input_ids, attention_mask)
@@ -1759,8 +1790,8 @@ class ConceptAutoencoderV16(nn.Module):
         result['en_logits'] = self.decode_en(concepts, input_ids.shape[1], attention_mask)
 
         if targets:
-            for key, decode_fn in [('para', self.decode_para),
-                                    ('parse', self.decode_parse)]:
+            for key, decode_fn in [('fr', self.decode_fr), ('es', self.decode_es),
+                                    ('para', self.decode_para), ('parse', self.decode_parse)]:
                 if key in targets:
                     ids, mask = targets[key]
                     result[f'{key}_logits'] = decode_fn(concepts, ids.shape[1], mask)
@@ -1771,6 +1802,223 @@ class ConceptAutoencoderV16(nn.Module):
         concepts = self.encode(input_ids, attention_mask)
         flat = concepts.view(concepts.shape[0], -1)
         return F.normalize(flat, p=2, dim=-1)
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V17 — No Bottleneck: decoders cross-attend directly to encoder output
+# ═══════════════════════════════════════════════════════════════════════
+
+class NoBnDecoderBlock(nn.Module):
+    """Decoder block where cross-attention reads full encoder output (enc_hidden dim)
+    instead of a narrow bottleneck. Otherwise identical to ParallelDecoderBlock."""
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.self_attn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.self_attn = SelfAttention(config.dec_hidden, config.dec_heads, config.dropout)
+
+        # Cross-attention: KV comes from encoder output (enc_hidden), not bottleneck
+        self.cross_attn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.cross_attn = CrossAttention(
+            q_dim=config.dec_hidden,
+            kv_dim=config.enc_hidden,   # <-- full encoder dim, not concept_dim
+            num_heads=config.dec_heads,
+            dropout=config.dropout,
+        )
+
+        self.ffn_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.ffn = SwiGLUFFN(config.dec_hidden, config.dec_intermediate, config.dropout)
+
+    def forward(self, x, encoder_output, rope_cos, rope_sin, attention_mask=None):
+        x = x + self.self_attn(self.self_attn_norm(x), rope_cos, rope_sin,
+                                attention_mask=attention_mask)
+        x = x + self.cross_attn(self.cross_attn_norm(x), encoder_output)
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
+
+
+class ConceptAutoencoderV17(nn.Module):
+    """
+    V17: No bottleneck — decoders cross-attend directly to encoder sequence.
+
+    The 'concept space' IS the encoder output. No information-destroying pinch.
+    Three decoder heads diverge from the shared encoder representation:
+      1. EN reconstruction (BERT vocab)
+      2. EN paraphrase (BERT vocab)
+      3. Semantic parse (BERT vocab)
+
+    For geometry losses, encoder output is mean-pooled over non-padding tokens
+    to produce a fixed-size concept vector.
+
+    Key changes from V16:
+      - No bottleneck — richer shared representation
+      - Geo gate restored — let reconstruction form structure first
+      - 3 heads (EN, Para, Parse), 6L decoders
+      - Programmatic geometry data with train/test splits
+    """
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+
+        # --- Encoder ---
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+
+        # NO BOTTLENECK — encoder output goes directly to decoders
+
+        # --- Shared decoder RoPE ---
+        dec_head_dim = config.dec_hidden // config.dec_heads
+        dec_rope_cos, dec_rope_sin = precompute_rope(dec_head_dim, config.max_seq_len)
+        self.register_buffer("dec_rope_cos", dec_rope_cos, persistent=False)
+        self.register_buffer("dec_rope_sin", dec_rope_sin, persistent=False)
+
+        # --- Head 1: EN Reconstruction ---
+        self.en_pos_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        self.en_dec_layers = nn.ModuleList([
+            NoBnDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.en_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.en_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+
+        # --- Head 2: EN Paraphrase ---
+        self.para_pos_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        self.para_dec_layers = nn.ModuleList([
+            NoBnDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.para_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.para_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+
+        # --- Head 3: Semantic Parse ---
+        self.parse_pos_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        self.parse_dec_layers = nn.ModuleList([
+            NoBnDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.parse_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.parse_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+
+        self.apply(self._init_weights)
+        for pq in [self.en_pos_queries, self.para_pos_queries, self.parse_pos_queries]:
+            self._init_position_queries(pq)
+
+    def _init_position_queries(self, param):
+        d = self.config.dec_hidden
+        pos = torch.arange(self.config.max_seq_len).float().unsqueeze(1)
+        div = torch.exp(torch.arange(0, d, 2).float() * -(math.log(10000.0) / d))
+        param.data[:, 0::2] = torch.sin(pos * div)
+        param.data[:, 1::2] = torch.cos(pos * div)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        """Encode text → (B, seq_len, enc_hidden). Full encoder output, no bottleneck."""
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+
+        return self.enc_norm(x)
+
+    def pool(self, encoder_output, attention_mask=None):
+        """Mean-pool encoder output over non-padding tokens → (B, enc_hidden)."""
+        if attention_mask is not None:
+            mask = attention_mask.unsqueeze(-1).float()  # (B, seq_len, 1)
+            pooled = (encoder_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+        else:
+            pooled = encoder_output.mean(dim=1)
+        return pooled
+
+    def encode_pooled(self, input_ids, attention_mask=None):
+        """Encode + mean pool → (B, enc_hidden). For geometry losses."""
+        enc_out = self.encode(input_ids, attention_mask)
+        return self.pool(enc_out, attention_mask)
+
+    def _decode_head(self, encoder_output, seq_len, pos_queries, dec_layers, dec_norm,
+                     lm_head, attention_mask=None):
+        """Decode from encoder output (no bottleneck)."""
+        bsz = encoder_output.shape[0]
+        x = pos_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+
+        for layer in dec_layers:
+            x = layer(x, encoder_output, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
+
+        x = dec_norm(x)
+        return lm_head(x)
+
+    def decode_en(self, encoder_output, seq_len, attention_mask=None):
+        return self._decode_head(encoder_output, seq_len, self.en_pos_queries,
+                                 self.en_dec_layers, self.en_dec_norm,
+                                 self.en_lm_head, attention_mask)
+
+    def decode_para(self, encoder_output, seq_len, attention_mask=None):
+        return self._decode_head(encoder_output, seq_len, self.para_pos_queries,
+                                 self.para_dec_layers, self.para_dec_norm,
+                                 self.para_lm_head, attention_mask)
+
+    def decode_parse(self, encoder_output, seq_len, attention_mask=None):
+        return self._decode_head(encoder_output, seq_len, self.parse_pos_queries,
+                                 self.parse_dec_layers, self.parse_dec_norm,
+                                 self.parse_lm_head, attention_mask)
+
+    # Alias for probe_geometry.py compatibility
+    def decode_parallel(self, encoder_output, seq_len, attention_mask=None):
+        return self.decode_en(encoder_output, seq_len, attention_mask)
+
+    def forward(self, input_ids, attention_mask=None, targets=None):
+        encoder_output = self.encode(input_ids, attention_mask)
+
+        result = {'concepts': encoder_output}  # compat key name
+        result['en_logits'] = self.decode_en(encoder_output, input_ids.shape[1], attention_mask)
+
+        if targets:
+            for key, decode_fn in [('para', self.decode_para),
+                                    ('parse', self.decode_parse)]:
+                if key in targets:
+                    ids, mask = targets[key]
+                    result[f'{key}_logits'] = decode_fn(encoder_output, ids.shape[1], mask)
+
+        return result
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        """Mean-pooled, L2-normalized concept vector for similarity."""
+        pooled = self.encode_pooled(input_ids, attention_mask)
+        return F.normalize(pooled, p=2, dim=-1)
 
     def count_parameters(self):
         total = sum(p.numel() for p in self.parameters())
