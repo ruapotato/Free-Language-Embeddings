@@ -43,7 +43,8 @@ from concept_model import (ConceptConfig, ConceptAutoencoderV14,
                            flat_similarity_matrix,
                            margin_word_order_loss,
                            hard_repulsion_loss, batch_repulsion_loss,
-                           analogy_loss, direction_consistency_loss)
+                           analogy_loss, direction_consistency_loss,
+                           cluster_separation_loss)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -101,6 +102,9 @@ GEO_ANALOGY_WEIGHT = 2.0   # analogy preservation weight
 GEO_ANALOGY_TARGET = 0.9   # target: a-b+c should have sim > 0.9 with d
 GEO_DIRCON_WEIGHT = 1.5    # direction consistency weight
 GEO_DIRCON_TARGET = 0.8    # target: same-attribute directions should have sim > 0.8
+GEO_CLUSTER_WEIGHT = 1.5   # cluster separation weight
+GEO_CLUSTER_WITHIN = 0.5   # target: same-group sim > 0.5
+GEO_CLUSTER_BETWEEN = 0.2  # target: different-group sim < 0.2
 GEO_EVERY_N = 5            # run geometry losses every N steps (saves ~80% geo compute)
 
 # EMA tracking
@@ -260,7 +264,7 @@ METRICS_HEADER = ("timestamp,step,recon_loss,token_acc,exact_match,em_ema,"
                   "word_order_sim,effective_rank90,effective_rank95,"
                   "fr_loss,fr_token_acc,es_loss,es_token_acc,"
                   "para_loss,para_token_acc,parse_loss,parse_token_acc,"
-                  "geo_scale,wo_loss,hrepul_loss,brepul_loss,analogy_loss,dircon_loss\n")
+                  "geo_scale,wo_loss,hrepul_loss,brepul_loss,analogy_loss,dircon_loss,cluster_loss\n")
 
 
 def log_metrics(step, metrics):
@@ -289,7 +293,8 @@ def log_metrics(step, metrics):
                 f"{m.get('parse_loss',0):.6f},{m.get('parse_token_acc',0):.4f},"
                 f"{m.get('geo_scale',0):.4f},{m.get('wo_loss',0):.6f},"
                 f"{m.get('hrepul_loss',0):.6f},{m.get('brepul_loss',0):.6f},"
-                f"{m.get('analogy_loss',0):.6f},{m.get('dircon_loss',0):.6f}\n")
+                f"{m.get('analogy_loss',0):.6f},{m.get('dircon_loss',0):.6f},"
+                f"{m.get('cluster_loss',0):.6f}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +497,34 @@ def get_direction_batch(model, tokenizer, device):
         directions = F.normalize(flat_a - flat_b, p=2, dim=-1)
         direction_groups.append(directions)
     return direction_groups
+
+
+def get_cluster_batch(model, tokenizer, device, n_groups=3, n_per_group=3):
+    """Encode cluster sentences and return within-group and between-group concepts.
+
+    Samples n_groups random clusters, n_per_group sentences each.
+    Returns (within_concepts, between_pairs) for cluster_separation_loss.
+    """
+    m = model._orig_mod if hasattr(model, '_orig_mod') else model
+    group_names = random.sample(list(GEOMETRY_CLUSTERS.keys()), min(n_groups, len(GEOMETRY_CLUSTERS)))
+    group_concepts = []
+    for name in group_names:
+        sents = random.sample(GEOMETRY_CLUSTERS[name], min(n_per_group, len(GEOMETRY_CLUSTERS[name])))
+        enc = tokenizer(sents, max_length=64, padding=True, truncation=True, return_tensors="pt").to(device)
+        concepts = m.encode(enc["input_ids"], enc["attention_mask"])
+        group_concepts.append(concepts)
+
+    # Within: each group's concepts
+    within_concepts = group_concepts
+    # Between: one random sentence from each pair of groups
+    between_pairs = []
+    for i in range(len(group_concepts)):
+        for j in range(i + 1, len(group_concepts)):
+            idx_a = random.randint(0, group_concepts[i].shape[0] - 1)
+            idx_b = random.randint(0, group_concepts[j].shape[0] - 1)
+            between_pairs.append((group_concepts[i][idx_a], group_concepts[j][idx_b]))
+
+    return within_concepts, between_pairs
 
 
 # ---------------------------------------------------------------------------
@@ -891,7 +924,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     }
 
     loss_trackers = {h: [] for h in ["en", "fr", "es", "para", "parse"]}
-    geo_trackers = {"wo": [], "hrepul": [], "brepul": [], "analogy": [], "dircon": []}
+    geo_trackers = {"wo": [], "hrepul": [], "brepul": [], "analogy": [], "dircon": [], "cluster": []}
     head_counts = {h: 0 for h in DATA_WEIGHTS}
 
     start_time = time.time()
@@ -960,6 +993,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             br_val = 0.0
             an_val = 0.0
             dc_val = 0.0
+            cl_val = 0.0
 
             if run_geo:
                 # Word-order loss: encode swap pairs, push apart
@@ -1005,6 +1039,16 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 total_loss = total_loss + geo_scale * GEO_DIRCON_WEIGHT * dc_loss
                 dc_val = dc_loss.item()
 
+                # Cluster separation: same-group close, different-group far
+                within_c, between_c = get_cluster_batch(
+                    m, en_tokenizer, device, n_groups=3, n_per_group=3)
+                cl_loss, _, _ = cluster_separation_loss(
+                    within_c, between_c,
+                    within_target=GEO_CLUSTER_WITHIN,
+                    between_target=GEO_CLUSTER_BETWEEN)
+                total_loss = total_loss + geo_scale * GEO_CLUSTER_WEIGHT * cl_loss
+                cl_val = cl_loss.item()
+
         r_val = r_loss.item()
         h_val = h_loss.item()
         loss_trackers["en"].append(r_val)
@@ -1014,6 +1058,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
         geo_trackers["brepul"].append(br_val)
         geo_trackers["analogy"].append(an_val)
         geo_trackers["dircon"].append(dc_val)
+        geo_trackers["cluster"].append(cl_val)
 
         if torch.isnan(total_loss):
             log(f"NaN loss at step {step}, skipping")
@@ -1040,7 +1085,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 avg_hr = np.mean(geo_trackers["hrepul"][-50:])
                 avg_an = np.mean(geo_trackers["analogy"][-50:])
                 avg_dc = np.mean(geo_trackers["dircon"][-50:])
-                geo_str += f" wo={avg_wo:.3f} hr={avg_hr:.3f} an={avg_an:.3f} dc={avg_dc:.3f}"
+                avg_cl = np.mean(geo_trackers["cluster"][-50:])
+                geo_str += f" wo={avg_wo:.3f} hr={avg_hr:.3f} an={avg_an:.3f} dc={avg_dc:.3f} cl={avg_cl:.3f}"
             log(f"step {step+1:>7d} [HYDRA+GEO] | en={avg_en:.4f} {hl_str} | "
                 f"em_ema={exact_match_ema:.3f} | {geo_str} | "
                 f"lr {current_lr:.2e} | {pct:.1f}%")
@@ -1112,6 +1158,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 "brepul_loss": np.mean(geo_trackers["brepul"][-50:]) if geo_trackers["brepul"] else 0,
                 "analogy_loss": np.mean(geo_trackers["analogy"][-50:]) if geo_trackers["analogy"] else 0,
                 "dircon_loss": np.mean(geo_trackers["dircon"][-50:]) if geo_trackers["dircon"] else 0,
+                "cluster_loss": np.mean(geo_trackers["cluster"][-50:]) if geo_trackers["cluster"] else 0,
             })
 
         # --- Checkpoint ---

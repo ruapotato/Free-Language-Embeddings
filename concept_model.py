@@ -1151,6 +1151,52 @@ def direction_consistency_loss(direction_groups, target_sim=0.8):
     return total_loss / n_groups, total_sim / n_groups
 
 
+def cluster_separation_loss(within_concepts, between_concepts,
+                            within_target=0.5, between_target=0.2):
+    """
+    Contrastive clustering loss: push same-group sentences together,
+    different-group sentences apart.
+
+    within_concepts: list of (N, K, D) tensors — sentences from same group
+    between_concepts: list of ((K, D), (K, D)) pairs — sentences from different groups
+    within_target: minimum pairwise sim for same-group pairs
+    between_target: maximum pairwise sim for different-group pairs
+    Returns: (loss, within_mean, between_mean)
+    """
+    within_loss = 0.0
+    within_total = 0.0
+    n_within = 0
+    for concepts in within_concepts:
+        flat = F.normalize(concepts.view(concepts.shape[0], -1), p=2, dim=-1)
+        sim = torch.mm(flat, flat.T)
+        mask = ~torch.eye(sim.shape[0], dtype=torch.bool, device=sim.device)
+        off_diag = sim[mask]
+        within_loss = within_loss + F.relu(within_target - off_diag).mean()
+        within_total += off_diag.mean().item()
+        n_within += 1
+
+    between_loss = 0.0
+    between_total = 0.0
+    n_between = 0
+    for c_a, c_b in between_concepts:
+        flat_a = F.normalize(c_a.view(1, -1), p=2, dim=-1)
+        flat_b = F.normalize(c_b.view(1, -1), p=2, dim=-1)
+        sim = (flat_a * flat_b).sum()
+        between_loss = between_loss + F.relu(sim - between_target)
+        between_total += sim.item()
+        n_between += 1
+
+    loss = torch.tensor(0.0, device=within_concepts[0].device, requires_grad=True)
+    if n_within > 0:
+        loss = loss + within_loss / n_within
+    if n_between > 0:
+        loss = loss + between_loss / n_between
+
+    w_mean = within_total / max(n_within, 1)
+    b_mean = between_total / max(n_between, 1)
+    return loss, w_mean, b_mean
+
+
 def per_slot_paraphrase_loss(concepts_a, concepts_b):
     """
     Per-slot paraphrase consistency on REAL text pairs.
