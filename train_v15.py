@@ -804,9 +804,12 @@ def train(resume_from=None, fresh=False, eval_only=False):
     en_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     fr_tokenizer = AutoTokenizer.from_pretrained("camembert-base")
     es_tokenizer = AutoTokenizer.from_pretrained("dccuchile/bert-base-spanish-wwm-uncased")
-    en_tok_eval = AutoTokenizer.from_pretrained("bert-base-uncased")
-    fr_tok_eval = AutoTokenizer.from_pretrained("camembert-base")
-    es_tok_eval = AutoTokenizer.from_pretrained("dccuchile/bert-base-spanish-wwm-uncased")
+    en_tok_eval  = AutoTokenizer.from_pretrained("bert-base-uncased")
+    fr_tok_eval  = AutoTokenizer.from_pretrained("camembert-base")
+    es_tok_eval  = AutoTokenizer.from_pretrained("dccuchile/bert-base-spanish-wwm-uncased")
+    # Separate instance for geo loss functions — avoids "Already borrowed" from
+    # concurrent fast-tokenizer use between the prefetch thread and main loop.
+    geo_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
     log(f"EN tokenizer: vocab={en_tokenizer.vocab_size}")
     log(f"FR tokenizer: vocab={fr_tokenizer.vocab_size}")
@@ -998,7 +1001,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             if run_geo:
                 # Word-order loss: encode swap pairs, push apart
                 wo_orig_ids, wo_orig_mask, wo_swap_ids, wo_swap_mask = \
-                    get_word_order_batch(en_tokenizer, device, batch_size=16)
+                    get_word_order_batch(geo_tokenizer, device, batch_size=16)
                 c_orig = m.encode(wo_orig_ids, wo_orig_mask)
                 c_swap = m.encode(wo_swap_ids, wo_swap_mask)
                 wo_loss, _ = margin_word_order_loss(c_orig, c_swap,
@@ -1022,7 +1025,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 # Analogy preservation: a - b + c ≈ d
                 an_a_ids, an_a_mask, an_b_ids, an_b_mask, \
                     an_c_ids, an_c_mask, an_d_ids, an_d_mask = \
-                    get_analogy_batch(en_tokenizer, device, batch_size=6)
+                    get_analogy_batch(geo_tokenizer, device, batch_size=6)
                 c_a = m.encode(an_a_ids, an_a_mask)
                 c_b = m.encode(an_b_ids, an_b_mask)
                 c_c = m.encode(an_c_ids, an_c_mask)
@@ -1033,7 +1036,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 an_val = an_loss.item()
 
                 # Direction consistency: same attribute = same direction
-                dir_groups = get_direction_batch(m, en_tokenizer, device)
+                dir_groups = get_direction_batch(m, geo_tokenizer, device)
                 dc_loss, _ = direction_consistency_loss(dir_groups,
                                                         target_sim=GEO_DIRCON_TARGET)
                 total_loss = total_loss + geo_scale * GEO_DIRCON_WEIGHT * dc_loss
@@ -1041,7 +1044,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
                 # Cluster separation: same-group close, different-group far
                 within_c, between_c = get_cluster_batch(
-                    m, en_tokenizer, device, n_groups=3, n_per_group=3)
+                    m, geo_tokenizer, device, n_groups=3, n_per_group=3)
                 cl_loss, _, _ = cluster_separation_loss(
                     within_c, between_c,
                     within_target=GEO_CLUSTER_WITHIN,
