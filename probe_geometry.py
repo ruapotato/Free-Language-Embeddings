@@ -15,11 +15,15 @@ import torch.nn.functional as F
 import numpy as np
 from transformers import BertTokenizerFast
 from concept_model import (ConceptAutoencoder, ConceptAutoencoderV10,
+                           ConceptAutoencoderV13, ConceptAutoencoderV14,
                            ConceptConfig, flat_similarity_matrix)
 
 import os
 CKPT = None
-for candidate in ["checkpoints/concept_v11/latest.pt",
+for candidate in ["checkpoints/concept_v15/latest.pt",
+                   "checkpoints/concept_v14/latest.pt",
+                   "checkpoints/concept_v13/latest.pt",
+                   "checkpoints/concept_v11/latest.pt",
                    "checkpoints/concept_v11/step_600000.pt",
                    "checkpoints/concept_v10/latest.pt",
                    "checkpoints/concept_v9/latest.pt"]:
@@ -39,7 +43,14 @@ def load_model():
     ckpt = torch.load(CKPT, map_location=DEVICE, weights_only=False)
     config = ConceptConfig(**ckpt["config"])
     version = ckpt.get("version", "")
-    if version == "v10" or "par_dec_layers" in str(list(ckpt["model_state_dict"].keys())):
+    keys_str = str(list(ckpt["model_state_dict"].keys()))
+    if version == "v14" or "es_dec_layers" in keys_str:
+        print("  Model: ConceptAutoencoderV14 (Hydra — 5 decoder heads)")
+        model = ConceptAutoencoderV14(config)
+    elif version == "v13" or "fr_dec_layers.0.self_attn.q_proj.weight" in ckpt["model_state_dict"]:
+        print("  Model: ConceptAutoencoderV13 (dual decoder EN+FR)")
+        model = ConceptAutoencoderV13(config)
+    elif version == "v10" or "par_dec_layers" in keys_str:
         print("  Model: ConceptAutoencoderV10 (parallel decoder)")
         model = ConceptAutoencoderV10(config)
     else:
@@ -74,23 +85,24 @@ def slot_cosine(a, b):
 def reconstruct_batch(model, tokenizer, texts):
     """Encode and decode a batch of texts, return list of decoded strings.
 
-    Batching is important: the parallel decoder's position queries are
-    sensitive to seq_len, so we need consistent padding across the batch
-    (matching how training works).
+    For parallel decoders (V10, V13): decode one-at-a-time to avoid seq_len
+    padding mismatch — the decoder is very sensitive to position query length.
     """
-    enc = tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors="pt")
-    is_v10 = isinstance(model, ConceptAutoencoderV10)
+    is_v10 = isinstance(model, (ConceptAutoencoderV10, ConceptAutoencoderV13, ConceptAutoencoderV14))
     results = []
     with torch.no_grad():
-        concepts = model.encode(enc["input_ids"], enc["attention_mask"])
         if is_v10:
-            logits = model.decode_parallel(concepts, seq_len=enc["input_ids"].shape[1])
-            predicted = logits.argmax(dim=-1)
-            for i in range(len(texts)):
-                mask = enc["attention_mask"][i].bool()
-                pred = predicted[i][mask]
+            for text in texts:
+                enc = tokenizer([text], padding=True, truncation=True, max_length=128, return_tensors="pt")
+                concepts = model.encode(enc["input_ids"], enc["attention_mask"])
+                logits = model.decode_parallel(concepts, seq_len=enc["input_ids"].shape[1])
+                predicted = logits.argmax(dim=-1)
+                mask = enc["attention_mask"][0].bool()
+                pred = predicted[0][mask]
                 results.append(tokenizer.decode(pred, skip_special_tokens=True))
         else:
+            enc = tokenizer(texts, padding=True, truncation=True, max_length=128, return_tensors="pt")
+            concepts = model.encode(enc["input_ids"], enc["attention_mask"])
             for i in range(len(texts)):
                 bos_id = tokenizer.cls_token_id or 101
                 generated = [bos_id]
@@ -364,6 +376,106 @@ def main():
     print(f"\n  PERFECT: {perfect}/{total} ({perfect/total:.0%})")
     print(f"  ≥90%:   {perfect + high}/{total} ({(perfect + high)/total:.0%})")
     print(f"  AVG OVERLAP: {avg_recon:.3f}")
+
+    # ================================================================
+    # 4b. FR TRANSLATION (V13/V14)
+    # ================================================================
+    if isinstance(model, (ConceptAutoencoderV13, ConceptAutoencoderV14)):
+        print("\n" + "=" * 60)
+        print("4b. FR TRANSLATION")
+        print("=" * 60)
+        from transformers import CamembertTokenizerFast
+        fr_tokenizer = CamembertTokenizerFast.from_pretrained("camembert-base")
+
+        fr_tests = [
+            ("The vote will take place tomorrow", "Le vote aura lieu demain"),
+            ("I would like to thank the Commission", "Je voudrais remercier la Commission"),
+            ("The situation is very serious", "La situation est très grave"),
+            ("We need to find a solution", "Nous devons trouver une solution"),
+            ("The cat sat on the mat", "Le chat s'est assis sur le tapis"),
+            ("She runs every morning", "Elle court chaque matin"),
+            ("He is not happy today", "Il n'est pas content aujourd'hui"),
+            ("The big red car drove quickly", "La grande voiture rouge a roulé vite"),
+        ]
+
+        decode_fr = model.decode_fr if isinstance(model, ConceptAutoencoderV14) else model.decode_parallel_fr
+        for en, ref_fr in fr_tests:
+            enc_en = tokenizer([en], padding=True, truncation=True, max_length=128, return_tensors="pt")
+            ref_enc = fr_tokenizer([ref_fr], padding=True, truncation=True, max_length=128, return_tensors="pt")
+            fr_seq_len = ref_enc["input_ids"].shape[1]
+            with torch.no_grad():
+                concepts = model.encode(enc_en["input_ids"], enc_en["attention_mask"])
+                fr_logits = decode_fr(concepts, seq_len=fr_seq_len)
+                fr_predicted = fr_logits.argmax(dim=-1)
+                decoded_fr = fr_tokenizer.decode(fr_predicted[0], skip_special_tokens=True)
+            print(f"  EN:  {en}")
+            print(f"  FR:  {decoded_fr}")
+            print(f"  ref: {ref_fr}")
+            print()
+
+    # ================================================================
+    # 4c. ES TRANSLATION (V14 only)
+    # ================================================================
+    if isinstance(model, ConceptAutoencoderV14):
+        print("\n" + "=" * 60)
+        print("4c. ES TRANSLATION")
+        print("=" * 60)
+        from transformers import AutoTokenizer
+        es_tokenizer = AutoTokenizer.from_pretrained("dccuchile/bert-base-spanish-wwm-uncased")
+
+        es_tests = [
+            ("The vote will take place tomorrow", "La votación tendrá lugar mañana"),
+            ("The situation is very serious", "La situación es muy grave"),
+            ("The cat sat on the mat", "El gato se sentó en la alfombra"),
+            ("She runs every morning", "Ella corre cada mañana"),
+            ("He is not happy today", "Él no está contento hoy"),
+            ("We need to find a solution", "Necesitamos encontrar una solución"),
+        ]
+
+        for en, ref_es in es_tests:
+            enc_en = tokenizer([en], padding=True, truncation=True, max_length=128, return_tensors="pt")
+            ref_enc = es_tokenizer([ref_es], padding=True, truncation=True, max_length=128, return_tensors="pt")
+            es_seq_len = ref_enc["input_ids"].shape[1]
+            with torch.no_grad():
+                concepts = model.encode(enc_en["input_ids"], enc_en["attention_mask"])
+                es_logits = model.decode_es(concepts, seq_len=es_seq_len)
+                es_predicted = es_logits.argmax(dim=-1)
+                decoded_es = es_tokenizer.decode(es_predicted[0], skip_special_tokens=True)
+            print(f"  EN:  {en}")
+            print(f"  ES:  {decoded_es}")
+            print(f"  ref: {ref_es}")
+            print()
+
+    # ================================================================
+    # 4d. SEMANTIC PARSE (V14 only)
+    # ================================================================
+    if isinstance(model, ConceptAutoencoderV14):
+        print("\n" + "=" * 60)
+        print("4d. SEMANTIC PARSE")
+        print("=" * 60)
+
+        parse_tests = [
+            ("the dog bit the man", "subject : the dog | action : bite | object : the man"),
+            ("she runs every morning", "subject : she | action : run | location : every morning"),
+            ("he did not enjoy the movie", "subject : he | action : enjoy | negation : true | object : the movie"),
+            ("the cat chased the mouse quickly", "subject : the cat | action : chase | object : the mouse | manner : quickly"),
+            ("alice likes bob", "subject : alice | action : like | object : bob"),
+            ("the big red car drove north", "subject : the big red car | action : drive | direction : north"),
+        ]
+
+        for en, ref_parse in parse_tests:
+            enc_en = tokenizer([en], padding=True, truncation=True, max_length=128, return_tensors="pt")
+            ref_enc = tokenizer([ref_parse], padding=True, truncation=True, max_length=128, return_tensors="pt")
+            parse_seq_len = ref_enc["input_ids"].shape[1]
+            with torch.no_grad():
+                concepts = model.encode(enc_en["input_ids"], enc_en["attention_mask"])
+                parse_logits = model.decode_parse(concepts, seq_len=parse_seq_len)
+                parse_predicted = parse_logits.argmax(dim=-1)
+                decoded_parse = tokenizer.decode(parse_predicted[0], skip_special_tokens=True)
+            print(f"  EN:    {en}")
+            print(f"  Parse: {decoded_parse}")
+            print(f"  ref:   {ref_parse}")
+            print()
 
     # ================================================================
     # 5. WORD ORDER SENSITIVITY

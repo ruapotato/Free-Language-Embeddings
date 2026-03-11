@@ -30,6 +30,36 @@ def parse_step_data(log_path):
     rows = []
     with open(log_path) as f:
         for line in f:
+            # V14/V15 HYDRA format: step N [HYDRA] or [HYDRA+GEO] | en=X fr=X es=X para=X parse=X | ...
+            if "step" in line and "[HYDRA" in line:
+                try:
+                    def grab(pattern, text, default=0.0):
+                        m = re.search(pattern, text)
+                        return float(m.group(1)) if m else default
+
+                    step_str = line.split("step")[1].split("[")[0].strip()
+                    step = int(re.search(r"(\d+)", step_str).group(1))
+                    row = {
+                        "step": step,
+                        "recon": grab(r"en=([\d.]+)", line),
+                        "em_ema": grab(r"em_ema=([\d.]+)", line),
+                        "lr": grab(r"lr ([\d.eE+-]+)", line),
+                        "progress": grab(r"([\d.]+)%", line),
+                        "fr_loss": grab(r"fr=([\d.]+)", line),
+                        "es_loss": grab(r"es=([\d.]+)", line),
+                        "para_loss": grab(r"para=([\d.]+)", line),
+                        "parse_loss": grab(r"parse=([\d.]+)", line),
+                    }
+                    # V15: geo scale and geo losses
+                    geo_val = grab(r"geo=([\d.]+)", line, default=None)
+                    if geo_val is not None:
+                        row["geo_gate"] = geo_val
+                    row["total_loss"] = row["recon"] + row["fr_loss"]
+                    rows.append(row)
+                except (ValueError, IndexError, AttributeError):
+                    pass
+                continue
+
             if "step" in line and "loss" in line and "recon=" in line:
                 try:
                     parts = line.split("|")
@@ -119,9 +149,12 @@ def parse_eval_data(log_path):
     current_eval = None
     with open(log_path) as f:
         for line in f:
-            if "step" in line and "loss" in line and "recon=" in line:
+            if ("step" in line and "loss" in line and "recon=" in line) or \
+               ("step" in line and "[HYDRA]" in line):
                 try:
                     step_str = line.split("|")[0].split("step")[1].strip()
+                    # Strip [HYDRA] tag if present
+                    step_str = step_str.split("[")[0].strip()
                     last_step = int(re.search(r"(\d+)", step_str).group(1))
                 except (ValueError, IndexError, AttributeError):
                     pass
@@ -178,12 +211,24 @@ def parse_eval_data(log_path):
                     m = re.search(rf"{key}=(\d+)", line)
                     if m:
                         current_eval[key] = int(m.group(1))
-            # V13 FR eval: "FR EVAL: token_acc=X"
+            # V13/V14 FR eval: "FR EVAL: token_acc=X"
             if "FR EVAL:" in line and "token_acc=" in line:
                 current_eval = current_eval or {"step": last_step}
                 m = re.search(r"token_acc=([\d.]+)", line)
                 if m:
                     current_eval["fr_token_acc"] = float(m.group(1))
+            # V14 ES eval: "ES EVAL: token_acc=X"
+            if "ES EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["es_token_acc"] = float(m.group(1))
+            # V14 Parse eval: "PARSE EVAL: token_acc=X"
+            if "PARSE EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["parse_token_acc"] = float(m.group(1))
             if "SLOT_STATS:" in line:
                 current_eval = current_eval or {"step": last_step}
                 slot_isos = {}
@@ -200,9 +245,11 @@ def parse_eval_data(log_path):
                     wm = re.search(rf"{bucket}=([\d.]+)", line)
                     if wm:
                         current_eval[f"dw_{bucket}"] = float(wm.group(1))
-            # Flush eval when we hit the next step line (not on [DIFF]/[OK] which are part of the eval block)
-            if current_eval and ("step" in line and "loss" in line and "recon=" in line
-                                 and current_eval["step"] != last_step):
+            # Flush eval when we hit the next step line
+            if current_eval and (
+                (("step" in line and "loss" in line and "recon=" in line) or
+                 ("step" in line and "[HYDRA]" in line))
+                and current_eval["step"] != last_step):
                 rows.append(current_eval)
                 current_eval = None
     if current_eval:
@@ -222,17 +269,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v13"
+    return "v14"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -715,10 +762,20 @@ function updateDashboard(response) {
 
     // 1. Reconstruction Loss (comparison clipped to current max step)
     const reconDs = [ds('EN Recon', ema(steps.map(d => d.recon), sw), C.recon)];
-    // V13: FR translation loss
+    // V13+: FR translation loss
     const frLossVals = steps.map(d => d.fr_loss || 0);
     if (frLossVals.some(v => v > 0))
         reconDs.push(ds('FR Trans', ema(frLossVals, sw), '#ab47bc'));
+    // V14: ES, Para, Parse losses
+    const esLossVals = steps.map(d => d.es_loss || 0);
+    if (esLossVals.some(v => v > 0))
+        reconDs.push(ds('ES Trans', ema(esLossVals, sw), '#ff7043'));
+    const paraLossVals = steps.map(d => d.para_loss || 0);
+    if (paraLossVals.some(v => v > 0))
+        reconDs.push(ds('Paraphrase', ema(paraLossVals, sw), '#26a69a'));
+    const parseLossVals = steps.map(d => d.parse_loss || 0);
+    if (parseLossVals.some(v => v > 0))
+        reconDs.push(ds('Parse', ema(parseLossVals, sw), '#ffa726'));
     if (hasCmp && clippedCmpSteps.length) reconDs.push(cmpDs('Recon' + cmpLabel,
         ema(clippedCmpSteps.map(d => d.recon), ccw), C.cmpRecon));
     // Geo gate on right axis (0-1 scale)
@@ -731,12 +788,15 @@ function updateDashboard(response) {
             if (hasCmp && clippedCmpSteps.length && !d.label.includes('Geo Gate')) {
                 const ml = mergedLabels(s, ccs);
                 const isCmp = hasCmp && cmpLabel && d.label.includes(cmpLabel);
-                const srcSteps = isCmp ? ccs : s;
-                const raw = isCmp
-                    ? ema(clippedCmpSteps.map(x => x.recon), ccw)
-                    : ema(steps.map(x => x.recon), sw);
-                const map = {}; srcSteps.forEach((st, i) => map[st] = raw[i]);
-                d.data = ml.map(st => map[st] != null ? map[st] : null);
+                if (isCmp) {
+                    const raw = ema(clippedCmpSteps.map(x => x.recon), ccw);
+                    const map = {}; ccs.forEach((st, i) => map[st] = raw[i]);
+                    d.data = ml.map(st => map[st] != null ? map[st] : null);
+                } else {
+                    // Re-align existing data to merged labels
+                    const map = {}; s.forEach((st, i) => map[st] = d.data[i]);
+                    d.data = ml.map(st => map[st] != null ? map[st] : null);
+                }
                 d.spanGaps = true;
             }
             return d;
@@ -1205,6 +1265,10 @@ function updateDashboard(response) {
     };
 
     const hasFr = latest.fr_loss > 0 || (le.fr_token_acc != null);
+    const hasEs = latest.es_loss > 0 || (le.es_token_acc != null);
+    const hasPara = latest.para_loss > 0;
+    const hasParse = latest.parse_loss > 0;
+    const isHydra = hasEs || hasPara || hasParse;
 
     let html = `<span class="value">flm (${run.toUpperCase()})</span>`;
     if (hasCmp) html += `  <span class="label">vs ${compare_run}</span>`;
@@ -1213,8 +1277,38 @@ function updateDashboard(response) {
     html += `  <span class="label">LR:</span> <span class="value">${(latest.lr || 0).toExponential(2)}</span>`;
     html += `  <span class="label">Progress:</span> <span class="value">${(latest.progress || 0).toFixed(1)}%</span>\n`;
 
-    // --- EN Recon + FR Translation side by side ---
-    if (hasFr) {
+    // --- V14 Hydra: all 5 heads ---
+    if (isHydra) {
+        html += `\n<span class="label"> ── Decoder Heads ──────────────────────</span>\n`;
+        // EN Recon
+        html += `<span class="label"> EN Recon:</span>   <span class="value">${fmt(latest.recon, 4)}</span>`;
+        if (le.token_acc != null) html += `  tok <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>`;
+        if (le.exact_match != null) html += `  em <span class="${rating(le.exact_match, 0.9, 0.5)}">${pct(le.exact_match)}</span>`;
+        html += `\n`;
+        // FR Trans
+        if (hasFr) {
+            html += `<span class="label"> FR Trans:</span>   <span class="value">${fmt(latest.fr_loss, 4)}</span>`;
+            if (le.fr_token_acc != null) html += `  tok <span class="${rating(le.fr_token_acc, 0.5, 0.2)}">${pct(le.fr_token_acc)}</span>`;
+            html += `\n`;
+        }
+        // ES Trans
+        if (hasEs) {
+            html += `<span class="label"> ES Trans:</span>   <span class="value">${fmt(latest.es_loss, 4)}</span>`;
+            if (le.es_token_acc != null) html += `  tok <span class="${rating(le.es_token_acc, 0.5, 0.2)}">${pct(le.es_token_acc)}</span>`;
+            html += `\n`;
+        }
+        // Paraphrase
+        if (hasPara) {
+            html += `<span class="label"> Paraphrase:</span> <span class="value">${fmt(latest.para_loss, 4)}</span>\n`;
+        }
+        // Parse
+        if (hasParse) {
+            html += `<span class="label"> Parse:</span>      <span class="value">${fmt(latest.parse_loss, 4)}</span>`;
+            if (le.parse_token_acc != null) html += `  tok <span class="${rating(le.parse_token_acc, 0.5, 0.2)}">${pct(le.parse_token_acc)}</span>`;
+            html += `\n`;
+        }
+        html += `<span class="label"> EM EMA:</span>  <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
+    } else if (hasFr) {
         html += `\n<span class="label">           EN Recon        FR Translation</span>\n`;
         html += `<span class="label"> Loss:</span>    <span class="value">${fmt(latest.recon, 4).padEnd(16)}</span>`;
         html += `  <span class="value">${fmt(latest.fr_loss, 4)}</span>\n`;
@@ -1296,7 +1390,12 @@ function updateDashboard(response) {
         if (isV10) {
             const emEma = latest.em_ema || 0;
             const progress = latest.progress || 0;
-            if (hasFr) {
+            if (isHydra) {
+                phaseText = 'Hydra (5 Heads)';
+                phaseColor = '#ff7043';
+                const heads = ['EN', hasFr ? 'FR' : '', hasEs ? 'ES' : '', hasPara ? 'Para' : '', hasParse ? 'Parse' : ''].filter(Boolean).join('+');
+                detailText = `${heads} | EN: ${fmt(latest.recon, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
+            } else if (hasFr) {
                 phaseText = 'Dual Decoder (EN + FR)';
                 phaseColor = '#ab47bc';
                 detailText = `EN recon: ${fmt(latest.recon, 3)} | FR trans: ${fmt(latest.fr_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
