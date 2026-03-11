@@ -6,10 +6,12 @@ Key changes from V14:
   - Same 5 parallel decoder heads (EN, FR, ES, Para, Parse)
   - GEOMETRY LOSSES RESTORED from V7-V9:
     - margin_word_order_loss: push word-order swaps below target similarity
-    - hard_repulsion_loss: push apart most-similar unrelated pairs
-    - batch_repulsion_loss: prevent global similarity collapse
+    - hard_repulsion_loss: push apart most-similar unrelated pairs (weight 3.0→1.0)
+    - batch_repulsion_loss: prevent global similarity collapse (weight 1.0→0.3)
+    - analogy_loss (NEW): reward a-b+c≈d structure (weight 2.0, target sim 0.9)
   - Recon-gated: geometry losses only activate after EN recon EM EMA > 0.5
   - Dynamic loss weighting: learned log-variance per head (uncertainty weighting)
+  - Repulsion weights lowered mid-run to preserve analogy structure
 
 V7-V9 proved geometry losses work for word order (wo_sim 0.89-0.81) but had poor
 reconstruction (autoregressive decoder). V10-V14 proved parallel decoder gets great
@@ -40,7 +42,8 @@ from concept_model import (ConceptConfig, ConceptAutoencoderV14,
                            reconstruction_loss, translation_loss,
                            flat_similarity_matrix,
                            margin_word_order_loss,
-                           hard_repulsion_loss, batch_repulsion_loss)
+                           hard_repulsion_loss, batch_repulsion_loss,
+                           analogy_loss, direction_consistency_loss)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -90,10 +93,14 @@ GEO_GATE_THRESHOLD = 0.5   # EN EM EMA must exceed this to enable geo losses
 GEO_RAMP_STEPS = 5000      # ramp geo weight from 0→1 over this many steps after gate opens
 GEO_WO_WEIGHT = 2.0        # margin word order loss weight
 GEO_WO_TARGET = 0.5        # target: wo pairs should have sim < 0.5
-GEO_HREPUL_WEIGHT = 3.0    # hard repulsion weight
+GEO_HREPUL_WEIGHT = 1.0    # hard repulsion weight (was 3.0, lowered to preserve analogy)
 GEO_HREPUL_TARGET = 0.1    # target: worst pairs should have sim < 0.1
-GEO_BREPUL_WEIGHT = 1.0    # batch repulsion weight
+GEO_BREPUL_WEIGHT = 0.3    # batch repulsion weight (was 1.0, lowered to preserve analogy)
 GEO_BREPUL_TARGET = 0.3    # target: random pairs should have sim < 0.3
+GEO_ANALOGY_WEIGHT = 2.0   # analogy preservation weight
+GEO_ANALOGY_TARGET = 0.9   # target: a-b+c should have sim > 0.9 with d
+GEO_DIRCON_WEIGHT = 1.5    # direction consistency weight
+GEO_DIRCON_TARGET = 0.8    # target: same-attribute directions should have sim > 0.8
 
 # EMA tracking
 EXACT_MATCH_EMA_DECAY = 0.99
@@ -252,7 +259,7 @@ METRICS_HEADER = ("timestamp,step,recon_loss,token_acc,exact_match,em_ema,"
                   "word_order_sim,effective_rank90,effective_rank95,"
                   "fr_loss,fr_token_acc,es_loss,es_token_acc,"
                   "para_loss,para_token_acc,parse_loss,parse_token_acc,"
-                  "geo_scale,wo_loss,hrepul_loss,brepul_loss\n")
+                  "geo_scale,wo_loss,hrepul_loss,brepul_loss,analogy_loss,dircon_loss\n")
 
 
 def log_metrics(step, metrics):
@@ -280,7 +287,8 @@ def log_metrics(step, metrics):
                 f"{m.get('para_loss',0):.6f},{m.get('para_token_acc',0):.4f},"
                 f"{m.get('parse_loss',0):.6f},{m.get('parse_token_acc',0):.4f},"
                 f"{m.get('geo_scale',0):.4f},{m.get('wo_loss',0):.6f},"
-                f"{m.get('hrepul_loss',0):.6f},{m.get('brepul_loss',0):.6f}\n")
+                f"{m.get('hrepul_loss',0):.6f},{m.get('brepul_loss',0):.6f},"
+                f"{m.get('analogy_loss',0):.6f},{m.get('dircon_loss',0):.6f}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +449,48 @@ def get_word_order_batch(tokenizer, device, batch_size=16):
                          truncation=True, return_tensors="pt")
     return (orig_enc["input_ids"].to(device), orig_enc["attention_mask"].to(device),
             swap_enc["input_ids"].to(device), swap_enc["attention_mask"].to(device))
+
+
+def get_analogy_batch(tokenizer, device, batch_size=6):
+    """Get a batch of analogy quads (a, b, c, d) for analogy loss."""
+    indices = [random.randint(0, len(GEOMETRY_ANALOGIES) - 1)
+               for _ in range(batch_size)]
+    a_texts = [GEOMETRY_ANALOGIES[i][0] for i in indices]
+    b_texts = [GEOMETRY_ANALOGIES[i][1] for i in indices]
+    c_texts = [GEOMETRY_ANALOGIES[i][2] for i in indices]
+    d_texts = [GEOMETRY_ANALOGIES[i][3] for i in indices]
+
+    a_enc = tokenizer(a_texts, max_length=64, padding=True, truncation=True, return_tensors="pt")
+    b_enc = tokenizer(b_texts, max_length=64, padding=True, truncation=True, return_tensors="pt")
+    c_enc = tokenizer(c_texts, max_length=64, padding=True, truncation=True, return_tensors="pt")
+    d_enc = tokenizer(d_texts, max_length=64, padding=True, truncation=True, return_tensors="pt")
+    return (a_enc["input_ids"].to(device), a_enc["attention_mask"].to(device),
+            b_enc["input_ids"].to(device), b_enc["attention_mask"].to(device),
+            c_enc["input_ids"].to(device), c_enc["attention_mask"].to(device),
+            d_enc["input_ids"].to(device), d_enc["attention_mask"].to(device))
+
+
+def get_direction_batch(model, tokenizer, device):
+    """Encode all direction pairs and return normalized direction vectors grouped by attribute.
+
+    Returns list of (N_pairs, flat_dim) tensors, one per attribute.
+    """
+    m = model._orig_mod if hasattr(model, '_orig_mod') else model
+    direction_groups = []
+    for attr_name, pairs in GEOMETRY_DIRECTIONS.items():
+        # Sample 3 pairs per attribute to keep compute reasonable
+        sampled = random.sample(pairs, min(3, len(pairs)))
+        a_texts = [p[0] for p in sampled]
+        b_texts = [p[1] for p in sampled]
+        a_enc = tokenizer(a_texts, max_length=64, padding=True, truncation=True, return_tensors="pt").to(device)
+        b_enc = tokenizer(b_texts, max_length=64, padding=True, truncation=True, return_tensors="pt").to(device)
+        c_a = m.encode(a_enc["input_ids"], a_enc["attention_mask"])
+        c_b = m.encode(b_enc["input_ids"], b_enc["attention_mask"])
+        flat_a = c_a.view(c_a.shape[0], -1)
+        flat_b = c_b.view(c_b.shape[0], -1)
+        directions = F.normalize(flat_a - flat_b, p=2, dim=-1)
+        direction_groups.append(directions)
+    return direction_groups
 
 
 # ---------------------------------------------------------------------------
@@ -840,7 +890,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     }
 
     loss_trackers = {h: [] for h in ["en", "fr", "es", "para", "parse"]}
-    geo_trackers = {"wo": [], "hrepul": [], "brepul": []}
+    geo_trackers = {"wo": [], "hrepul": [], "brepul": [], "analogy": [], "dircon": []}
     head_counts = {h: 0 for h in DATA_WEIGHTS}
 
     start_time = time.time()
@@ -906,6 +956,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
             wo_val = 0.0
             hr_val = 0.0
             br_val = 0.0
+            an_val = 0.0
+            dc_val = 0.0
 
             if geo_scale > 0:
                 # Word-order loss: encode swap pairs, push apart
@@ -931,6 +983,26 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 total_loss = total_loss + geo_scale * GEO_BREPUL_WEIGHT * br_loss
                 br_val = br_loss.item()
 
+                # Analogy preservation: a - b + c ≈ d
+                an_a_ids, an_a_mask, an_b_ids, an_b_mask, \
+                    an_c_ids, an_c_mask, an_d_ids, an_d_mask = \
+                    get_analogy_batch(en_tokenizer, device, batch_size=6)
+                c_a = m.encode(an_a_ids, an_a_mask)
+                c_b = m.encode(an_b_ids, an_b_mask)
+                c_c = m.encode(an_c_ids, an_c_mask)
+                c_d = m.encode(an_d_ids, an_d_mask)
+                an_loss, _ = analogy_loss(c_a, c_b, c_c, c_d,
+                                          target_sim=GEO_ANALOGY_TARGET)
+                total_loss = total_loss + geo_scale * GEO_ANALOGY_WEIGHT * an_loss
+                an_val = an_loss.item()
+
+                # Direction consistency: same attribute = same direction
+                dir_groups = get_direction_batch(m, en_tokenizer, device)
+                dc_loss, _ = direction_consistency_loss(dir_groups,
+                                                        target_sim=GEO_DIRCON_TARGET)
+                total_loss = total_loss + geo_scale * GEO_DIRCON_WEIGHT * dc_loss
+                dc_val = dc_loss.item()
+
         r_val = r_loss.item()
         h_val = h_loss.item()
         loss_trackers["en"].append(r_val)
@@ -938,6 +1010,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
         geo_trackers["wo"].append(wo_val)
         geo_trackers["hrepul"].append(hr_val)
         geo_trackers["brepul"].append(br_val)
+        geo_trackers["analogy"].append(an_val)
+        geo_trackers["dircon"].append(dc_val)
 
         if torch.isnan(total_loss):
             log(f"NaN loss at step {step}, skipping")
@@ -962,7 +1036,9 @@ def train(resume_from=None, fresh=False, eval_only=False):
             if geo_scale > 0:
                 avg_wo = np.mean(geo_trackers["wo"][-50:])
                 avg_hr = np.mean(geo_trackers["hrepul"][-50:])
-                geo_str += f" wo={avg_wo:.3f} hr={avg_hr:.3f}"
+                avg_an = np.mean(geo_trackers["analogy"][-50:])
+                avg_dc = np.mean(geo_trackers["dircon"][-50:])
+                geo_str += f" wo={avg_wo:.3f} hr={avg_hr:.3f} an={avg_an:.3f} dc={avg_dc:.3f}"
             log(f"step {step+1:>7d} [HYDRA+GEO] | en={avg_en:.4f} {hl_str} | "
                 f"em_ema={exact_match_ema:.3f} | {geo_str} | "
                 f"lr {current_lr:.2e} | {pct:.1f}%")
@@ -1032,6 +1108,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 "wo_loss": np.mean(geo_trackers["wo"][-50:]) if geo_trackers["wo"] else 0,
                 "hrepul_loss": np.mean(geo_trackers["hrepul"][-50:]) if geo_trackers["hrepul"] else 0,
                 "brepul_loss": np.mean(geo_trackers["brepul"][-50:]) if geo_trackers["brepul"] else 0,
+                "analogy_loss": np.mean(geo_trackers["analogy"][-50:]) if geo_trackers["analogy"] else 0,
+                "dircon_loss": np.mean(geo_trackers["dircon"][-50:]) if geo_trackers["dircon"] else 0,
             })
 
         # --- Checkpoint ---

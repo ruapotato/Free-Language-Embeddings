@@ -463,39 +463,50 @@ body {
 <summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0;font-size:14px">&#9encyclop; Reference Guide (click to expand)</summary>
 
 <div style="padding:12px 0">
-<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V13 — Dual Decoder)</h4>
+<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V15 — Hydra + Geometry)</h4>
 <p style="color:#bbb;margin:0 0 8px">
-The model compresses English text into <b>32 concept slots</b> (each a 32-dimensional vector, 1024 dims total).
-Two <b>non-autoregressive parallel decoders</b> share the same concept bottleneck:
-(1) <b>EN decoder</b> reconstructs the original English, (2) <b>FR decoder</b> translates to French.
+The model compresses English text into <b>32 concept slots</b> (each a 16-dimensional vector, <b>512 dims total</b>).
+Five <b>non-autoregressive parallel decoders</b> share the same concept bottleneck:
+(1) <b>EN</b> reconstruction, (2) <b>FR</b> translation, (3) <b>ES</b> translation,
+(4) <b>Paraphrase</b>, (5) <b>Semantic Parse</b>.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-<b>V13 key idea:</b> The French decoder forces <b>language-independent meaning encoding</b> &mdash;
-concepts can&rsquo;t just store English surface tokens because the FR decoder needs actual meaning to produce French.
-Word order differs between languages, so the bottleneck must capture structure, not just bags of words.
+<b>V15 key idea:</b> Combines V14&rsquo;s multi-head decoder (good for clustering/direction) with
+V7&ndash;V9&rsquo;s geometry losses (good for word order). V10&ndash;V14 never improved word order sim below 0.93
+because reconstruction alone doesn&rsquo;t penalize similar embeddings for different word orders.
+Geometry losses are <b>recon-gated</b> &mdash; they only activate once EM EMA &gt; 0.5, then ramp up over 5K steps.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-Trains on <b>3.2M EN&harr;FR translation pairs</b> (Europarl + Tatoeba + WikiMatrix, all DFSG-compliant).
-Every step trains both decoders: EN reconstruction + FR translation from the same pairs.
+Trains on <b>3.2M EN&harr;FR + EN&harr;ES pairs</b> (Europarl + Tatoeba + WikiMatrix) plus
+paraphrase pairs (MRPC/QQP) and semantic parse pairs (custom grammar).
+Each step: EN recon + one sampled secondary head (25% each) + geometry losses (when gated on).
 </p>
 
 <h4 style="color:#ffa726;margin:12px 0 6px">Training Setup</h4>
 <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:8px">
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Architecture</td>
-  <td style="padding:4px 8px">82.8M params &mdash; EN encoder (6L) + bottleneck (32&times;32=1024d) + EN decoder (6L) + FR decoder (6L)</td>
+  <td style="padding:4px 8px">~95M params &mdash; EN encoder (6L&times;384d) + bottleneck (32&times;16=512d) + 5 decoders (4L&times;384d each)</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Schedule</td>
-  <td style="padding:4px 8px">600K steps, cosine LR 2e-4 &rarr; 1e-5, batch size 48</td>
+  <td style="padding:4px 8px">600K steps, cosine LR 2e-4 &rarr; 1e-5, warmup 2K steps, batch size 32</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Data</td>
-  <td style="padding:4px 8px">3.2M EN&harr;FR pairs: WikiMatrix (2.7M, CC-BY-SA), Tatoeba (275K, CC-BY), Europarl (190K, public domain)</td>
+  <td style="padding:4px 8px">3.2M EN&harr;FR + EN&harr;ES pairs, paraphrase pairs (MRPC/QQP), semantic parse pairs</td>
+</tr>
+<tr style="border-bottom:1px solid #333">
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Sampling</td>
+  <td style="padding:4px 8px">25% FR, 25% ES, 25% Paraphrase, 25% Parse (equal weight)</td>
+</tr>
+<tr style="border-bottom:1px solid #333">
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Geometry</td>
+  <td style="padding:4px 8px">Gate: EM EMA &gt; 0.5 &rarr; ramp 0&rarr;1 over 5K steps. WO=2.0, HRepul=3.0, BRepul=1.0</td>
 </tr>
 <tr>
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Loss</td>
-  <td style="padding:4px 8px">EN recon CE + 1.0 &times; FR translation CE, both from shared concept bottleneck</td>
+  <td style="padding:4px 8px">EN recon + secondary head CE + geo_scale &times; (WO + hard repulsion + batch repulsion)</td>
 </tr>
 </table>
 
@@ -503,25 +514,34 @@ Every step trains both decoders: EN reconstruction + FR translation from the sam
 <h4 style="color:#ef5350;margin:8px 0 4px">Metrics</h4>
 <div style="columns:2;column-gap:24px">
 <b style="color:#ef5350">EN Recon Loss</b> &mdash; EN reconstruction cross-entropy. Lower = better.<br>
-<b style="color:#ab47bc">FR Trans Loss</b> &mdash; FR translation cross-entropy. Lower = better translation.<br>
+<b style="color:#ab47bc">FR/ES Trans Loss</b> &mdash; Translation cross-entropy for French and Spanish decoders.<br>
+<b style="color:#ffa726">Para Loss</b> &mdash; Paraphrase decoder CE. Tests meaning-preserving rewording.<br>
+<b style="color:#66bb6a">Parse Loss</b> &mdash; Semantic parse decoder CE. Tests structural understanding.<br>
 <b>EN Token Acc</b> &mdash; Fraction of EN tokens the decoder gets right.<br>
-<b>FR Token Acc</b> &mdash; Fraction of FR tokens the decoder gets right.<br>
 <b>Exact Match</b> &mdash; Full EN sentence reconstructed perfectly.<br>
-<b>EM EMA</b> &mdash; Exponential moving average of exact match (decay=0.9).<br>
+<b>EM EMA</b> &mdash; Exponential moving average of exact match (decay=0.99). Gates geometry losses.<br>
+<b>Geo Gate</b> &mdash; Geometry loss scale factor (0&ndash;1). Activates when EM EMA &gt; 0.5.<br>
 </div>
 
-<h4 style="color:#42a5f5;margin:12px 0 4px">Geometry Probes</h4>
+<h4 style="color:#42a5f5;margin:12px 0 4px">Geometry Probes (every 500 steps)</h4>
 <div style="columns:2;column-gap:24px">
 <b>Analogy</b> &mdash; a&minus;b+c&cong;d cosine score. Want &gt;0.8.<br>
 <b>Clustering Gap</b> &mdash; Within-group &minus; between-group sim. Want &gt;0.05.<br>
 <b>Dir Consistency</b> &mdash; Same attribute = same direction? Want &gt;0.3.<br>
-<b>Word Order Sim</b> &mdash; Swapped-order pair similarity. Want &lt;0.85.<br>
-<b>Effective Rank</b> &mdash; SVD dims for 90%/95% variance. Higher = richer.<br>
+<b>Word Order Sim</b> &mdash; Swapped-order pair similarity. Want &lt;0.85 (V7&ndash;V9 achieved 0.81).<br>
+<b>Effective Rank</b> &mdash; SVD dims for 90%/95% variance. Higher = richer representations.<br>
+</div>
+
+<h4 style="color:#66bb6a;margin:12px 0 4px">Geometry Losses (after gate opens)</h4>
+<div style="columns:2;column-gap:24px">
+<b>Word Order</b> &mdash; Push swapped-word pairs below sim 0.5. Weight 2.0.<br>
+<b>Hard Repulsion</b> &mdash; Push top-8 most similar unrelated pairs below sim 0.1. Weight 3.0.<br>
+<b>Batch Repulsion</b> &mdash; Push random batch pairs below sim 0.3. Weight 1.0.<br>
 </div>
 
 <h4 style="color:#66bb6a;margin:12px 0 4px">Diagnostic Output</h4>
 <b>[OK]</b> = perfect reconstruction. <b>[DIFF] (X%)</b> = X% token overlap.<br>
-EN diagnostics: prose, code, math, logic. FR diagnostics: Europarl reference translations.
+EN diagnostics: prose, code, math, logic. FR/ES: Europarl reference translations. Parse: structured output.
 </div>
 </div>
 </details>

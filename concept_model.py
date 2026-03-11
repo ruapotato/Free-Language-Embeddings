@@ -1099,6 +1099,58 @@ def hard_repulsion_loss(concepts, target_sim=0.05, top_k=8):
     return loss, max_sim
 
 
+def analogy_loss(concepts_a, concepts_b, concepts_c, concepts_d, target_sim=0.9):
+    """
+    Analogy loss: encourage a - b + c ≈ d in concept space.
+    Given analogy quads (a, b, c, d), the predicted vector (a - b + c)
+    should have high cosine similarity to d.
+
+    concepts_*: (B, K, D) concept tensors
+    Returns: (loss, mean_sim)
+    """
+    flat_a = F.normalize(concepts_a.view(concepts_a.shape[0], -1), p=2, dim=-1)
+    flat_b = F.normalize(concepts_b.view(concepts_b.shape[0], -1), p=2, dim=-1)
+    flat_c = F.normalize(concepts_c.view(concepts_c.shape[0], -1), p=2, dim=-1)
+    flat_d = F.normalize(concepts_d.view(concepts_d.shape[0], -1), p=2, dim=-1)
+    predicted = F.normalize(flat_a - flat_b + flat_c, p=2, dim=-1)
+    sim = (predicted * flat_d).sum(dim=-1)
+    # Penalize when similarity is below target
+    loss = F.relu(target_sim - sim).mean()
+    return loss, sim.mean().item()
+
+
+def direction_consistency_loss(direction_groups, target_sim=0.8):
+    """
+    Direction consistency loss: for each semantic attribute (negation, tense, etc.),
+    the direction vectors (a - b) across different example pairs should be consistent.
+
+    direction_groups: list of tensors, each (N_pairs, flat_dim) representing
+                      normalized direction vectors for one attribute.
+    target_sim: minimum pairwise cosine similarity between direction vectors.
+    Returns: (loss, mean_consistency)
+    """
+    total_loss = 0.0
+    total_sim = 0.0
+    n_groups = 0
+
+    for directions in direction_groups:
+        if directions.shape[0] < 2:
+            continue
+        # directions: (N, D) - already normalized
+        sim = torch.mm(directions, directions.T)  # (N, N)
+        mask = ~torch.eye(sim.shape[0], dtype=torch.bool, device=sim.device)
+        off_diag = sim[mask]
+        # Penalize when pairwise similarity is below target
+        total_loss = total_loss + F.relu(target_sim - off_diag).mean()
+        total_sim = total_sim + off_diag.mean().item()
+        n_groups += 1
+
+    if n_groups == 0:
+        return torch.tensor(0.0, requires_grad=True), 0.0
+
+    return total_loss / n_groups, total_sim / n_groups
+
+
 def per_slot_paraphrase_loss(concepts_a, concepts_b):
     """
     Per-slot paraphrase consistency on REAL text pairs.
