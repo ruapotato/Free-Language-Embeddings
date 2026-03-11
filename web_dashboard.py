@@ -150,7 +150,7 @@ def parse_eval_data(log_path):
     with open(log_path) as f:
         for line in f:
             if ("step" in line and "loss" in line and "recon=" in line) or \
-               ("step" in line and "[HYDRA]" in line):
+               ("step" in line and "[HYDRA" in line):
                 try:
                     step_str = line.split("|")[0].split("step")[1].strip()
                     # Strip [HYDRA] tag if present
@@ -248,7 +248,7 @@ def parse_eval_data(log_path):
             # Flush eval when we hit the next step line
             if current_eval and (
                 (("step" in line and "loss" in line and "recon=" in line) or
-                 ("step" in line and "[HYDRA]" in line))
+                 ("step" in line and "[HYDRA" in line))
                 and current_eval["step"] != last_step):
                 rows.append(current_eval)
                 current_eval = None
@@ -724,8 +724,17 @@ async function loadRuns() {
             opt.textContent = name;
             sel.appendChild(opt);
         }
-        // Default to attempt1 if available
-        if (runs['v6_attempt1']) sel.value = 'v6_attempt1';
+        // Default compare to previous version (e.g. v14 when viewing v15)
+        try {
+            const dataResp = await fetch('/api/data');
+            const dataJson = await dataResp.json();
+            const curMatch = dataJson.run?.match(/v?(\d+)/);
+            if (curMatch) {
+                const prev = 'v' + (parseInt(curMatch[1]) - 1);
+                if (runs[prev]) sel.value = prev;
+            }
+        } catch(e2) {}
+        if (!sel.value && runs['v6_attempt1']) sel.value = 'v6_attempt1';
     } catch(e) { console.error(e); }
 }
 
@@ -1028,6 +1037,16 @@ function updateDashboard(response) {
         // V10/V11/V12: hide only the margins chart (repurpose geo/slots/iso for geometry)
         const marginsEl = document.getElementById('chart-v7-margins');
         if (marginsEl) marginsEl.closest('.card').style.display = 'none';
+        // Hide per-bucket exact match if no bucket data
+        if (!evals.some(d => d.em_short != null)) {
+            const diagEl = document.getElementById('chart-diag-sim');
+            if (diagEl) diagEl.closest('.card').style.display = 'none';
+        }
+        // Hide dynamic sampling weights if no data
+        if (!evals.some(d => d.dw_short != null)) {
+            const dwEl = document.getElementById('chart-v6-cls');
+            if (dwEl) dwEl.closest('.card').style.display = 'none';
+        }
         // Update headings for geometry charts
         document.getElementById('h-geo').textContent = 'Clustering Gap & Direction Consistency';
         document.getElementById('h-slots').textContent = 'Analogy Score & Word Order';
