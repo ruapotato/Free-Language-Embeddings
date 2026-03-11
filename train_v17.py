@@ -653,8 +653,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     log("=" * 70)
-    log("FLM V17 — NO BOTTLENECK + GEO GATE + PROGRAMMATIC GEOMETRY")
-    log(f"  Bottleneck: {config.num_concepts}×{config.concept_dim} = {config.num_concepts * config.concept_dim}d")
+    log("FLM V17 — BOTTLENECK + 3 HEADS + GEO GATE + PROGRAMMATIC GEOMETRY")
     log("  Heads: EN recon | EN para | Semantic parse (3 heads, 6L each)")
     log("  Geometry: programmatic data, recon-gated (EM EMA > 0.5)")
     log("=" * 70)
@@ -699,6 +698,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
         start_step = 0
         total, _ = model.count_parameters()
         log(f"Model: {total:,} params ({total/1e6:.1f}M)")
+        log(f"  Bottleneck: {config.num_concepts}×{config.concept_dim} = {config.num_concepts * config.concept_dim}d")
 
     if eval_only:
         log("\n--- EN RECONSTRUCTION ---")
@@ -738,7 +738,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     log(f"Geometry generator: train split (programmatic, 18K+ word order combos)")
 
     total, _ = _unwrap(model).count_parameters()
-    log(f"\nTraining plan (V17 — No Bottleneck + Geo Gate + Programmatic Geometry):")
+    log(f"\nTraining plan (V17 — Bottleneck + 3 Heads + Geo Gate + Programmatic Geometry):")
     log(f"  Model: {total:,} params ({total/1e6:.1f}M)")
     log(f"  Bottleneck: {config.num_concepts}×{config.concept_dim} = {config.num_concepts * config.concept_dim}d")
     log(f"  Heads: EN({config.dec_layers}L) PARA({config.dec_layers}L) PARSE({config.dec_layers}L)")
@@ -1020,7 +1020,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Train concept autoencoder V17 (No Bottleneck + Geo Gate + Programmatic Geo)")
+    parser = argparse.ArgumentParser(description="Train concept autoencoder V17 (Bottleneck + 3 Heads + Geo Gate)")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--eval-only", action="store_true")
