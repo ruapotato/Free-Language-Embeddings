@@ -101,6 +101,7 @@ GEO_ANALOGY_WEIGHT = 2.0   # analogy preservation weight
 GEO_ANALOGY_TARGET = 0.9   # target: a-b+c should have sim > 0.9 with d
 GEO_DIRCON_WEIGHT = 1.5    # direction consistency weight
 GEO_DIRCON_TARGET = 0.8    # target: same-attribute directions should have sim > 0.8
+GEO_EVERY_N = 5            # run geometry losses every N steps (saves ~80% geo compute)
 
 # EMA tracking
 EXACT_MATCH_EMA_DECAY = 0.99
@@ -942,16 +943,17 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
             total_loss = r_loss + h_loss
 
-            # --- Geometry losses (recon-gated) ---
-            # Check gate
+            # --- Geometry losses (recon-gated, every N steps) ---
+            # Check gate (always, so gate_step is tracked correctly)
             geo_scale = 0.0
             if exact_match_ema >= GEO_GATE_THRESHOLD:
                 if geo_gate_step < 0:
                     geo_gate_step = step
                     log(f"  GEO GATE OPENED at step {step} (em_ema={exact_match_ema:.3f})")
-                # Ramp
                 steps_since_gate = step - geo_gate_step
                 geo_scale = min(1.0, steps_since_gate / GEO_RAMP_STEPS)
+            # Only compute geo losses every N steps to save compute
+            run_geo = (geo_scale > 0 and step % GEO_EVERY_N == 0)
 
             wo_val = 0.0
             hr_val = 0.0
@@ -959,7 +961,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             an_val = 0.0
             dc_val = 0.0
 
-            if geo_scale > 0:
+            if run_geo:
                 # Word-order loss: encode swap pairs, push apart
                 wo_orig_ids, wo_orig_mask, wo_swap_ids, wo_swap_mask = \
                     get_word_order_batch(en_tokenizer, device, batch_size=16)
