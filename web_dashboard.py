@@ -54,7 +54,7 @@ def parse_step_data(log_path):
                     geo_val = grab(r"geo=([\d.]+)", line, default=None)
                     if geo_val is not None:
                         row["geo_gate"] = geo_val
-                    row["total_loss"] = row["recon"] + row["fr_loss"]
+                    row["total_loss"] = row["recon"] + row.get("fr_loss", 0)
                     rows.append(row)
                 except (ValueError, IndexError, AttributeError):
                     pass
@@ -199,8 +199,8 @@ def parse_eval_data(log_path):
                 bt_m = re.search(r"between=([\d.]+)", line)
                 if bt_m:
                     current_eval["between_sim"] = float(bt_m.group(1))
-            # V12 geometry line: "GEOMETRY: analogy=X cluster_gap=X dir_con=X wo_sim=X rank90=X rank95=X"
-            if "GEOMETRY:" in line:
+            # V12+ geometry line: "GEOMETRY: ..." or "GEOMETRY (TEST): ..."
+            if "GEOMETRY" in line and "analogy=" in line:
                 current_eval = current_eval or {"step": last_step}
                 for key, field in [("analogy", "analogy_avg"), ("cluster_gap", "clustering_gap"),
                                    ("dir_con", "dir_consistency"), ("wo_sim", "word_order_sim")]:
@@ -269,17 +269,17 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
-    return "v14"
+    return "v16"
 
 
 def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -463,30 +463,29 @@ body {
 <summary style="cursor:pointer;color:#aaa;font-weight:bold;padding:4px 0;font-size:14px">&#9encyclop; Reference Guide (click to expand)</summary>
 
 <div style="padding:12px 0">
-<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V15 — Hydra + Geometry)</h4>
+<h4 style="color:#42a5f5;margin:12px 0 6px">How It Works (V16 — Lean Hydra + Programmatic Geometry)</h4>
 <p style="color:#bbb;margin:0 0 8px">
 The model compresses English text into <b>32 concept slots</b> (each a 16-dimensional vector, <b>512 dims total</b>).
-Five <b>non-autoregressive parallel decoders</b> share the same concept bottleneck:
-(1) <b>EN</b> reconstruction, (2) <b>FR</b> translation, (3) <b>ES</b> translation,
-(4) <b>Paraphrase</b>, (5) <b>Semantic Parse</b>.
+Three <b>non-autoregressive parallel decoders</b> (each 6 layers deep) share the same concept bottleneck:
+(1) <b>EN</b> reconstruction, (2) <b>Paraphrase</b>, (3) <b>Semantic Parse</b>.
+FR/ES heads dropped &mdash; not project goals, and 3 heads provide sufficient pressure for language-independent encoding.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-<b>V15 key idea:</b> Combines V14&rsquo;s multi-head decoder (good for clustering/direction) with
-V7&ndash;V9&rsquo;s geometry losses (good for word order). V10&ndash;V14 never improved word order sim below 0.93
-because reconstruction alone doesn&rsquo;t penalize similar embeddings for different word orders.
-Geometry losses are <b>recon-gated</b> &mdash; they only activate once EM EMA &gt; 0.5, then ramp up over 5K steps.
+<b>V16 key idea:</b> Programmatic geometry data generation with <b>strict train/test vocabulary separation</b>.
+Templates with slot filling produce 18K+ word-order combos, diverse analogies, direction pairs, and cluster sentences.
+Geometry eval uses <b>unseen test vocabulary</b> &mdash; measures genuine generalization, not memorization.
+Geometry losses active from step 0 (no gate), warmup over 5K steps.
 </p>
 <p style="color:#bbb;margin:0 0 8px">
-Trains on <b>3.2M EN&harr;FR + EN&harr;ES pairs</b> (Europarl + Tatoeba + WikiMatrix) plus
-paraphrase pairs (MRPC/QQP) and semantic parse pairs (custom grammar).
-Each step: EN recon + one sampled secondary head (25% each) + geometry losses (when gated on).
+Trains on <b>~978K pairs</b>: paraphrase (MRPC/QQP/NLI) + semantic parse.
+Each step: EN recon + one sampled secondary head (50/50 para/parse) + 7 geometry losses (every 5 steps).
 </p>
 
 <h4 style="color:#ffa726;margin:12px 0 6px">Training Setup</h4>
 <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:8px">
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Architecture</td>
-  <td style="padding:4px 8px">~95M params &mdash; EN encoder (6L&times;384d) + bottleneck (32&times;16=512d) + 5 decoders (4L&times;384d each)</td>
+  <td style="padding:4px 8px">~110M params &mdash; EN encoder (6L&times;384d) + bottleneck (32&times;16=512d) + 3 decoders (6L&times;384d each)</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Schedule</td>
@@ -494,19 +493,19 @@ Each step: EN recon + one sampled secondary head (25% each) + geometry losses (w
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Data</td>
-  <td style="padding:4px 8px">3.2M EN&harr;FR + EN&harr;ES pairs, paraphrase pairs (MRPC/QQP), semantic parse pairs</td>
+  <td style="padding:4px 8px">~978K pairs: paraphrase (MRPC/QQP/NLI entailment) + semantic parse (custom grammar)</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Sampling</td>
-  <td style="padding:4px 8px">25% FR, 25% ES, 25% Paraphrase, 25% Parse (equal weight)</td>
+  <td style="padding:4px 8px">50% Paraphrase, 50% Parse</td>
 </tr>
 <tr style="border-bottom:1px solid #333">
   <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Geometry</td>
-  <td style="padding:4px 8px">Gate: EM EMA &gt; 0.5 &rarr; ramp 0&rarr;1 over 5K steps. WO=2.0, HRepul=3.0, BRepul=1.0</td>
+  <td style="padding:4px 8px">No gate &mdash; warmup 0&rarr;1 over 5K steps from step 0. Every 5 steps.</td>
 </tr>
 <tr>
-  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Loss</td>
-  <td style="padding:4px 8px">EN recon + secondary head CE + geo_scale &times; (WO + hard repulsion + batch repulsion)</td>
+  <td style="padding:4px 8px;color:#4fc3f7;font-weight:bold">Losses</td>
+  <td style="padding:4px 8px">EN recon + head CE + geo&times;(WO=2.0 + HRepul=1.0 + BRepul=0.3 + Analogy=2.0 + DirCon=1.5 + Cluster=1.5)</td>
 </tr>
 </table>
 
@@ -514,34 +513,36 @@ Each step: EN recon + one sampled secondary head (25% each) + geometry losses (w
 <h4 style="color:#ef5350;margin:8px 0 4px">Metrics</h4>
 <div style="columns:2;column-gap:24px">
 <b style="color:#ef5350">EN Recon Loss</b> &mdash; EN reconstruction cross-entropy. Lower = better.<br>
-<b style="color:#ab47bc">FR/ES Trans Loss</b> &mdash; Translation cross-entropy for French and Spanish decoders.<br>
 <b style="color:#ffa726">Para Loss</b> &mdash; Paraphrase decoder CE. Tests meaning-preserving rewording.<br>
 <b style="color:#66bb6a">Parse Loss</b> &mdash; Semantic parse decoder CE. Tests structural understanding.<br>
 <b>EN Token Acc</b> &mdash; Fraction of EN tokens the decoder gets right.<br>
 <b>Exact Match</b> &mdash; Full EN sentence reconstructed perfectly.<br>
-<b>EM EMA</b> &mdash; Exponential moving average of exact match (decay=0.99). Gates geometry losses.<br>
-<b>Geo Gate</b> &mdash; Geometry loss scale factor (0&ndash;1). Activates when EM EMA &gt; 0.5.<br>
+<b>EM EMA</b> &mdash; Exponential moving average of exact match (decay=0.99).<br>
+<b>Geo Scale</b> &mdash; Geometry loss scale factor (0&ndash;1). Ramps from 0 to 1 over first 5K steps.<br>
 </div>
 
-<h4 style="color:#42a5f5;margin:12px 0 4px">Geometry Probes (every 500 steps)</h4>
+<h4 style="color:#42a5f5;margin:12px 0 4px">Geometry Probes (every 500 steps, TEST vocab)</h4>
 <div style="columns:2;column-gap:24px">
-<b>Analogy</b> &mdash; a&minus;b+c&cong;d cosine score. Want &gt;0.8.<br>
-<b>Clustering Gap</b> &mdash; Within-group &minus; between-group sim. Want &gt;0.05.<br>
-<b>Dir Consistency</b> &mdash; Same attribute = same direction? Want &gt;0.3.<br>
-<b>Word Order Sim</b> &mdash; Swapped-order pair similarity. Want &lt;0.85 (V7&ndash;V9 achieved 0.81).<br>
+<b>Analogy</b> &mdash; a&minus;b+c&cong;d cosine score (test vocab). Want &gt;0.8.<br>
+<b>Clustering Gap</b> &mdash; Within-group &minus; between-group sim (test vocab). Want &gt;0.05.<br>
+<b>Dir Consistency</b> &mdash; Same attribute = same direction? (test vocab). Want &gt;0.3.<br>
+<b>Word Order Sim</b> &mdash; Swapped-order pair similarity (test vocab). Want &lt;0.85.<br>
 <b>Effective Rank</b> &mdash; SVD dims for 90%/95% variance. Higher = richer representations.<br>
 </div>
 
-<h4 style="color:#66bb6a;margin:12px 0 4px">Geometry Losses (after gate opens)</h4>
+<h4 style="color:#66bb6a;margin:12px 0 4px">7 Geometry Losses (from step 0)</h4>
 <div style="columns:2;column-gap:24px">
 <b>Word Order</b> &mdash; Push swapped-word pairs below sim 0.5. Weight 2.0.<br>
-<b>Hard Repulsion</b> &mdash; Push top-8 most similar unrelated pairs below sim 0.1. Weight 3.0.<br>
-<b>Batch Repulsion</b> &mdash; Push random batch pairs below sim 0.3. Weight 1.0.<br>
+<b>Hard Repulsion</b> &mdash; Push top-8 most similar unrelated pairs below sim 0.1. Weight 1.0.<br>
+<b>Batch Repulsion</b> &mdash; Push random batch pairs below sim 0.3. Weight 0.3.<br>
+<b>Analogy</b> &mdash; Reward a&minus;b+c &cong; d structure. Target sim &gt;0.9. Weight 2.0.<br>
+<b>Dir Consistency</b> &mdash; Same-attribute directions should align. Target sim &gt;0.8. Weight 1.5.<br>
+<b>Cluster Sep</b> &mdash; Same-group close (&gt;0.5), different-group far (&lt;0.2). Weight 1.5.<br>
 </div>
 
 <h4 style="color:#66bb6a;margin:12px 0 4px">Diagnostic Output</h4>
 <b>[OK]</b> = perfect reconstruction. <b>[DIFF] (X%)</b> = X% token overlap.<br>
-EN diagnostics: prose, code, math, logic. FR/ES: Europarl reference translations. Parse: structured output.
+EN diagnostics: prose, code, math, logic. Parse: structured output.
 </div>
 </div>
 </details>
@@ -1430,10 +1431,10 @@ function updateDashboard(response) {
             const emEma = latest.em_ema || 0;
             const progress = latest.progress || 0;
             if (isHydra) {
-                phaseText = 'Hydra (5 Heads)';
+                const heads = ['EN', hasFr ? 'FR' : '', hasEs ? 'ES' : '', hasPara ? 'Para' : '', hasParse ? 'Parse' : ''].filter(Boolean);
+                phaseText = `Hydra (${heads.length} Heads)`;
                 phaseColor = '#ff7043';
-                const heads = ['EN', hasFr ? 'FR' : '', hasEs ? 'ES' : '', hasPara ? 'Para' : '', hasParse ? 'Parse' : ''].filter(Boolean).join('+');
-                detailText = `${heads} | EN: ${fmt(latest.recon, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
+                detailText = `${heads.join('+')} | EN: ${fmt(latest.recon, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
             } else if (hasFr) {
                 phaseText = 'Dual Decoder (EN + FR)';
                 phaseColor = '#ab47bc';
