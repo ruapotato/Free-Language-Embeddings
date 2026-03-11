@@ -1,20 +1,18 @@
 """
-FLM V17 — No Bottleneck + Geo Gate + Programmatic Geometry
+FLM V17 — Bottleneck + 3 Heads + Geo Gate + Programmatic Geometry
 ================================================================================
-Key changes from V16:
-  - No bottleneck — decoders cross-attend to full encoder output
+Key changes from V15:
   - 3 decoder heads: EN, Paraphrase, Parse (no FR/ES)
-  - 6 decoder layers
-  - Geo gate RESTORED: geometry losses activate after EN EM EMA > 0.5,
-    then ramp over 5K steps
+  - Bottleneck restored (geometry needs compact target to sculpt)
+  - Geo gate: geometry losses activate after EN EM EMA > 0.5, ramp over 5K steps
+  - Geo frequency ramp: every step for first 2K after gate, then ramp to 1/5
   - Programmatic geometry data via GeometryDataGenerator (train/test splits)
-  - encode_pooled() for all geometry losses (fixed-size vectors)
   - Fresh weights only
 
-V16 showed that FR/ES heads provided implicit clustering pressure but also
-competed for capacity. V17 drops them in favor of a simpler 3-head setup
-and relies on explicit geometry losses (gated by reconstruction quality)
-to shape the representation space.
+V15 showed strong dir_con improvement because geometry operated on the compact
+bottleneck. V17 no-bottleneck experiment confirmed mean-pooling is too lossy
+for geometry. Restoring bottleneck + adding frequency ramp for intensive
+early geometry pressure.
 
 Usage:
     python train_v17.py --fresh            # start from scratch
@@ -103,7 +101,9 @@ GEO_DIRCON_TARGET = 0.8    # target: same-attribute directions should have sim >
 GEO_CLUSTER_WEIGHT = 1.5   # cluster separation weight
 GEO_CLUSTER_WITHIN = 0.5   # target: same-group sim > 0.5
 GEO_CLUSTER_BETWEEN = 0.2  # target: different-group sim < 0.2
-GEO_EVERY_N = 5            # run geometry losses every N steps
+GEO_EVERY_STEP_FOR = 2000   # run geo every step for this many steps after gate
+GEO_RAMP_TO_EVERY_N = 5     # then ramp to every-N over GEO_FREQ_RAMP_STEPS
+GEO_FREQ_RAMP_STEPS = 10000 # steps to transition from every-1 to every-N
 
 # EMA tracking
 EXACT_MATCH_EMA_DECAY = 0.99
@@ -329,62 +329,55 @@ class HydraPrefetchBuffer:
 # Geometry batch generation (programmatic via GeometryDataGenerator)
 # ---------------------------------------------------------------------------
 
-def get_word_order_batch(geo_gen, tokenizer, model, device, batch_size=16):
-    """Get a batch of word-order swap pairs, encode with encode_pooled."""
-    orig_texts, swap_texts = geo_gen.word_order_batch(batch_size)
-    orig_enc = tokenizer(orig_texts, max_length=64, padding=True,
-                         truncation=True, return_tensors="pt")
-    swap_enc = tokenizer(swap_texts, max_length=64, padding=True,
-                         truncation=True, return_tensors="pt")
+def _encode_concepts(model, tokenizer, texts, device):
+    """Encode texts → flat bottleneck vectors (B, num_concepts * concept_dim)."""
     m = model._orig_mod if hasattr(model, '_orig_mod') else model
-    orig_pooled = m.encode_pooled(
-        orig_enc["input_ids"].to(device), orig_enc["attention_mask"].to(device))
-    swap_pooled = m.encode_pooled(
-        swap_enc["input_ids"].to(device), swap_enc["attention_mask"].to(device))
-    return orig_pooled, swap_pooled
+    enc = tokenizer(texts, max_length=64, padding=True, truncation=True, return_tensors="pt")
+    concepts = m.encode(enc["input_ids"].to(device), enc["attention_mask"].to(device))
+    return concepts.view(concepts.shape[0], -1)  # (B, num_concepts * concept_dim)
+
+
+def get_word_order_batch(geo_gen, tokenizer, model, device, batch_size=16):
+    """Get a batch of word-order swap pairs, encode via bottleneck."""
+    orig_texts, swap_texts = geo_gen.word_order_batch(batch_size)
+    return _encode_concepts(model, tokenizer, orig_texts, device), \
+           _encode_concepts(model, tokenizer, swap_texts, device)
 
 
 def get_analogy_batch(geo_gen, tokenizer, model, device, batch_size=6):
-    """Get a batch of analogy quads, encode with encode_pooled."""
+    """Get a batch of analogy quads, encode via bottleneck."""
     a_texts, b_texts, c_texts, d_texts = geo_gen.analogy_batch(batch_size)
-    m = model._orig_mod if hasattr(model, '_orig_mod') else model
-
-    def _pool(texts):
-        enc = tokenizer(texts, max_length=64, padding=True, truncation=True, return_tensors="pt")
-        return m.encode_pooled(enc["input_ids"].to(device), enc["attention_mask"].to(device))
-
-    return _pool(a_texts), _pool(b_texts), _pool(c_texts), _pool(d_texts)
+    return (_encode_concepts(model, tokenizer, a_texts, device),
+            _encode_concepts(model, tokenizer, b_texts, device),
+            _encode_concepts(model, tokenizer, c_texts, device),
+            _encode_concepts(model, tokenizer, d_texts, device))
 
 
 def get_direction_batch(geo_gen, model, tokenizer, device):
-    """Encode direction pairs with encode_pooled."""
-    m = model._orig_mod if hasattr(model, '_orig_mod') else model
+    """Encode direction pairs via bottleneck."""
     attr_pairs = geo_gen.direction_batch(n_pairs_per_attr=3)
     direction_groups = []
     for attr_name, pairs in attr_pairs.items():
         a_texts = [p[0] for p in pairs]
         b_texts = [p[1] for p in pairs]
-        a_enc = tokenizer(a_texts, max_length=64, padding=True, truncation=True, return_tensors="pt").to(device)
-        b_enc = tokenizer(b_texts, max_length=64, padding=True, truncation=True, return_tensors="pt").to(device)
-        pooled_a = m.encode_pooled(a_enc["input_ids"], a_enc["attention_mask"])
-        pooled_b = m.encode_pooled(b_enc["input_ids"], b_enc["attention_mask"])
-        directions = F.normalize(pooled_a - pooled_b, p=2, dim=-1)
+        flat_a = _encode_concepts(model, tokenizer, a_texts, device)
+        flat_b = _encode_concepts(model, tokenizer, b_texts, device)
+        directions = F.normalize(flat_a - flat_b, p=2, dim=-1)
         direction_groups.append(directions)
     return direction_groups
 
 
 def get_cluster_batch(geo_gen, model, tokenizer, device, n_groups=3, n_per_group=3):
-    """Encode cluster sentences with encode_pooled."""
-    m = model._orig_mod if hasattr(model, '_orig_mod') else model
+    """Encode cluster sentences via bottleneck."""
     groups = geo_gen.cluster_batch(n_groups=n_groups, n_per_group=n_per_group)
     group_concepts = []
     for name, sents in groups.items():
+        m = model._orig_mod if hasattr(model, '_orig_mod') else model
         enc = tokenizer(sents, max_length=64, padding=True, truncation=True, return_tensors="pt").to(device)
-        pooled = m.encode_pooled(enc["input_ids"], enc["attention_mask"])  # (N, D)
-        group_concepts.append(pooled)
+        concepts = m.encode(enc["input_ids"], enc["attention_mask"])  # (N, num_concepts, concept_dim)
+        group_concepts.append(concepts)
 
-    # cluster_separation_loss expects list of (N, K, D) — unsqueeze to (N, 1, D)
-    within_concepts = [p.unsqueeze(1) for p in group_concepts]
+    within_concepts = group_concepts  # list of (N, num_concepts, concept_dim)
     between_pairs = []
     for i in range(len(group_concepts)):
         for j in range(i + 1, len(group_concepts)):
@@ -479,13 +472,13 @@ def evaluate_translation(model, en_tok, tgt_tok, test_pairs, decode_fn_name, dev
 
 @torch.no_grad()
 def _encode_flat(model, tokenizer, texts, device):
-    """Encode texts to pooled vectors. Returns (normalized_pooled, pooled_3d) for compat."""
+    """Encode texts to flat bottleneck vectors. Returns (normalized_flat, concepts)."""
     enc = tokenizer(texts, padding=True, truncation=True, max_length=64,
                     return_tensors="pt").to(device)
     m = _unwrap(model)
-    pooled = m.encode_pooled(enc["input_ids"], enc["attention_mask"])  # (B, D)
-    normalized = F.normalize(pooled, p=2, dim=-1)
-    return normalized, pooled.unsqueeze(1)  # (B, D), (B, 1, D) for flat_similarity_matrix
+    concepts = m.encode(enc["input_ids"], enc["attention_mask"])  # (B, num_concepts, concept_dim)
+    flat = concepts.view(concepts.shape[0], -1)  # (B, num_concepts * concept_dim)
+    return F.normalize(flat, p=2, dim=-1), concepts
 
 
 @torch.no_grad()
@@ -661,7 +654,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
     log("=" * 70)
     log("FLM V17 — NO BOTTLENECK + GEO GATE + PROGRAMMATIC GEOMETRY")
-    log("  No bottleneck — decoders cross-attend to full encoder")
+    log(f"  Bottleneck: {config.num_concepts}×{config.concept_dim} = {config.num_concepts * config.concept_dim}d")
     log("  Heads: EN recon | EN para | Semantic parse (3 heads, 6L each)")
     log("  Geometry: programmatic data, recon-gated (EM EMA > 0.5)")
     log("=" * 70)
@@ -685,6 +678,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
     exact_match_ema = 0.0
     geo_gate_step = None  # step when geo gate opened (None = not yet)
+    geo_every_n = 0       # current geo frequency (0 = off)
 
     if resume_from is None and not fresh:
         latest = Path(CHECKPOINT_DIR) / "latest.pt"
@@ -746,12 +740,13 @@ def train(resume_from=None, fresh=False, eval_only=False):
     total, _ = _unwrap(model).count_parameters()
     log(f"\nTraining plan (V17 — No Bottleneck + Geo Gate + Programmatic Geometry):")
     log(f"  Model: {total:,} params ({total/1e6:.1f}M)")
-    log(f"  No bottleneck (encoder output = shared representation)")
+    log(f"  Bottleneck: {config.num_concepts}×{config.concept_dim} = {config.num_concepts * config.concept_dim}d")
     log(f"  Heads: EN({config.dec_layers}L) PARA({config.dec_layers}L) PARSE({config.dec_layers}L)")
     log(f"  Geometry: wo={GEO_WO_WEIGHT} hrepul={GEO_HREPUL_WEIGHT} "
         f"brepul={GEO_BREPUL_WEIGHT} analogy={GEO_ANALOGY_WEIGHT} "
         f"dircon={GEO_DIRCON_WEIGHT} cluster={GEO_CLUSTER_WEIGHT}")
-    log(f"  Geo: GATED (EM EMA > {GEO_GATE_THRESHOLD}), ramp 0→1 over {GEO_RAMP_STEPS} steps, every {GEO_EVERY_N} steps")
+    log(f"  Geo: GATED (EM EMA > {GEO_GATE_THRESHOLD}), ramp 0→1 over {GEO_RAMP_STEPS} steps")
+    log(f"  Geo freq: every step for {GEO_EVERY_STEP_FOR} steps, then ramp to 1/{GEO_RAMP_TO_EVERY_N} over {GEO_FREQ_RAMP_STEPS} steps")
     log(f"  Batch: {BATCH_SIZE}")
     log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | Steps: {start_step} -> {TOTAL_STEPS}")
     log(f"  Sampling: " + " ".join(f"{h}={w:.0%}" for h, w in DATA_WEIGHTS.items()))
@@ -804,16 +799,16 @@ def train(resume_from=None, fresh=False, eval_only=False):
         with torch.amp.autocast("cuda", dtype=torch.float16):
             m = _unwrap(model) if not hasattr(model, 'encode') else model
 
-            # Encode — full encoder output (B, seq_len, enc_hidden)
-            encoder_output = m.encode(en_ids, en_mask)
+            # Encode → bottleneck concepts (B, num_concepts, concept_dim)
+            concepts = m.encode(en_ids, en_mask)
 
             # EN reconstruction (always)
-            en_logits = m.decode_en(encoder_output, en_ids.shape[1], en_mask)
+            en_logits = m.decode_en(concepts, en_ids.shape[1], en_mask)
             r_loss = reconstruction_loss(en_logits, en_ids)
 
             # Secondary head (para or parse)
             decode_fn = getattr(m, DECODE_FNS[head])
-            head_logits = decode_fn(encoder_output, tgt_ids.shape[1], tgt_mask)
+            head_logits = decode_fn(concepts, tgt_ids.shape[1], tgt_mask)
             h_loss = F.cross_entropy(
                 head_logits.reshape(-1, head_logits.shape[-1]),
                 tgt_ids.reshape(-1),
@@ -833,8 +828,20 @@ def train(resume_from=None, fresh=False, eval_only=False):
             else:
                 geo_scale = 0.0
 
-            # Only compute geo losses every N steps to save compute
-            run_geo = (geo_scale > 0 and step % GEO_EVERY_N == 0)
+            # Geo frequency: every step for first 2K steps, then ramp to every-5
+            if geo_scale > 0 and geo_gate_step is not None:
+                steps_since_gate = step - geo_gate_step
+                if steps_since_gate <= GEO_EVERY_STEP_FOR:
+                    geo_every_n = 1
+                elif steps_since_gate <= GEO_EVERY_STEP_FOR + GEO_FREQ_RAMP_STEPS:
+                    # Linear ramp from 1 to GEO_RAMP_TO_EVERY_N
+                    progress = (steps_since_gate - GEO_EVERY_STEP_FOR) / GEO_FREQ_RAMP_STEPS
+                    geo_every_n = max(1, int(1 + progress * (GEO_RAMP_TO_EVERY_N - 1)))
+                else:
+                    geo_every_n = GEO_RAMP_TO_EVERY_N
+                run_geo = (step % geo_every_n == 0)
+            else:
+                run_geo = False
 
             wo_val = 0.0
             hr_val = 0.0
@@ -844,7 +851,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             cl_val = 0.0
 
             if run_geo:
-                # Word-order loss: programmatic swap pairs (encode_pooled)
+                # Word-order loss: programmatic swap pairs (bottleneck)
                 orig_pooled, swap_pooled = get_word_order_batch(
                     train_geo_gen, geo_tokenizer, m, device, batch_size=16)
                 # (B, D) — view(B, -1) is a no-op on (B, D)
@@ -853,9 +860,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 total_loss = total_loss + geo_scale * GEO_WO_WEIGHT * wo_loss
                 wo_val = wo_loss.item()
 
-                # Hard repulsion on batch — pool the main encoder output
-                m_inner = _unwrap(model)
-                batch_pooled = m_inner.pool(encoder_output, en_mask)  # (B, D)
+                # Hard repulsion on batch concepts (flattened bottleneck)
+                batch_pooled = concepts.view(concepts.shape[0], -1)  # (B, num_concepts * concept_dim)
                 hr_loss, _ = hard_repulsion_loss(batch_pooled,
                                                   target_sim=GEO_HREPUL_TARGET,
                                                   top_k=8)
@@ -868,7 +874,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 total_loss = total_loss + geo_scale * GEO_BREPUL_WEIGHT * br_loss
                 br_val = br_loss.item()
 
-                # Analogy preservation: programmatic quads (encode_pooled)
+                # Analogy preservation: programmatic quads (bottleneck)
                 c_a, c_b, c_c, c_d = get_analogy_batch(
                     train_geo_gen, geo_tokenizer, m, device, batch_size=6)
                 # (B, D) — pass directly
@@ -877,14 +883,14 @@ def train(resume_from=None, fresh=False, eval_only=False):
                 total_loss = total_loss + geo_scale * GEO_ANALOGY_WEIGHT * an_loss
                 an_val = an_loss.item()
 
-                # Direction consistency: programmatic pairs (encode_pooled)
+                # Direction consistency: programmatic pairs (bottleneck)
                 dir_groups = get_direction_batch(train_geo_gen, m, geo_tokenizer, device)
                 dc_loss, _ = direction_consistency_loss(dir_groups,
                                                         target_sim=GEO_DIRCON_TARGET)
                 total_loss = total_loss + geo_scale * GEO_DIRCON_WEIGHT * dc_loss
                 dc_val = dc_loss.item()
 
-                # Cluster separation: programmatic groups (encode_pooled, unsqueezed)
+                # Cluster separation: programmatic groups (bottleneck)
                 within_c, between_c = get_cluster_batch(
                     train_geo_gen, m, geo_tokenizer, device, n_groups=3, n_per_group=3)
                 cl_loss, _, _ = cluster_separation_loss(
@@ -966,7 +972,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
             total_heads = sum(head_counts.values()) or 1
             dist = " ".join(f"{h}={head_counts[h]/total_heads:.0%}" for h in DATA_WEIGHTS)
-            log(f"  HEAD DIST: {dist} | geo_scale={geo_scale:.2f} | geo_gate_step={geo_gate_step}")
+            geo_freq = geo_every_n if geo_scale > 0 else 0
+            log(f"  HEAD DIST: {dist} | geo_scale={geo_scale:.2f} | geo_freq=1/{geo_freq} | geo_gate_step={geo_gate_step}")
 
             elapsed = time.time() - start_time
             avg_en = np.mean(loss_trackers["en"][-100:]) if loss_trackers["en"] else 0

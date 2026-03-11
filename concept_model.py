@@ -1844,22 +1844,12 @@ class NoBnDecoderBlock(nn.Module):
 
 class ConceptAutoencoderV17(nn.Module):
     """
-    V17: No bottleneck — decoders cross-attend directly to encoder sequence.
+    V17: Bottleneck + 3 heads + geo gate + programmatic geometry data.
 
-    The 'concept space' IS the encoder output. No information-destroying pinch.
-    Three decoder heads diverge from the shared encoder representation:
-      1. EN reconstruction (BERT vocab)
-      2. EN paraphrase (BERT vocab)
-      3. Semantic parse (BERT vocab)
-
-    For geometry losses, encoder output is mean-pooled over non-padding tokens
-    to produce a fixed-size concept vector.
-
-    Key changes from V16:
-      - No bottleneck — richer shared representation
-      - Geo gate restored — let reconstruction form structure first
-      - 3 heads (EN, Para, Parse), 6L decoders
-      - Programmatic geometry data with train/test splits
+    Like V15 (V14 model) but with only 3 heads (EN, Para, Parse) — no FR/ES.
+    Bottleneck restored because geometry losses need a compact target to sculpt.
+    Geo gate + frequency ramp: every step for first 2K after gate, then ramp to 1/5.
+    Programmatic geometry data with strict train/test vocab splits.
     """
 
     def __init__(self, config: ConceptConfig):
@@ -1879,7 +1869,8 @@ class ConceptAutoencoderV17(nn.Module):
         ])
         self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
 
-        # NO BOTTLENECK — encoder output goes directly to decoders
+        # --- Bottleneck (num_concepts × concept_dim) ---
+        self.bottleneck = ConceptBottleneck(config)
 
         # --- Shared decoder RoPE ---
         dec_head_dim = config.dec_hidden // config.dec_heads
@@ -1891,7 +1882,7 @@ class ConceptAutoencoderV17(nn.Module):
         self.en_pos_queries = nn.Parameter(
             torch.zeros(config.max_seq_len, config.dec_hidden))
         self.en_dec_layers = nn.ModuleList([
-            NoBnDecoderBlock(config) for _ in range(config.dec_layers)
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
         ])
         self.en_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
         self.en_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
@@ -1900,7 +1891,7 @@ class ConceptAutoencoderV17(nn.Module):
         self.para_pos_queries = nn.Parameter(
             torch.zeros(config.max_seq_len, config.dec_hidden))
         self.para_dec_layers = nn.ModuleList([
-            NoBnDecoderBlock(config) for _ in range(config.dec_layers)
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
         ])
         self.para_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
         self.para_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
@@ -1909,7 +1900,7 @@ class ConceptAutoencoderV17(nn.Module):
         self.parse_pos_queries = nn.Parameter(
             torch.zeros(config.max_seq_len, config.dec_hidden))
         self.parse_dec_layers = nn.ModuleList([
-            NoBnDecoderBlock(config) for _ in range(config.dec_layers)
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
         ])
         self.parse_dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
         self.parse_lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
@@ -1934,7 +1925,7 @@ class ConceptAutoencoderV17(nn.Module):
             module.weight.data.normal_(mean=0.0, std=0.02)
 
     def encode(self, input_ids, attention_mask=None):
-        """Encode text → (B, seq_len, enc_hidden). Full encoder output, no bottleneck."""
+        """Encode text → concept stack (B, num_concepts, concept_dim)."""
         bsz, seq_len = input_ids.shape
         x = self.embed_tokens(input_ids)
 
@@ -1947,26 +1938,14 @@ class ConceptAutoencoderV17(nn.Module):
         for layer in self.enc_layers:
             x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
 
-        return self.enc_norm(x)
+        x = self.enc_norm(x)
+        concepts = self.bottleneck(x)
+        return concepts
 
-    def pool(self, encoder_output, attention_mask=None):
-        """Mean-pool encoder output over non-padding tokens → (B, enc_hidden)."""
-        if attention_mask is not None:
-            mask = attention_mask.unsqueeze(-1).float()  # (B, seq_len, 1)
-            pooled = (encoder_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-        else:
-            pooled = encoder_output.mean(dim=1)
-        return pooled
-
-    def encode_pooled(self, input_ids, attention_mask=None):
-        """Encode + mean pool → (B, enc_hidden). For geometry losses."""
-        enc_out = self.encode(input_ids, attention_mask)
-        return self.pool(enc_out, attention_mask)
-
-    def _decode_head(self, encoder_output, seq_len, pos_queries, dec_layers, dec_norm,
+    def _decode_head(self, concepts, seq_len, pos_queries, dec_layers, dec_norm,
                      lm_head, attention_mask=None):
-        """Decode from encoder output (no bottleneck)."""
-        bsz = encoder_output.shape[0]
+        """Decode from concept stack."""
+        bsz = concepts.shape[0]
         x = pos_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
 
         dec_attn_mask = None
@@ -1975,50 +1954,51 @@ class ConceptAutoencoderV17(nn.Module):
             dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
 
         for layer in dec_layers:
-            x = layer(x, encoder_output, self.dec_rope_cos, self.dec_rope_sin,
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
                       attention_mask=dec_attn_mask)
 
         x = dec_norm(x)
         return lm_head(x)
 
-    def decode_en(self, encoder_output, seq_len, attention_mask=None):
-        return self._decode_head(encoder_output, seq_len, self.en_pos_queries,
+    def decode_en(self, concepts, seq_len, attention_mask=None):
+        return self._decode_head(concepts, seq_len, self.en_pos_queries,
                                  self.en_dec_layers, self.en_dec_norm,
                                  self.en_lm_head, attention_mask)
 
-    def decode_para(self, encoder_output, seq_len, attention_mask=None):
-        return self._decode_head(encoder_output, seq_len, self.para_pos_queries,
+    def decode_para(self, concepts, seq_len, attention_mask=None):
+        return self._decode_head(concepts, seq_len, self.para_pos_queries,
                                  self.para_dec_layers, self.para_dec_norm,
                                  self.para_lm_head, attention_mask)
 
-    def decode_parse(self, encoder_output, seq_len, attention_mask=None):
-        return self._decode_head(encoder_output, seq_len, self.parse_pos_queries,
+    def decode_parse(self, concepts, seq_len, attention_mask=None):
+        return self._decode_head(concepts, seq_len, self.parse_pos_queries,
                                  self.parse_dec_layers, self.parse_dec_norm,
                                  self.parse_lm_head, attention_mask)
 
     # Alias for probe_geometry.py compatibility
-    def decode_parallel(self, encoder_output, seq_len, attention_mask=None):
-        return self.decode_en(encoder_output, seq_len, attention_mask)
+    def decode_parallel(self, concepts, seq_len, attention_mask=None):
+        return self.decode_en(concepts, seq_len, attention_mask)
 
     def forward(self, input_ids, attention_mask=None, targets=None):
-        encoder_output = self.encode(input_ids, attention_mask)
+        concepts = self.encode(input_ids, attention_mask)
 
-        result = {'concepts': encoder_output}  # compat key name
-        result['en_logits'] = self.decode_en(encoder_output, input_ids.shape[1], attention_mask)
+        result = {'concepts': concepts}
+        result['en_logits'] = self.decode_en(concepts, input_ids.shape[1], attention_mask)
 
         if targets:
             for key, decode_fn in [('para', self.decode_para),
                                     ('parse', self.decode_parse)]:
                 if key in targets:
                     ids, mask = targets[key]
-                    result[f'{key}_logits'] = decode_fn(encoder_output, ids.shape[1], mask)
+                    result[f'{key}_logits'] = decode_fn(concepts, ids.shape[1], mask)
 
         return result
 
     def concept_vector(self, input_ids, attention_mask=None):
-        """Mean-pooled, L2-normalized concept vector for similarity."""
-        pooled = self.encode_pooled(input_ids, attention_mask)
-        return F.normalize(pooled, p=2, dim=-1)
+        """Flat bottleneck, L2-normalized for similarity."""
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
+        return F.normalize(flat, p=2, dim=-1)
 
     def count_parameters(self):
         total = sum(p.numel() for p in self.parameters())
