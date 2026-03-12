@@ -2199,3 +2199,200 @@ class ConceptAutoencoderV19(nn.Module):
         total = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return total, trainable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V20 — Focused 3-Head + NLI Graded Contrastive + WordNet Geometry
+# ═══════════════════════════════════════════════════════════════════════
+
+class ConceptAutoencoderV20(nn.Module):
+    """
+    V20: 3 heads (EN, FR, Para) with 6L decoders.
+    Freed params from dropping 6 heads → deeper decoders.
+    Geometry from NLI 3-tier contrastive + WordNet hierarchy/axis losses.
+    """
+
+    HEAD_NAMES = ["en", "fr"]
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+        self.bottleneck = ConceptBottleneck(config)
+        dec_head_dim = config.dec_hidden // config.dec_heads
+        dec_rope_cos, dec_rope_sin = precompute_rope(dec_head_dim, config.max_seq_len)
+        self.register_buffer("dec_rope_cos", dec_rope_cos, persistent=False)
+        self.register_buffer("dec_rope_sin", dec_rope_sin, persistent=False)
+        self.head_pos_queries = nn.ParameterDict()
+        self.head_dec_layers = nn.ModuleDict()
+        self.head_dec_norms = nn.ModuleDict()
+        for name in self.HEAD_NAMES:
+            self.head_pos_queries[name] = nn.Parameter(
+                torch.zeros(config.max_seq_len, config.dec_hidden))
+            self.head_dec_layers[name] = nn.ModuleList([
+                ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+            ])
+            self.head_dec_norms[name] = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+        self.apply(self._init_weights)
+        for name in self.HEAD_NAMES:
+            self._init_position_queries(self.head_pos_queries[name])
+
+    def _init_position_queries(self, param):
+        d = self.config.dec_hidden
+        pos = torch.arange(self.config.max_seq_len).float().unsqueeze(1)
+        div = torch.exp(torch.arange(0, d, 2).float() * -(math.log(10000.0) / d))
+        param.data[:, 0::2] = torch.sin(pos * div)
+        param.data[:, 1::2] = torch.cos(pos * div)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+        x = self.enc_norm(x)
+        return self.bottleneck(x)
+
+    def decode_head(self, name, concepts, seq_len, attention_mask=None):
+        bsz = concepts.shape[0]
+        x = self.head_pos_queries[name][:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+        for layer in self.head_dec_layers[name]:
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
+        x = self.head_dec_norms[name](x)
+        return self.lm_head(x)
+
+    def decode_en(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('en', concepts, seq_len, attention_mask)
+
+    def decode_parallel(self, concepts, seq_len, attention_mask=None):
+        return self.decode_en(concepts, seq_len, attention_mask)
+
+    def forward(self, input_ids, attention_mask=None, targets=None):
+        concepts = self.encode(input_ids, attention_mask)
+        result = {'concepts': concepts}
+        result['en_logits'] = self.decode_head('en', concepts, input_ids.shape[1], attention_mask)
+        if targets:
+            for name, (ids, mask) in targets.items():
+                result[f'{name}_logits'] = self.decode_head(name, concepts, ids.shape[1], mask)
+        return result
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
+        return F.normalize(flat, p=2, dim=-1)
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V20 Loss Functions — NLI + WordNet Geometry
+# ═══════════════════════════════════════════════════════════════════════
+
+def nli_graded_contrastive_loss(vec_a, vec_b, labels,
+                                 target_entail=0.85, target_neutral=0.50,
+                                 target_contra=0.15):
+    """
+    3-tier contrastive: pull/push to graded similarity targets.
+    vec_a, vec_b: (B, D) L2-normalized bottleneck vectors
+    labels: (B,) with 0=entailment, 1=neutral, 2=contradiction
+    """
+    sim = F.cosine_similarity(vec_a, vec_b, dim=-1)
+    targets = torch.where(labels == 0, target_entail,
+              torch.where(labels == 1, target_neutral, target_contra))
+    return F.smooth_l1_loss(sim, targets.to(sim.device))
+
+
+def wordnet_hierarchy_loss(vec_a, vec_b, wn_distances):
+    """
+    Noun hierarchy: cosine sim should track WordNet path_similarity.
+    Target sim = 0.3 + 0.6 * wn_distance (maps [0,1] -> [0.3, 0.9])
+    """
+    sim = F.cosine_similarity(vec_a, vec_b, dim=-1)
+    targets = 0.3 + 0.6 * wn_distances.to(sim.device)
+    return F.smooth_l1_loss(sim, targets)
+
+
+def wordnet_axis_consistency_loss(delta_groups):
+    """
+    Adjective/verb axis: direction vectors should be consistent across contexts.
+    delta_groups: list of (N_i, D) L2-normalized difference vectors per axis.
+    Loss = 1 - mean(pairwise cosine within each group).
+    """
+    total_loss = 0.0
+    n_groups = 0
+    for deltas in delta_groups:
+        if deltas.shape[0] < 2:
+            continue
+        sim_matrix = deltas @ deltas.T
+        n = deltas.shape[0]
+        mask = torch.triu(torch.ones(n, n, device=deltas.device), diagonal=1).bool()
+        avg_sim = sim_matrix[mask].mean()
+        total_loss += (1.0 - avg_sim)
+        n_groups += 1
+    return total_loss / max(n_groups, 1)
+
+
+def wordnet_troponym_chain_loss(level_vecs):
+    """
+    Verb troponym chain: adjacent levels closer + consistent direction.
+    level_vecs: list of (D,) vectors [general → specific]
+    """
+    if len(level_vecs) < 2:
+        return torch.tensor(0.0, device=level_vecs[0].device)
+
+    loss = torch.tensor(0.0, device=level_vecs[0].device)
+    n_terms = 0
+
+    # Ordering: sim(i,j) > sim(i,k) when j closer to i than k
+    for i in range(len(level_vecs)):
+        for j in range(i + 1, len(level_vecs)):
+            for k in range(j + 1, len(level_vecs)):
+                sim_ij = F.cosine_similarity(level_vecs[i].unsqueeze(0),
+                                              level_vecs[j].unsqueeze(0))
+                sim_ik = F.cosine_similarity(level_vecs[i].unsqueeze(0),
+                                              level_vecs[k].unsqueeze(0))
+                loss = loss + F.relu(sim_ik - sim_ij + 0.1).squeeze()
+                n_terms += 1
+
+    # Direction consistency along chain
+    diffs = []
+    for i in range(len(level_vecs) - 1):
+        d = F.normalize(level_vecs[i + 1] - level_vecs[i], dim=-1)
+        diffs.append(d)
+    if len(diffs) >= 2:
+        for i in range(len(diffs)):
+            for j in range(i + 1, len(diffs)):
+                sim = F.cosine_similarity(diffs[i].unsqueeze(0), diffs[j].unsqueeze(0))
+                loss = loss + (1.0 - sim.squeeze())
+                n_terms += 1
+
+    return loss / max(n_terms, 1)

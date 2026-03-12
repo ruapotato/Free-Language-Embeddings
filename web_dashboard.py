@@ -31,7 +31,7 @@ def parse_step_data(log_path):
     with open(log_path) as f:
         for line in f:
             # V14/V15/V16/V17/V18/V19 format: step N [HYDRA+GEO] or [V17+GEO] or [V19] | en=X para=X parse=X | ...
-            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line):
+            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line):
                 try:
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
@@ -58,6 +58,19 @@ def parse_step_data(log_path):
                     ctr_val = grab(r"ctr=([\d.]+)", line, default=None)
                     if ctr_val is not None:
                         row["contrastive_loss"] = ctr_val
+                    # V20: NLI + WordNet losses
+                    nli_val = grab(r"nli=([\d.]+)", line, default=None)
+                    if nli_val is not None:
+                        row["nli_loss"] = nli_val
+                    wn_noun_val = grab(r"wn_noun=([\d.]+)", line, default=None)
+                    if wn_noun_val is not None:
+                        row["wn_noun_loss"] = wn_noun_val
+                    wn_axis_val = grab(r"wn_axis=([\d.]+)", line, default=None)
+                    if wn_axis_val is not None:
+                        row["wn_axis_loss"] = wn_axis_val
+                    wn_tropo_val = grab(r"wn_tropo=([\d.]+)", line, default=None)
+                    if wn_tropo_val is not None:
+                        row["wn_tropo_loss"] = wn_tropo_val
                     # V15: geo scale and geo losses
                     geo_val = grab(r"geo=([\d.]+)", line, default=None)
                     if geo_val is not None:
@@ -158,7 +171,7 @@ def parse_eval_data(log_path):
     with open(log_path) as f:
         for line in f:
             if ("step" in line and "loss" in line and "recon=" in line) or \
-               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line)):
+               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line)):
                 try:
                     step_str = line.split("|")[0].split("step")[1].strip()
                     # Strip [HYDRA] tag if present
@@ -262,6 +275,17 @@ def parse_eval_data(log_path):
                 m = re.search(r"token_acc=([\d.]+)", line)
                 if m:
                     current_eval["parse_token_acc"] = float(m.group(1))
+            # V20: NLI PROBE
+            if "NLI PROBE:" in line:
+                current_eval = current_eval or {"step": last_step}
+                for key in ["entail", "neutral", "contra"]:
+                    m = re.search(rf"{key}=([\d.]+)", line)
+                    if m:
+                        current_eval[f"nli_{key}"] = float(m.group(1))
+                if "ordered=YES" in line:
+                    current_eval["nli_ordered"] = 1
+                elif "ordered=NO" in line:
+                    current_eval["nli_ordered"] = 0
             if "SLOT_STATS:" in line:
                 current_eval = current_eval or {"step": last_step}
                 slot_isos = {}
@@ -281,7 +305,7 @@ def parse_eval_data(log_path):
             # Flush eval when we hit the next step line
             if current_eval and (
                 (("step" in line and "loss" in line and "recon=" in line) or
-                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line)))
+                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line)))
                 and current_eval["step"] != last_step):
                 rows.append(current_eval)
                 current_eval = None
@@ -302,7 +326,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -312,7 +336,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -546,8 +570,15 @@ Each step: EN recon + one sampled secondary head (50/50 para/parse) + 7 geometry
 <h4 style="color:#ef5350;margin:8px 0 4px">Metrics</h4>
 <div style="columns:2;column-gap:24px">
 <b style="color:#ef5350">EN Recon Loss</b> &mdash; EN reconstruction cross-entropy. Lower = better.<br>
+<b style="color:#ab47bc">FR/ES Translation</b> &mdash; Cross-entropy for translating EN&rarr;target language through the bottleneck.<br>
+<b style="color:#7e57c2">DE/PT/ZH/JA Translation</b> &mdash; Same as above for additional languages (V19). More languages = more geometric pressure on the bottleneck.<br>
 <b style="color:#ffa726">Para Loss</b> &mdash; Paraphrase decoder CE. Tests meaning-preserving rewording.<br>
 <b style="color:#66bb6a">Parse Loss</b> &mdash; Semantic parse decoder CE. Tests structural understanding.<br>
+<b style="color:#ef5350">Contrastive (InfoNCE)</b> &mdash; Pushes translation pairs close together in bottleneck space while pushing unrelated batch items apart. Uses temperature=0.07. This is NOT a reconstruction loss&mdash;it directly shapes the geometry of the bottleneck vectors. Falls fast early as the model learns to group same-meaning sentences, then plateaus.<br>
+<b style="color:#42a5f5">NLI Graded</b> &mdash; 3-tier contrastive: entailment pairs &rarr; sim 0.85, neutral &rarr; 0.50, contradiction &rarr; 0.15. Smooth L1 loss. Builds graded similarity structure in the bottleneck.<br>
+<b style="color:#66bb6a">WN Noun Hierarchy</b> &mdash; Sentence pairs differing by one noun; target cosine sim tracks WordNet path_similarity (0.3 + 0.6*dist). Builds noun taxonomy in bottleneck geometry.<br>
+<b style="color:#ffa726">WN Axis Consistency</b> &mdash; Adjective antonym pairs (big/small, hot/cold) &mdash; diff vectors within each axis should be consistent (1 - mean pairwise cosine). Builds directional axes.<br>
+<b style="color:#ab47bc">WN Troponym Chains</b> &mdash; Verb specificity chains (move&rarr;run&rarr;sprint) &mdash; ordering margin + direction consistency. Builds verb hierarchy.<br>
 <b>EN Token Acc</b> &mdash; Fraction of EN tokens the decoder gets right.<br>
 <b>Exact Match</b> &mdash; Full EN sentence reconstructed perfectly.<br>
 <b>EM EMA</b> &mdash; Exponential moving average of exact match (decay=0.99).<br>
@@ -581,6 +612,7 @@ EN diagnostics: prose, code, math, logic. Parse: structured output.
 </details>
 <div class="grid">
     <div class="card"><h3 id="h-recon">Reconstruction Loss</h3><canvas id="chart-recon"></canvas></div>
+    <div class="card"><h3 id="h-contrastive">Contrastive Loss (InfoNCE)</h3><canvas id="chart-contrastive"></canvas></div>
     <div class="card"><h3 id="h-geo-losses">EM EMA / Geometry Losses</h3><canvas id="chart-geo-losses"></canvas></div>
     <div class="card"><h3 id="h-batch-sim">Token Accuracy / Batch Similarities</h3><canvas id="chart-batch-sim"></canvas></div>
     <div class="card"><h3 id="h-diag-sim">Exact Match / Eval Similarities</h3><canvas id="chart-diag-sim"></canvas></div>
@@ -854,10 +886,6 @@ function updateDashboard(response) {
         reconDs.push(ds('Parse', ema(parseLossVals, sw), '#ffa726'));
     if (hasCmp && clippedCmpSteps.length) reconDs.push(cmpDs('Recon' + cmpLabel,
         ema(clippedCmpSteps.map(d => d.recon), ccw), C.cmpRecon));
-    // V19: Contrastive loss
-    const ctrLossVals = steps.map(d => d.contrastive_loss || 0);
-    if (ctrLossVals.some(v => v > 0))
-        reconDs.push(ds('Contrastive', ema(ctrLossVals, sw), '#ef5350', {yAxisID: 'y2'}));
     // Geo gate on right axis (0-1 scale)
     const geoGateVals = steps.map(d => d.geo_gate);
     if (geoGateVals.some(v => v > 0))
@@ -883,6 +911,35 @@ function updateDashboard(response) {
         }) },
         options: dualAxisOpts('Loss', 'Geo Gate', undefined, undefined, 0, 1.05),
     });
+
+    // 1b. Contrastive / NLI / WordNet Losses (own chart, different scale)
+    const ctrLossVals = steps.map(d => d.contrastive_loss || 0);
+    const nliLossVals = steps.map(d => d.nli_loss || 0);
+    const wnNounVals = steps.map(d => d.wn_noun_loss || 0);
+    const wnAxisVals = steps.map(d => d.wn_axis_loss || 0);
+    const wnTropoVals = steps.map(d => d.wn_tropo_loss || 0);
+    const hasCtrChart = ctrLossVals.some(v => v > 0);
+    const hasNliChart = nliLossVals.some(v => v > 0);
+    const hasWnChart = wnNounVals.some(v => v > 0) || wnAxisVals.some(v => v > 0) || wnTropoVals.some(v => v > 0);
+    if (hasCtrChart || hasNliChart || hasWnChart) {
+        const ctrDs = [];
+        if (hasCtrChart) ctrDs.push(ds('InfoNCE', ema(ctrLossVals, sw), '#ef5350'));
+        if (hasNliChart) ctrDs.push(ds('NLI Graded', ema(nliLossVals, sw), '#42a5f5'));
+        if (wnNounVals.some(v => v > 0)) ctrDs.push(ds('WN Noun', ema(wnNounVals, sw), '#66bb6a'));
+        if (wnAxisVals.some(v => v > 0)) ctrDs.push(ds('WN Axis', ema(wnAxisVals, sw), '#ffa726'));
+        if (wnTropoVals.some(v => v > 0)) ctrDs.push(ds('WN Tropo', ema(wnTropoVals, sw), '#ab47bc'));
+        const chartTitle = hasNliChart || hasWnChart ? 'Semantic Structure Losses' : 'Contrastive Loss';
+        document.getElementById('h-contrastive').textContent = chartTitle;
+        mkChart('chart-contrastive', {
+            type: 'line',
+            data: { labels: s, datasets: ctrDs },
+            options: chartOpts(chartTitle),
+        });
+        document.getElementById('h-contrastive').parentElement.style.display = '';
+    } else {
+        const ctrCard = document.getElementById('h-contrastive');
+        if (ctrCard) ctrCard.parentElement.style.display = 'none';
+    }
 
     // V10/V11: Update chart headings
     if (isV10) {
@@ -1430,6 +1487,28 @@ function updateDashboard(response) {
         // V19: Contrastive loss
         if (hasCtr) {
             html += `<span class="label"> Contrastive:</span> <span class="value">${fmt(latest.contrastive_loss, 4)}</span>\n`;
+        }
+        // V20: NLI + WordNet losses
+        const hasNli = latest.nli_loss > 0;
+        const hasWn = latest.wn_noun_loss > 0 || latest.wn_axis_loss > 0 || latest.wn_tropo_loss > 0;
+        if (hasNli || hasWn) {
+            html += `\n<span class="label"> ── Semantic Structure ─────────────────</span>\n`;
+            if (hasNli)
+                html += `<span class="label"> NLI Graded:</span> <span class="value">${fmt(latest.nli_loss, 4)}</span>\n`;
+            if (latest.wn_noun_loss > 0)
+                html += `<span class="label"> WN Noun:</span>    <span class="value">${fmt(latest.wn_noun_loss, 4)}</span>\n`;
+            if (latest.wn_axis_loss > 0)
+                html += `<span class="label"> WN Axis:</span>    <span class="value">${fmt(latest.wn_axis_loss, 4)}</span>\n`;
+            if (latest.wn_tropo_loss > 0)
+                html += `<span class="label"> WN Tropo:</span>   <span class="value">${fmt(latest.wn_tropo_loss, 4)}</span>\n`;
+        }
+        // V20: NLI Probe results
+        if (le.nli_entail != null) {
+            html += `\n<span class="label"> NLI Probe:</span>`;
+            html += ` E=<span class="${rating(le.nli_entail, 0.75, 0.5)}">${fmt(le.nli_entail)}</span>`;
+            html += ` N=<span class="value">${fmt(le.nli_neutral)}</span>`;
+            html += ` C=<span class="${rating(1 - (le.nli_contra || 0), 0.75, 0.5)}">${fmt(le.nli_contra)}</span>`;
+            html += ` <span class="${le.nli_ordered === 1 ? 'good' : 'bad'}">${le.nli_ordered === 1 ? 'ORDERED' : 'UNORDERED'}</span>\n`;
         }
     } else if (hasFr) {
         html += `\n<span class="label">           EN Recon        FR Translation</span>\n`;
