@@ -158,7 +158,7 @@ def parse_eval_data(log_path):
     with open(log_path) as f:
         for line in f:
             if ("step" in line and "loss" in line and "recon=" in line) or \
-               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line)):
+               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line)):
                 try:
                     step_str = line.split("|")[0].split("step")[1].strip()
                     # Strip [HYDRA] tag if present
@@ -166,8 +166,9 @@ def parse_eval_data(log_path):
                     last_step = int(re.search(r"(\d+)", step_str).group(1))
                 except (ValueError, IndexError, AttributeError):
                     pass
-            # V10 eval format: "EVAL: token_acc=X exact_match=X em_ema=X"
-            if "EVAL:" in line and "token_acc=" in line:
+            # V10 eval format: "EN EVAL: token_acc=X exact_match=X em_ema=X" (or just "EVAL: ...")
+            # Only match EN EVAL or bare EVAL, not FR/ES/DE/PT/ZH/JA EVAL
+            if "EVAL:" in line and "token_acc=" in line and not any(f"{lang} EVAL:" in line for lang in ["FR", "ES", "DE", "PT", "ZH", "JA", "PARSE"]):
                 current_eval = {"step": last_step}
                 for key in ["token_acc", "exact_match", "em_ema"]:
                     m = re.search(rf"{key}=([\d.]+)", line)
@@ -280,7 +281,7 @@ def parse_eval_data(log_path):
             # Flush eval when we hit the next step line
             if current_eval and (
                 (("step" in line and "loss" in line and "recon=" in line) or
-                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line)))
+                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line)))
                 and current_eval["step"] != last_step):
                 rows.append(current_eval)
                 current_eval = None
