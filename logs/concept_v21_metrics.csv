@@ -1,0 +1,2 @@
+timestamp,step,recon_loss,token_acc,exact_match,em_ema,lr,elapsed_hours,analogy_avg,clustering_gap,direction_consistency,word_order_sim,effective_rank90,effective_rank95
+2026-03-12T12:56:20.083061,5000,6.233736,0.1345,0.0000,0.0000,2.999820e-04,0.2955,0.8676,0.0710,0.3032,0.9957,25,35
