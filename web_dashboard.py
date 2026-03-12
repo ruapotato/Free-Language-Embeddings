@@ -171,7 +171,7 @@ def parse_eval_data(log_path):
     with open(log_path) as f:
         for line in f:
             if ("step" in line and "loss" in line and "recon=" in line) or \
-               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line)):
+               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line)):
                 try:
                     step_str = line.split("|")[0].split("step")[1].strip()
                     # Strip [HYDRA] tag if present
@@ -305,7 +305,7 @@ def parse_eval_data(log_path):
             # Flush eval when we hit the next step line
             if current_eval and (
                 (("step" in line and "loss" in line and "recon=" in line) or
-                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line)))
+                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line)))
                 and current_eval["step"] != last_step):
                 rows.append(current_eval)
                 current_eval = None

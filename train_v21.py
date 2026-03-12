@@ -50,7 +50,7 @@ MODEL_CONFIG = dict(
     num_concepts=32,
     concept_dim=16,         # 32×16 = 512 bottleneck
     dec_hidden=384,
-    dec_layers=3,           # 3L decoder (down from 6 — speed + capacity shift to encoder)
+    dec_layers=4,           # 4L decoder (balance between speed and reconstruction ability)
     dec_heads=6,
     dec_intermediate=1536,
     max_seq_len=128,
@@ -98,18 +98,20 @@ RECON_TEST_SENTENCES = [
 ]
 
 # Pretrain data sources (order = priority; weights for sampling)
+# Weights capped so NO source repeats. Each source seen at most once.
+# Total run = ~4.9B tokens. Weights normalized automatically.
 PRETRAIN_SOURCES = [
-    ("data/pretrain/wikipedia.jsonl", 0.30),
-    ("data/pretrain/gutenberg.jsonl", 0.15),
-    ("data/pretrain/stackexchange.jsonl", 0.20),
-    ("data/pretrain/arxiv.jsonl", 0.15),
-    ("data/pretrain/usgpo.jsonl", 0.10),
-    ("data/pretrain/rfcs.jsonl", 0.03),
-    ("data/pretrain/kernel_docs.jsonl", 0.02),
-    ("data/pretrain/archwiki.jsonl", 0.02),
-    ("data/pretrain/tldp.jsonl", 0.01),
-    ("data/pretrain/gnu_manuals.jsonl", 0.01),
-    ("data/pretrain/manpages.jsonl", 0.01),
+    ("data/pretrain/wikipedia.jsonl", 0.30),       # 4.75B avail, see ~1.5B
+    ("data/pretrain/gutenberg.jsonl", 0.20),       # 3.5B avail, see ~1.0B
+    ("data/pretrain/stackexchange.jsonl", 0.16),   # 0.8B avail, see ~0.8B (capped)
+    ("data/pretrain/arxiv.jsonl", 0.20),           # 5.25B avail, see ~1.0B
+    ("data/pretrain/usgpo.jsonl", 0.10),           # 17.75B avail, see ~0.5B
+    ("data/pretrain/rfcs.jsonl", 0.025),           # 125M avail, see ~123M (capped)
+    ("data/pretrain/kernel_docs.jsonl", 0.0017),   # 8.5M avail (capped)
+    ("data/pretrain/archwiki.jsonl", 0.0015),      # 7.25M avail (capped)
+    ("data/pretrain/tldp.jsonl", 0.0016),          # 8M avail (capped)
+    ("data/pretrain/gnu_manuals.jsonl", 0.0023),   # 11.5M avail (capped)
+    ("data/pretrain/manpages.jsonl", 0.0049),      # 24M avail (capped)
 ]
 
 
@@ -540,7 +542,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
     log("=" * 70)
     log("FLM V21 — LEAN EN→EN + CONCEPT WHITENING + MASSIVE DIVERSE DATA")
-    log("  Bottleneck: 32x16 = 512 dims | 3L decoder | Concept whitening")
+    log(f"  Bottleneck: 32x16 = 512 dims | {MODEL_CONFIG['dec_layers']}L decoder | Concept whitening")
     log("  Data: Wikipedia + Gutenberg + StackExchange + arXiv + USGPO")
     log("  Philosophy: structure from compression, not from auxiliary losses")
     log("=" * 70)
