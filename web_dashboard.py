@@ -30,8 +30,8 @@ def parse_step_data(log_path):
     rows = []
     with open(log_path) as f:
         for line in f:
-            # V14/V15/V16/V17 format: step N [HYDRA+GEO] or [V17+GEO] | en=X para=X parse=X | ...
-            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line):
+            # V14/V15/V16/V17/V18/V19 format: step N [HYDRA+GEO] or [V17+GEO] or [V19] | en=X para=X parse=X | ...
+            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line):
                 try:
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
@@ -47,9 +47,17 @@ def parse_step_data(log_path):
                         "progress": grab(r"([\d.]+)%", line),
                         "fr_loss": grab(r"fr=([\d.]+)", line),
                         "es_loss": grab(r"es=([\d.]+)", line),
+                        "de_loss": grab(r"de=([\d.]+)", line),
+                        "pt_loss": grab(r"pt=([\d.]+)", line),
+                        "zh_loss": grab(r"zh=([\d.]+)", line),
+                        "ja_loss": grab(r"ja=([\d.]+)", line),
                         "para_loss": grab(r"para=([\d.]+)", line),
                         "parse_loss": grab(r"parse=([\d.]+)", line),
                     }
+                    # V19: contrastive loss
+                    ctr_val = grab(r"ctr=([\d.]+)", line, default=None)
+                    if ctr_val is not None:
+                        row["contrastive_loss"] = ctr_val
                     # V15: geo scale and geo losses
                     geo_val = grab(r"geo=([\d.]+)", line, default=None)
                     if geo_val is not None:
@@ -217,12 +225,36 @@ def parse_eval_data(log_path):
                 m = re.search(r"token_acc=([\d.]+)", line)
                 if m:
                     current_eval["fr_token_acc"] = float(m.group(1))
-            # V14 ES eval: "ES EVAL: token_acc=X"
+            # V14+ ES eval: "ES EVAL: token_acc=X"
             if "ES EVAL:" in line and "token_acc=" in line:
                 current_eval = current_eval or {"step": last_step}
                 m = re.search(r"token_acc=([\d.]+)", line)
                 if m:
                     current_eval["es_token_acc"] = float(m.group(1))
+            # V19 DE eval
+            if "DE EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["de_token_acc"] = float(m.group(1))
+            # V19 PT eval
+            if "PT EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["pt_token_acc"] = float(m.group(1))
+            # V19 ZH eval
+            if "ZH EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["zh_token_acc"] = float(m.group(1))
+            # V19 JA eval
+            if "JA EVAL:" in line and "token_acc=" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"token_acc=([\d.]+)", line)
+                if m:
+                    current_eval["ja_token_acc"] = float(m.group(1))
             # V14 Parse eval: "PARSE EVAL: token_acc=X"
             if "PARSE EVAL:" in line and "token_acc=" in line:
                 current_eval = current_eval or {"step": last_step}
@@ -269,7 +301,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -279,7 +311,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -800,6 +832,19 @@ function updateDashboard(response) {
     const esLossVals = steps.map(d => d.es_loss || 0);
     if (esLossVals.some(v => v > 0))
         reconDs.push(ds('ES Trans', ema(esLossVals, sw), '#ff7043'));
+    // V19: DE, PT, ZH, JA translation losses
+    const deLossVals = steps.map(d => d.de_loss || 0);
+    if (deLossVals.some(v => v > 0))
+        reconDs.push(ds('DE Trans', ema(deLossVals, sw), '#7e57c2'));
+    const ptLossVals = steps.map(d => d.pt_loss || 0);
+    if (ptLossVals.some(v => v > 0))
+        reconDs.push(ds('PT Trans', ema(ptLossVals, sw), '#ec407a'));
+    const zhLossVals = steps.map(d => d.zh_loss || 0);
+    if (zhLossVals.some(v => v > 0))
+        reconDs.push(ds('ZH Trans', ema(zhLossVals, sw), '#42a5f5'));
+    const jaLossVals = steps.map(d => d.ja_loss || 0);
+    if (jaLossVals.some(v => v > 0))
+        reconDs.push(ds('JA Trans', ema(jaLossVals, sw), '#66bb6a'));
     const paraLossVals = steps.map(d => d.para_loss || 0);
     if (paraLossVals.some(v => v > 0))
         reconDs.push(ds('Paraphrase', ema(paraLossVals, sw), '#26a69a'));
@@ -808,6 +853,10 @@ function updateDashboard(response) {
         reconDs.push(ds('Parse', ema(parseLossVals, sw), '#ffa726'));
     if (hasCmp && clippedCmpSteps.length) reconDs.push(cmpDs('Recon' + cmpLabel,
         ema(clippedCmpSteps.map(d => d.recon), ccw), C.cmpRecon));
+    // V19: Contrastive loss
+    const ctrLossVals = steps.map(d => d.contrastive_loss || 0);
+    if (ctrLossVals.some(v => v > 0))
+        reconDs.push(ds('Contrastive', ema(ctrLossVals, sw), '#ef5350', {yAxisID: 'y2'}));
     // Geo gate on right axis (0-1 scale)
     const geoGateVals = steps.map(d => d.geo_gate);
     if (geoGateVals.some(v => v > 0))
@@ -1306,6 +1355,11 @@ function updateDashboard(response) {
 
     const hasFr = latest.fr_loss > 0 || (le.fr_token_acc != null);
     const hasEs = latest.es_loss > 0 || (le.es_token_acc != null);
+    const hasDe = latest.de_loss > 0 || (le.de_token_acc != null);
+    const hasPt = latest.pt_loss > 0 || (le.pt_token_acc != null);
+    const hasZh = latest.zh_loss > 0 || (le.zh_token_acc != null);
+    const hasJa = latest.ja_loss > 0 || (le.ja_token_acc != null);
+    const hasCtr = latest.contrastive_loss > 0;
     const hasPara = latest.para_loss > 0;
     const hasParse = latest.parse_loss > 0;
     const isHydra = hasEs || hasPara || hasParse;
@@ -1337,6 +1391,30 @@ function updateDashboard(response) {
             if (le.es_token_acc != null) html += `  tok <span class="${rating(le.es_token_acc, 0.5, 0.2)}">${pct(le.es_token_acc)}</span>`;
             html += `\n`;
         }
+        // DE Trans
+        if (hasDe) {
+            html += `<span class="label"> DE Trans:</span>   <span class="value">${fmt(latest.de_loss, 4)}</span>`;
+            if (le.de_token_acc != null) html += `  tok <span class="${rating(le.de_token_acc, 0.5, 0.2)}">${pct(le.de_token_acc)}</span>`;
+            html += `\n`;
+        }
+        // PT Trans
+        if (hasPt) {
+            html += `<span class="label"> PT Trans:</span>   <span class="value">${fmt(latest.pt_loss, 4)}</span>`;
+            if (le.pt_token_acc != null) html += `  tok <span class="${rating(le.pt_token_acc, 0.5, 0.2)}">${pct(le.pt_token_acc)}</span>`;
+            html += `\n`;
+        }
+        // ZH Trans
+        if (hasZh) {
+            html += `<span class="label"> ZH Trans:</span>   <span class="value">${fmt(latest.zh_loss, 4)}</span>`;
+            if (le.zh_token_acc != null) html += `  tok <span class="${rating(le.zh_token_acc, 0.5, 0.2)}">${pct(le.zh_token_acc)}</span>`;
+            html += `\n`;
+        }
+        // JA Trans
+        if (hasJa) {
+            html += `<span class="label"> JA Trans:</span>   <span class="value">${fmt(latest.ja_loss, 4)}</span>`;
+            if (le.ja_token_acc != null) html += `  tok <span class="${rating(le.ja_token_acc, 0.5, 0.2)}">${pct(le.ja_token_acc)}</span>`;
+            html += `\n`;
+        }
         // Paraphrase
         if (hasPara) {
             html += `<span class="label"> Paraphrase:</span> <span class="value">${fmt(latest.para_loss, 4)}</span>\n`;
@@ -1348,6 +1426,10 @@ function updateDashboard(response) {
             html += `\n`;
         }
         html += `<span class="label"> EM EMA:</span>  <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
+        // V19: Contrastive loss
+        if (hasCtr) {
+            html += `<span class="label"> Contrastive:</span> <span class="value">${fmt(latest.contrastive_loss, 4)}</span>\n`;
+        }
     } else if (hasFr) {
         html += `\n<span class="label">           EN Recon        FR Translation</span>\n`;
         html += `<span class="label"> Loss:</span>    <span class="value">${fmt(latest.recon, 4).padEnd(16)}</span>`;
@@ -1431,7 +1513,7 @@ function updateDashboard(response) {
             const emEma = latest.em_ema || 0;
             const progress = latest.progress || 0;
             if (isHydra) {
-                const heads = ['EN', hasFr ? 'FR' : '', hasEs ? 'ES' : '', hasPara ? 'Para' : '', hasParse ? 'Parse' : ''].filter(Boolean);
+                const heads = ['EN', hasFr ? 'FR' : '', hasEs ? 'ES' : '', hasDe ? 'DE' : '', hasPt ? 'PT' : '', hasZh ? 'ZH' : '', hasJa ? 'JA' : '', hasPara ? 'Para' : '', hasParse ? 'Parse' : ''].filter(Boolean);
                 phaseText = `Hydra (${heads.length} Heads)`;
                 phaseColor = '#ff7043';
                 detailText = `${heads.join('+')} | EN: ${fmt(latest.recon, 3)} | EM: ${(emEma*100).toFixed(1)}%`;

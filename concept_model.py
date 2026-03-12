@@ -2004,3 +2004,198 @@ class ConceptAutoencoderV17(nn.Module):
         total = sum(p.numel() for p in self.parameters())
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return total, trainable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V19 — Multilingual Hydra: shared mBERT tokenizer, 9 decoder heads,
+#        shared lm_head across all languages
+# ═══════════════════════════════════════════════════════════════════════
+
+class ConceptAutoencoderV19(nn.Module):
+    """
+    V19 Multilingual Hydra: shared multilingual tokenizer + 9 decoder heads
+    with a single shared lm_head.
+
+    One encoder compresses input text (any language, mBERT tokenizer) into a
+    tight bottleneck concept space, then 9 decoder heads reconstruct different
+    outputs from the same bottleneck:
+      1. EN reconstruction       5. PT translation
+      2. FR translation          6. ZH translation
+      3. ES translation          7. JA translation
+      4. DE translation          8. EN paraphrase
+                                 9. Semantic parse
+
+    Key difference from V14: all heads share a single multilingual vocabulary
+    (mBERT, vocab_size=119547) and a single lm_head projection. This means
+    the decoder layers specialize in *generating* each language/task, but the
+    final token prediction layer is shared — forcing aligned representations
+    across all heads.
+    """
+
+    HEAD_NAMES = ["en", "fr", "es", "de", "pt", "zh", "ja", "para", "parse"]
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+
+        # --- Encoder (shared multilingual tokenizer) ---
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+
+        # --- Tight Bottleneck (num_concepts x concept_dim) ---
+        self.bottleneck = ConceptBottleneck(config)
+
+        # --- Shared decoder RoPE ---
+        dec_head_dim = config.dec_hidden // config.dec_heads
+        dec_rope_cos, dec_rope_sin = precompute_rope(dec_head_dim, config.max_seq_len)
+        self.register_buffer("dec_rope_cos", dec_rope_cos, persistent=False)
+        self.register_buffer("dec_rope_sin", dec_rope_sin, persistent=False)
+
+        # --- 9 decoder heads (per-head layers, norms, position queries) ---
+        self.head_pos_queries = nn.ParameterDict()
+        self.head_dec_layers = nn.ModuleDict()
+        self.head_dec_norms = nn.ModuleDict()
+        for name in self.HEAD_NAMES:
+            self.head_pos_queries[name] = nn.Parameter(
+                torch.zeros(config.max_seq_len, config.dec_hidden))
+            self.head_dec_layers[name] = nn.ModuleList([
+                ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+            ])
+            self.head_dec_norms[name] = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+
+        # --- Shared output projection (one lm_head for all heads) ---
+        self.lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+
+        self.apply(self._init_weights)
+        for name in self.HEAD_NAMES:
+            self._init_position_queries(self.head_pos_queries[name])
+
+    def _init_position_queries(self, param):
+        d = self.config.dec_hidden
+        pos = torch.arange(self.config.max_seq_len).float().unsqueeze(1)
+        div = torch.exp(torch.arange(0, d, 2).float() * -(math.log(10000.0) / d))
+        param.data[:, 0::2] = torch.sin(pos * div)
+        param.data[:, 1::2] = torch.cos(pos * div)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        """Encode input text into concept stack [B, num_concepts, concept_dim]."""
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+
+        x = self.enc_norm(x)
+        concepts = self.bottleneck(x)
+        return concepts
+
+    def decode_head(self, name, concepts, seq_len, attention_mask=None):
+        """Generic parallel decode through one decoder head."""
+        bsz = concepts.shape[0]
+        pos_queries = self.head_pos_queries[name]
+        dec_layers = self.head_dec_layers[name]
+        dec_norm = self.head_dec_norms[name]
+
+        x = pos_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+
+        for layer in dec_layers:
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
+
+        x = dec_norm(x)
+        return self.lm_head(x)
+
+    # --- Convenience wrappers ---
+    def decode_en(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('en', concepts, seq_len, attention_mask)
+
+    def decode_fr(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('fr', concepts, seq_len, attention_mask)
+
+    def decode_es(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('es', concepts, seq_len, attention_mask)
+
+    def decode_de(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('de', concepts, seq_len, attention_mask)
+
+    def decode_pt(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('pt', concepts, seq_len, attention_mask)
+
+    def decode_zh(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('zh', concepts, seq_len, attention_mask)
+
+    def decode_ja(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('ja', concepts, seq_len, attention_mask)
+
+    def decode_para(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('para', concepts, seq_len, attention_mask)
+
+    def decode_parse(self, concepts, seq_len, attention_mask=None):
+        return self.decode_head('parse', concepts, seq_len, attention_mask)
+
+    # Alias for probe_geometry.py compatibility
+    def decode_parallel(self, concepts, seq_len, attention_mask=None):
+        return self.decode_en(concepts, seq_len, attention_mask)
+
+    def forward(self, input_ids, attention_mask=None, targets=None):
+        """
+        Forward pass. targets is a dict mapping head names to (ids, mask) tuples.
+        Always decodes EN from the input. Additional heads decoded per targets dict.
+
+        Args:
+            input_ids: (B, seq_len) input token IDs
+            attention_mask: (B, seq_len) mask for input
+            targets: dict like {'fr': (ids, mask), 'para': (ids, mask), ...}
+
+        Returns:
+            dict with 'concepts', 'en_logits', and '{name}_logits' for each target.
+        """
+        concepts = self.encode(input_ids, attention_mask)
+
+        result = {'concepts': concepts}
+        result['en_logits'] = self.decode_head('en', concepts, input_ids.shape[1], attention_mask)
+
+        if targets:
+            for name, (ids, mask) in targets.items():
+                result[f'{name}_logits'] = self.decode_head(name, concepts, ids.shape[1], mask)
+
+        return result
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        """Flat bottleneck vector, L2-normalized — for contrastive/geometry losses."""
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
+        return F.normalize(flat, p=2, dim=-1)
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
