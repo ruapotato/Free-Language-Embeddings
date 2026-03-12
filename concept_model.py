@@ -2396,3 +2396,192 @@ def wordnet_troponym_chain_loss(level_vecs):
                 n_terms += 1
 
     return loss / max(n_terms, 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V21 — Lean EN→EN Autoencoder + Concept Whitening
+# ═══════════════════════════════════════════════════════════════════════
+
+class ConceptWhitening(nn.Module):
+    """
+    Concept whitening layer: decorrelates bottleneck dimensions via running
+    covariance statistics, then applies a learned orthogonal rotation.
+
+    During training, tracks running mean/covariance of concept vectors and
+    whitens (ZCA) them so dimensions are uncorrelated with unit variance.
+    This is a hard structural constraint — much stronger than a soft loss.
+
+    Based on: Chen et al., "Concept Whitening for Interpretable Image Recognition"
+    """
+
+    def __init__(self, dim, momentum=0.01, eps=1e-5):
+        super().__init__()
+        self.dim = dim
+        self.momentum = momentum
+        self.eps = eps
+        # Running statistics (not parameters, but persistent buffers)
+        self.register_buffer("running_mean", torch.zeros(dim))
+        self.register_buffer("running_cov", torch.eye(dim))
+        self.register_buffer("num_batches_tracked", torch.tensor(0, dtype=torch.long))
+        # Learned orthogonal rotation (initialized as identity)
+        self.rotation = nn.Parameter(torch.eye(dim))
+
+    def _update_stats(self, x_flat):
+        """Update running mean and covariance with current batch."""
+        with torch.no_grad():
+            batch_mean = x_flat.mean(dim=0)
+            centered = x_flat - batch_mean
+            batch_cov = (centered.T @ centered) / max(centered.shape[0] - 1, 1)
+            m = self.momentum
+            self.running_mean.mul_(1 - m).add_(batch_mean, alpha=m)
+            self.running_cov.mul_(1 - m).add_(batch_cov, alpha=m)
+            self.num_batches_tracked += 1
+
+    def _whiten_matrix(self):
+        """Compute ZCA whitening matrix from running covariance."""
+        cov = self.running_cov + self.eps * torch.eye(self.dim, device=self.running_cov.device)
+        # Eigendecompose: cov = U @ diag(S) @ U.T
+        S, U = torch.linalg.eigh(cov)
+        S = S.clamp(min=self.eps)
+        # ZCA whitening: W = U @ diag(1/sqrt(S)) @ U.T
+        W = U @ torch.diag(S.pow(-0.5)) @ U.T
+        return W
+
+    def forward(self, x):
+        """
+        x: (batch, dim) — flattened concept vector
+        Returns: whitened and rotated, same shape
+        """
+        x_flat = x
+
+        if self.training:
+            self._update_stats(x_flat.detach())
+
+        # Apply whitening
+        centered = x_flat - self.running_mean
+        if self.num_batches_tracked > 10:
+            W = self._whiten_matrix()
+            whitened = centered @ W.T
+        else:
+            whitened = centered  # skip whitening until stats stabilize
+
+        # Apply learned rotation
+        rotated = whitened @ self.rotation.T
+
+        return rotated
+
+
+class ConceptAutoencoderV21(nn.Module):
+    """
+    V21: Lean EN→EN autoencoder for massive diverse data.
+
+    Key changes from V20:
+    - Single EN decoder head (no translation heads)
+    - 3-layer decoder (down from 6) — fast, puts capacity in encoder
+    - Concept whitening on bottleneck (hard decorrelation, not soft loss)
+    - No auxiliary geometry losses — structure emerges from data diversity
+    - Designed for large batch sizes on diverse pretraining corpus
+    """
+
+    HEAD_NAMES = ["en"]
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+        self.bottleneck = ConceptBottleneck(config)
+        # Concept whitening on the flattened bottleneck
+        self.whitening = ConceptWhitening(config.num_concepts * config.concept_dim)
+        dec_head_dim = config.dec_hidden // config.dec_heads
+        dec_rope_cos, dec_rope_sin = precompute_rope(dec_head_dim, config.max_seq_len)
+        self.register_buffer("dec_rope_cos", dec_rope_cos, persistent=False)
+        self.register_buffer("dec_rope_sin", dec_rope_sin, persistent=False)
+        # Single EN decoder — 3 layers
+        self.pos_queries = nn.Parameter(
+            torch.zeros(config.max_seq_len, config.dec_hidden))
+        self.dec_layers = nn.ModuleList([
+            ParallelDecoderBlock(config) for _ in range(config.dec_layers)
+        ])
+        self.dec_norm = RMSNorm(config.dec_hidden, eps=config.rms_norm_eps)
+        self.lm_head = nn.Linear(config.dec_hidden, config.vocab_size, bias=False)
+        self.apply(self._init_weights)
+        self._init_position_queries(self.pos_queries)
+
+    def _init_position_queries(self, param):
+        d = self.config.dec_hidden
+        pos = torch.arange(self.config.max_seq_len).float().unsqueeze(1)
+        div = torch.exp(torch.arange(0, d, 2).float() * -(math.log(10000.0) / d))
+        param.data[:, 0::2] = torch.sin(pos * div)
+        param.data[:, 1::2] = torch.cos(pos * div)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+        x = self.enc_norm(x)
+        concepts = self.bottleneck(x)
+        # Apply whitening on flattened concepts
+        bsz2, K, D = concepts.shape
+        flat = concepts.reshape(bsz2, -1)  # (B, K*D)
+        whitened = self.whitening(flat)     # (B, K*D)
+        return whitened.reshape(bsz2, K, D)
+
+    def decode(self, concepts, seq_len, attention_mask=None):
+        bsz = concepts.shape[0]
+        x = self.pos_queries[:seq_len].unsqueeze(0).expand(bsz, -1, -1)
+        dec_attn_mask = None
+        if attention_mask is not None:
+            dec_attn_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            dec_attn_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+        for layer in self.dec_layers:
+            x = layer(x, concepts, self.dec_rope_cos, self.dec_rope_sin,
+                      attention_mask=dec_attn_mask)
+        x = self.dec_norm(x)
+        return self.lm_head(x)
+
+    # Compatibility aliases
+    def decode_head(self, name, concepts, seq_len, attention_mask=None):
+        return self.decode(concepts, seq_len, attention_mask)
+
+    def decode_en(self, concepts, seq_len, attention_mask=None):
+        return self.decode(concepts, seq_len, attention_mask)
+
+    def decode_parallel(self, concepts, seq_len, attention_mask=None):
+        return self.decode(concepts, seq_len, attention_mask)
+
+    def forward(self, input_ids, attention_mask=None):
+        concepts = self.encode(input_ids, attention_mask)
+        logits = self.decode(concepts, input_ids.shape[1], attention_mask)
+        return {'concepts': concepts, 'en_logits': logits}
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
+        return F.normalize(flat, p=2, dim=-1)
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
