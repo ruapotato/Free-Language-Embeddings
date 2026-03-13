@@ -2446,7 +2446,13 @@ class ConceptWhitening(nn.Module):
         # Force fp32 for numerical stability in eigendecomposition
         cov = self.running_cov.float() + self.eps * torch.eye(self.dim, device=self.running_cov.device)
         # Eigendecompose: cov = U @ diag(S) @ U.T
-        S, U = torch.linalg.eigh(cov)
+        try:
+            S, U = torch.linalg.eigh(cov)
+        except torch._C._LinAlgError:
+            # Ill-conditioned covariance — reset stats and skip whitening this step
+            self.num_batches_tracked.zero_()
+            self.running_cov.copy_(torch.eye(self.dim, device=cov.device))
+            return None
         S = S.clamp(min=self.eps)
         # ZCA whitening: W = U @ diag(1/sqrt(S)) @ U.T
         W = U @ torch.diag(S.pow(-0.5)) @ U.T
@@ -2466,7 +2472,10 @@ class ConceptWhitening(nn.Module):
         centered = x_flat - self.running_mean
         if self.num_batches_tracked > 10:
             W = self._whiten_matrix()
-            whitened = centered @ W.T
+            if W is not None:
+                whitened = centered @ W.T
+            else:
+                whitened = centered  # eigh failed, skip whitening this step
         else:
             whitened = centered  # skip whitening until stats stabilize
 
