@@ -1,180 +1,142 @@
 # flm — The Free Language Model
 
-> **Status: Active training (Concept Autoencoder V13).** Dual-decoder architecture compresses English into geometric concept vectors, then reconstructs both English and French from the same bottleneck — forcing language-independent meaning encoding.
+> **Status: Active training (Concept Autoencoder V24).** A sentence compressor that learns to compress arbitrary-length text into a dense concept vector and perfectly reconstruct it — the foundation for an LM that thinks in sentences, not tokens.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
 **Free as in freedom** — the name is a direct reference to the Free Software Foundation's philosophy that software freedom is a matter of liberty, not price.
 
-## The Goal
+## The Big Idea
 
-Build a geometric language representation — a 1024-dimensional space where meaning has shape. Sentences map to points, similar meanings cluster together, semantic relationships form consistent directions, and word-order changes that alter meaning are distinguishable. This representation becomes the input layer to a small language model (SLM) that reasons over geometry instead of raw tokens.
+Traditional LLMs predict one token at a time. This project takes a different approach: build two models that work together so the language model **never touches tokens at all**.
 
-Right now the project is focused entirely on stage 1: getting the concept autoencoder to produce a space with good clustering, consistent directions, and real semantic structure. Stage 2 (the SLM that reasons in concept space) comes later.
-
-## Concept Autoencoder — Current Architecture (V13)
-
-### The Idea
-
-Compress English into a 1024-dim geometric bottleneck, then decode it back to both English and French. The dual-decoder forces language-independent encoding — the French decoder can't rely on English surface tokens, so the concept space must encode actual meaning, not just token patterns.
-
-### Why Dual-Decoder?
-
-V10-V12 achieved good reconstruction but the concept space was essentially a bag-of-words token matcher — "the dog bit the man" and "the man bit the dog" had 0.97 cosine similarity. Adding French translation forces the bottleneck to encode meaning because:
-- French has different word order (adjectives after nouns, etc.)
-- Different vocabulary means no token-level shortcuts
-- The concept space must be language-independent to serve both decoders
-
-### Architecture (~82.8M params)
+### The Two-Model Architecture
 
 ```
-Encoder (EN) → 32×32 Bottleneck → EN Decoder (reconstruction)
-                                 → FR Decoder (translation)
+         Model 1 (frozen)                    Model 2                    Model 1 (frozen)
+┌──────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────────┐
+│                          │    │                          │    │                          │
+│ tokens → Encoder →       │    │                          │    │       → Bottleneck →     │
+│          Bottleneck →  ──┼──→ │  Concept-Space LM  ──────┼──→ │         Parallel    →    │
+│          concept vectors │    │  (sentence predictor)    │    │         Decoder → tokens  │
+│                          │    │                          │    │                          │
+└──────────────────────────┘    └──────────────────────────┘    └──────────────────────────┘
 ```
 
-| Component | Details |
-|-----------|---------|
-| Encoder | 6 layers, 384 hidden, 6 heads, SwiGLU FFN |
-| Bottleneck | 32 learned queries cross-attend to encoder, project to 32-dim each |
-| EN Decoder | 6 parallel decoder blocks, cross-attends to concept stack |
-| FR Decoder | 6 parallel decoder blocks, separate weights, cross-attends to same concepts |
-| Concept space | 32 slots × 32 dims = 1024-dim representation |
-| EN Tokenizer | BERT base uncased (30,522 vocab) |
-| FR Tokenizer | CamemBERT (32,005 vocab) |
-| Max sequence | 128 tokens |
-| Positional encoding | RoPE |
-| Normalization | RMSNorm |
+**Model 1 — Sentence Compressor** (Phase 1, in progress): A non-autoregressive encoder-decoder that compresses text into fixed-size concept vectors and reconstructs it perfectly. Once trained, its weights are **frozen** and it becomes a fixed translation layer between token-space and concept-space.
 
-### Training Data (DFSG-compliant)
+**Model 2 — Concept-Space LM** (Phase 2, planned): An autoregressive language model that operates **entirely in concept space**. It predicts the next *sentence* (as a concept vector), not the next *token*. Model 1 is strapped onto the front and back as frozen bookends — encoding input text to concepts on the way in, decoding predicted concepts back to text on the way out.
 
-3.2M English↔French translation pairs from three sources:
+### Why This Matters
 
-| Dataset | License | Pairs | Source |
-|---------|---------|-------|--------|
-| Europarl v7 EN-FR | Public domain | ~190K | European Parliament proceedings |
-| Tatoeba EN-FR | CC-BY 2.0 | ~275K | Community-contributed translations |
-| WikiMatrix EN-FR | CC-BY-SA | ~2.7M | Mined parallel sentences from Wikipedia |
+- **The LM never sees tokens.** It thinks in sentence-level meaning representations. Each prediction step covers an entire sentence worth of semantics.
+- **Parallel token decoding.** Model 1's non-autoregressive decoder renders concept vectors to text in a single pass — no sequential token-by-token generation.
+- **Forced semantic compression.** The tight bottleneck can't encode surface-level token patterns. The concept space must capture actual meaning to achieve perfect reconstruction.
+- **Hierarchical generation.** The LM plans at the sentence/concept level for long-range coherence, then Model 1 handles the low-level rendering.
 
-### Training Setup
+Related work (SONAR-LLM, Latent Reasoning via Sentence Embedding Prediction) validates this general direction but uses autoregressive decoders. Our parallel decoder should be faster.
+
+## Phase 1: Sentence Compressor — Current Architecture (V24)
+
+### How It Works
+
+```
+tokens → [Transformer Encoder] → [Cross-Attention Bottleneck] → concept vector → [Parallel Decoder] → tokens
+```
+
+- **Encoder**: 4-layer transformer processes input tokens
+- **Concept Bottleneck**: 64 learned cross-attention queries compress the encoder output into a fixed-size concept vector (64 vectors x 16 dims = 1024-dim)
+- **Concept Whitening**: ZCA whitening + learned rotation for disentangled concept dimensions
+- **Parallel Decoder**: Non-autoregressive — all output tokens predicted simultaneously from the concept vector
+
+The decoder is **not autoregressive**. Every output token is predicted in parallel from the concept representation alone. This forces the bottleneck to fully capture the sentence's meaning.
+
+### V24 Config
 
 | Parameter | Value |
 |-----------|-------|
-| Batch size | 48 |
-| Peak LR | 2e-4 (cosine decay) |
-| Total steps | 600K |
-| Loss | recon_loss + λ_fr × translation_loss |
-| λ_fr | 1.0 |
+| Parameters | 25.9M |
+| Encoder | 4 layers, 256 hidden, 4 heads, 1024 FFN |
+| Decoder | 4 layers, 256 hidden, 4 heads, 1024 FFN |
+| Bottleneck | 64 concepts x 16 dims = 1024-dim |
+| Tokenizer | bert-base-uncased (30,522 vocab, English) |
+| Max sequence | 128 tokens |
+| Batch size | 256 |
+| Throughput | ~110K tok/s |
+
+### Key Breakthrough
+
+V21 and V22 plateaued at loss ~6.0-6.5 despite scaling to 210M+ params. The root cause was a **padding mask bug** — the concept bottleneck's cross-attention was attending to padding tokens, corrupting the concept vectors for variable-length inputs. After fixing this, V24 blew through the plateau to loss 0.16 and still dropping with just 25.9M params.
 
 ### Training Progress
 
-**[Training Dashboard (live charts)](https://ruapotato.github.io/chat_hamner/dashboard.html)** — interactive Chart.js dashboard with full reference guide, updated every push.
+**[Training Dashboard](https://ruapotato.github.io/chat_hamner_v2/dashboard.html)** — interactive charts, updated every push.
 
-**Local live monitor:** `python web_dashboard.py` then open http://localhost:8501 (auto-refreshes every 30s)
+**Local live monitor:** `python web_dashboard.py` then open http://localhost:8501
 
-### Geometry Probes
+## Phase 2: Concept-Space LM (Planned)
 
-| Probe | What it measures |
-|-------|-----------------|
-| Analogy | Parallelogram completion (king-man+woman≈queen) |
-| Cluster gap | Separation between same-meaning and different-meaning clusters |
-| Direction consistency | Whether semantic directions are consistent across the space |
-| Word-order sensitivity | Can the space distinguish "dog bit man" from "man bit dog"? |
-| Effective rank | Dimensionality utilization (rank90, rank95) |
+Once Model 1 achieves near-perfect reconstruction (loss near 0, high exact-match accuracy):
 
-### Quick Start
+1. **Freeze** Model 1's encoder, bottleneck, and decoder weights
+2. **Build Model 2**: an autoregressive LM that takes concept vectors as input and predicts the next concept vector
+3. **Wire it up**: `text → [frozen encoder+bottleneck] → concepts → [Model 2 LM] → predicted concepts → [frozen bottleneck+decoder] → text`
 
-```bash
-# 1. Build translation pair datasets
-python build_pairs.py
-
-# 2. Train V13 dual-decoder concept autoencoder
-python train_v13.py --fresh         # from scratch
-
-# 3. Training dashboard (auto-detects latest version)
-python web_dashboard.py
-```
+Model 2 is autoregressive at the **sentence level** — it predicts sequences of concept vectors, each representing a full sentence. But token-level decoding within each sentence is parallel via Model 1's frozen non-autoregressive decoder.
 
 ## Version History
 
-### Concept Autoencoder V13 (current) — Dual-Decoder EN↔FR
-- Dual decoder: EN reconstruction + FR translation from shared concept bottleneck
-- Forces language-independent meaning encoding (FR can't exploit EN surface tokens)
-- 82.8M params (54M shared encoder/bottleneck/EN-decoder + 28M FR decoder)
-- 3.2M DFSG-compliant EN↔FR pairs (Europarl + Tatoeba + WikiMatrix)
-- Non-autoregressive parallel decoder for both EN and FR
-- V12 post-mortem: good reconstruction but bag-of-words — word order sensitivity too high (0.987)
+### V24 (current) — Tiny Sentence Compressor
+- 25.9M params, 4L encoder/decoder, 1024-dim bottleneck
+- Fixed critical padding mask bug in cross-attention bottleneck
+- Loss 0.16 and dropping (previous versions plateaued at 6.0+)
 
-### Concept Autoencoder V12 (archived) — Pure Reconstruction
-- Same architecture as V10, trained longer
-- Excellent reconstruction (96% token accuracy, 84% exact match)
-- But concept space was a bag-of-words token matcher, not a meaning space
+### V22 (archived) — Scaled English-Only
+- 248M params, 12L encoder, 8L decoder, bert-base-uncased
+- Plateaued at ~6.0 — same padding mask bug as V21
 
-### Concept Autoencoder V11 (archived) — Pure Reconstruction on Diverse Data
-- 600K steps on diverse English text
-- Good reconstruction, geometry probes showed some structure
+### V21 (archived) — 4L Decoder Experiment
+- Asymptoted at ~6.48, led to scaling attempts
 
-### Concept Autoencoder V10 (archived) — Parallel Decoder
-- Replaced autoregressive decoder with non-autoregressive parallel decoder
-- 6 parallel decoder blocks with learned position queries
-- Cross-attention to concept vectors, all positions decoded simultaneously
+### V13 (archived) — Dual-Decoder EN↔FR
+- 82.8M params, English reconstruction + French translation
+- Forced language-independent encoding via cross-lingual decoder
 
-### Concept Autoencoder V9 (archived) — Recon-Gated Slot Specialization
-- Recon-gated geometry: geometry losses suppressed until reconstruction works
-- Dynamic phases driven by recon quality, not fixed step counts
-- Hard repulsion loss: targets worst-offending pairs for clustering gap
+### V10-V12 (archived) — Pure Reconstruction
+- Good reconstruction (96% token accuracy) but bag-of-words concept space
 
-### Concept Autoencoder V8 (archived) — Staged Slot Specialization
-- Three training phases: Foundation → Slot Focus → Joint Fine-tune
-- Per-slot gradient scaling in Phase 2
-
-### Concept Autoencoder V7 (archived) — Flat Cosine + Margin + Real Paraphrase
-- Flat cosine similarity, margin losses, per-slot paraphrase loss on real data
-- Gradient taper, batch repulsion loss
-
-### Concept Autoencoder V6 (archived) — Detached Geometry
-- Detached encoder/decoder training, per-slot classifiers
-- 32/32 slot assignments correct within 1,000 steps
-
-### Concept Autoencoder V5 (archived) — 32-Slot Supervised Concepts
-- 54.3M params, 32×32 concept bottleneck, supervised slot isolation
-
-### Concept Autoencoder V4 (archived) — Hard Negatives + Rank Pushing
-### Concept Autoencoder V3 (archived) — Decorrelation Focus
-### Concept Autoencoder V2 (archived) — Scheduled Weights + Word-Order
-### Concept Autoencoder V1 (archived) — Baseline
-
-### V3 (stopped) — SmolLM-135M, Common Pile Data
-### V2 (mothballed) — 493M Dense Transformer
-### V1 (archived) — Tournament of 10 Architectures
+### V1-V9 (archived) — Geometry Experiments
+- Various approaches to concept space structure: supervised slots, decorrelation, margin losses, staged training
 
 ## Key Lessons Learned
 
-1. **Next-token prediction at small scale needs enormous data** — 100B+ tokens for coherent output from a 135M model.
-2. **Bottleneck forces information encoding** — reconstruction loss ensures the concept vectors actually capture meaning.
-3. **Bag-of-words problem** — pure reconstruction doesn't force word-order sensitivity or deep meaning; a model can achieve 95%+ token accuracy with surface-level encoding.
-4. **Dual-decoder forces meaning** — adding a cross-lingual decoder prevents surface-token shortcuts and forces the bottleneck to encode language-independent semantics.
-5. **Multi-task loss imbalance** — easier tasks (same-language reconstruction) dominate shared representations; cross-lingual translation is slower but shapes better geometry.
-6. **DFSG-compliant data is sufficient** — 3.2M parallel pairs from public domain and Creative Commons sources.
+1. **Non-autoregressive decoding works** — parallel decoders can reconstruct text from concept vectors, no sequential generation needed.
+2. **Padding masks matter enormously** — the cross-attention bottleneck must properly mask padding tokens or concept vectors get corrupted. This was the difference between 6.0 plateau and 0.16 loss.
+3. **Small models can compress well** — 25.9M params outperforms 248M when the architecture bug is fixed. The bottleneck capacity matters more than raw model size.
+4. **Geometry may not need explicit losses** — V24 dropped all geometry losses and just optimizes reconstruction. Whether the resulting concept space has useful geometric properties will be tested when we build Model 2.
+5. **Contrastive learning from scratch doesn't work** — SimCSE-style training trivially achieves near-zero loss because random encoders already produce distinguishable embeddings for different texts.
 
 ## Project Structure
 
 ```
 flm/
-├── concept_model.py          # Concept autoencoder (V13: 82.8M, dual decoder)
-├── train_v13.py              # V13 training (dual-decoder EN→concepts→EN+FR)
-├── train_v12.py              # V12 training (archived)
-├── train_v11.py              # V11 training (archived)
-├── train_v9.py               # V9 training (archived)
-├── web_dashboard.py          # Live web dashboard (auto-refresh)
-├── probe_geometry.py         # Probe concept space geometry
-├── build_pairs.py            # Download DFSG paraphrase pair datasets
-├── data/
-│   ├── pairs/                # Translation pairs, paraphrases, etc.
-│   └── concept_axes/         # Synthetic slot isolation data (32 slots)
-├── checkpoints/              # Model checkpoints (gitignored)
+├── concept_model.py          # Model definitions (encoder, bottleneck, decoder, whitening)
+├── train_v24.py              # Current training script (Phase 1 sentence compressor)
+├── web_dashboard.py          # Live training dashboard
 ├── docs/
-│   └── dashboard.html        # Static dashboard export for GitHub Pages
-└── logs/                     # Training logs and metrics CSVs
+│   └── dashboard.html        # Static dashboard snapshot (GitHub Pages)
+├── checkpoints/              # Model checkpoints (gitignored)
+└── logs/                     # Training metrics CSVs
+```
+
+## Quick Start
+
+```bash
+# Train V24 sentence compressor
+python train_v24.py --fresh
+
+# Monitor training
+python web_dashboard.py        # http://localhost:8501
 ```
 
 ## License

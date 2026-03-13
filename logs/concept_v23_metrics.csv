@@ -1,0 +1,2 @@
+timestamp,step,contrastive_loss,alignment,uniformity,lr,elapsed_hours,analogy_avg,clustering_gap,direction_consistency,word_order_sim,effective_rank90,effective_rank95
+2026-03-12T17:32:14.552782,5000,0.003239,0.0000,-3.4242,9.999386e-05,2.9030,0.3211,0.0332,0.1336,0.9884,38,45

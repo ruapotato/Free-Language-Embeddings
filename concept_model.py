@@ -149,10 +149,11 @@ class CrossAttention(nn.Module):
         self.o_proj = nn.Linear(q_dim, q_dim, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, query, memory):
+    def forward(self, query, memory, memory_mask=None):
         """
         query: (batch, q_len, q_dim)
         memory: (batch, m_len, kv_dim)
+        memory_mask: optional (batch, 1, 1, m_len) additive mask — -inf for padding positions
         """
         bsz, q_len, _ = query.shape
         m_len = memory.shape[1]
@@ -163,6 +164,8 @@ class CrossAttention(nn.Module):
 
         scale = 1.0 / math.sqrt(self.head_dim)
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
+        if memory_mask is not None:
+            attn = attn + memory_mask
         attn = F.softmax(attn, dim=-1, dtype=torch.float32).type_as(q)
         attn = self.dropout(attn)
 
@@ -217,9 +220,10 @@ class ConceptBottleneck(nn.Module):
         # Project to concept dim
         self.proj = nn.Linear(config.enc_hidden, config.concept_dim, bias=False)
 
-    def forward(self, encoder_output):
+    def forward(self, encoder_output, encoder_mask=None):
         """
         encoder_output: (batch, seq_len, enc_hidden)
+        encoder_mask: optional (batch, 1, 1, seq_len) additive mask — -inf for padding
         Returns: (batch, num_concepts, concept_dim) — the concept stack
         """
         bsz = encoder_output.shape[0]
@@ -227,8 +231,8 @@ class ConceptBottleneck(nn.Module):
         # Expand queries for batch
         queries = self.queries.unsqueeze(0).expand(bsz, -1, -1)  # (B, K, enc_hidden)
 
-        # Cross-attend to encoder output
-        concepts = self.cross_attn(queries, encoder_output)  # (B, K, enc_hidden)
+        # Cross-attend to encoder output (with padding mask)
+        concepts = self.cross_attn(queries, encoder_output, memory_mask=encoder_mask)
         concepts = self.norm(concepts)
 
         # Project to concept dim
@@ -419,7 +423,7 @@ class ConceptAutoencoder(nn.Module):
         x = self.enc_norm(x)
 
         # Bottleneck: learned queries cross-attend to encoder output
-        concepts = self.bottleneck(x)  # (B, K, concept_dim)
+        concepts = self.bottleneck(x, encoder_mask=attn_mask)  # (B, K, concept_dim)
 
         return concepts
 
@@ -2439,7 +2443,8 @@ class ConceptWhitening(nn.Module):
 
     def _whiten_matrix(self):
         """Compute ZCA whitening matrix from running covariance."""
-        cov = self.running_cov + self.eps * torch.eye(self.dim, device=self.running_cov.device)
+        # Force fp32 for numerical stability in eigendecomposition
+        cov = self.running_cov.float() + self.eps * torch.eye(self.dim, device=self.running_cov.device)
         # Eigendecompose: cov = U @ diag(S) @ U.T
         S, U = torch.linalg.eigh(cov)
         S = S.clamp(min=self.eps)
@@ -2541,7 +2546,7 @@ class ConceptAutoencoderV21(nn.Module):
         for layer in self.enc_layers:
             x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
         x = self.enc_norm(x)
-        concepts = self.bottleneck(x)
+        concepts = self.bottleneck(x, encoder_mask=attn_mask)
         # Apply whitening on flattened concepts
         bsz2, K, D = concepts.shape
         flat = concepts.reshape(bsz2, -1)  # (B, K*D)
@@ -2588,3 +2593,74 @@ class ConceptAutoencoderV21(nn.Module):
 
 # V22 is architecturally identical to V21, just different config (bigger model, smaller vocab)
 ConceptAutoencoderV22 = ConceptAutoencoderV21
+
+
+class ConceptEncoderV23(nn.Module):
+    """
+    V23: Contrastive concept encoder — no decoder.
+
+    Encoder-only architecture trained with SimCSE-style contrastive learning.
+    The concept bottleneck is directly optimized to be a meaningful representation
+    space, without needing to reconstruct input tokens.
+
+    Architecture: encoder → bottleneck → whitening → concept vector (512d)
+    Training: InfoNCE loss with dropout augmentation (same text, two dropout masks)
+    """
+
+    def __init__(self, config: ConceptConfig):
+        super().__init__()
+        self.config = config
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.enc_hidden)
+        head_dim = config.enc_hidden // config.enc_heads
+        enc_rope_cos, enc_rope_sin = precompute_rope(head_dim, config.max_seq_len)
+        self.register_buffer("enc_rope_cos", enc_rope_cos, persistent=False)
+        self.register_buffer("enc_rope_sin", enc_rope_sin, persistent=False)
+        self.enc_layers = nn.ModuleList([
+            EncoderBlock(config) for _ in range(config.enc_layers)
+        ])
+        self.enc_norm = RMSNorm(config.enc_hidden, eps=config.rms_norm_eps)
+        self.bottleneck = ConceptBottleneck(config)
+        self.whitening = ConceptWhitening(config.num_concepts * config.concept_dim)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def encode(self, input_ids, attention_mask=None):
+        bsz, seq_len = input_ids.shape
+        x = self.embed_tokens(input_ids)
+        attn_mask = None
+        if attention_mask is not None:
+            pad_mask = torch.zeros(bsz, 1, 1, seq_len, device=x.device, dtype=x.dtype)
+            pad_mask.masked_fill_(attention_mask[:, None, None, :] == 0, float("-inf"))
+            attn_mask = pad_mask
+        for layer in self.enc_layers:
+            x = layer(x, self.enc_rope_cos, self.enc_rope_sin, attn_mask)
+        x = self.enc_norm(x)
+        concepts = self.bottleneck(x, encoder_mask=attn_mask)
+        bsz2, K, D = concepts.shape
+        flat = concepts.reshape(bsz2, -1)
+        whitened = self.whitening(flat)
+        return whitened.reshape(bsz2, K, D)
+
+    def concept_vector(self, input_ids, attention_mask=None):
+        concepts = self.encode(input_ids, attention_mask)
+        flat = concepts.view(concepts.shape[0], -1)
+        return F.normalize(flat, p=2, dim=-1)
+
+    def forward(self, input_ids, attention_mask=None):
+        return {'concepts': self.encode(input_ids, attention_mask)}
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return total, trainable
+
+
+# V24: same architecture as V21 (with whitening), just tiny config + bigger bottleneck
+ConceptAutoencoderV24 = ConceptAutoencoderV21
