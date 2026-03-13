@@ -1,12 +1,21 @@
 """
-FLM V24 — Tiny Sentence Compressor
+FLM V24 — Sentence Compressor
 ================================================================================
-Tiny non-autoregressive autoencoder. Just compress and decompress text.
-Bigger bottleneck (1024 dims), smaller model (26M), EN-only vocab (30K).
-Goal: perfect reconstruction. Once achieved, freeze encoder for use with an LM.
+Non-autoregressive autoencoder that compresses INDIVIDUAL SENTENCES into concept
+vectors and reconstructs them. Each training sample is one sentence — NOT a
+random document chunk.
+
+This is Phase 1 of a two-model architecture:
+  - Model 1 (this): sentence → concept vector → sentence (frozen after training)
+  - Model 2 (later): autoregressive LM in concept space, predicts next sentence
+    as a concept vector. Model 1 strapped on front/back as frozen bookends.
+
+The LM will never see tokens. A prompt gets split into sentences, each sentence
+becomes one concept vector via the frozen encoder, the LM predicts the next
+concept vector(s), and the frozen decoder renders them back to text.
 
 Architecture: 4L encoder (256d) → 64×16=1024 bottleneck + whitening → 4L decoder (256d)
-Data: Wikipedia + Gutenberg + StackExchange + arXiv + USGPO (~300GB, streaming)
+Data: Individual sentences extracted from Wikipedia, Gutenberg, StackExchange, etc.
 
 Usage:
     python train_v24.py --fresh            # start from scratch
@@ -15,6 +24,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -53,7 +63,7 @@ MODEL_CONFIG = dict(
     dec_layers=4,
     dec_heads=4,
     dec_intermediate=1024,
-    max_seq_len=128,
+    max_seq_len=64,
     dropout=0.1,
 )
 
@@ -162,20 +172,32 @@ def log_metrics(step, metrics):
 # Streaming data loader — reads from massive JSONL files
 # ---------------------------------------------------------------------------
 
-class StreamingPretrainDataset:
+class SentenceDataset:
     """
-    Streams text from multiple JSONL pretrain files with weighted sampling.
-    Each file is read sequentially; when exhausted, wraps around.
-    Chunks long documents into max_len-sized pieces.
+    Streams INDIVIDUAL SENTENCES from JSONL pretrain files.
+
+    Each training sample is one sentence — because at inference time,
+    a prompt gets split into sentences, each becomes one concept vector,
+    and the LM operates on the sequence of concept vectors.
+
+    Documents are split on sentence boundaries (. ! ?).
+    Sentences are buffered and served one per sample.
+    Batches are bucketed by token length for minimal padding.
     """
 
-    def __init__(self, tokenizer, max_len=128, chunk_overlap=16):
+    # Sentence splitting regex: split after . ! ? followed by space or end
+    _SENT_RE = re.compile(r'(?<=[.!?])\s+')
+
+    def __init__(self, tokenizer, max_len=128):
         self.tok = tokenizer
         self.max_len = max_len
-        self.chunk_overlap = chunk_overlap
         self.sources = []
         self.weights = []
         self.cum_weights = []
+
+        # Buffer of extracted sentences (raw text strings)
+        self._sentence_buf = []
+        self._buf_target = 50_000  # refill when below this
 
         for path, weight in PRETRAIN_SOURCES:
             if os.path.exists(path):
@@ -196,11 +218,14 @@ class StreamingPretrainDataset:
             cum += w
             self.cum_weights.append(cum)
 
-        # File handles and position tracking
+        # File handles
         self._handles = [None] * len(self.sources)
-        self._line_counts = [0] * len(self.sources)
 
         log(f"  {len(self.sources)} sources loaded")
+
+        # Initial fill
+        self._refill_buffer()
+        log(f"  Sentence buffer: {len(self._sentence_buf):,} sentences ready")
 
     def _sample_source(self):
         r = random.random()
@@ -210,13 +235,10 @@ class StreamingPretrainDataset:
         return len(self.sources) - 1
 
     def _read_line(self, source_idx):
-        """Read next line from source, reopening if at EOF."""
         if self._handles[source_idx] is None:
             self._handles[source_idx] = open(self.sources[source_idx], "r")
-
         line = self._handles[source_idx].readline()
         if not line:
-            # EOF — reopen from start
             self._handles[source_idx].close()
             self._handles[source_idx] = open(self.sources[source_idx], "r")
             line = self._handles[source_idx].readline()
@@ -224,55 +246,51 @@ class StreamingPretrainDataset:
                 return None
         return line
 
-    def _get_text(self, source_idx):
-        """Get a text chunk from a source."""
-        for _ in range(10):  # retry on bad lines
+    def _extract_sentences(self, text):
+        """Split a document into individual sentences."""
+        sentences = self._SENT_RE.split(text.strip())
+        result = []
+        for s in sentences:
+            s = s.strip()
+            # Filter: must be a real sentence (3+ words, not too long)
+            word_count = len(s.split())
+            if word_count >= 3 and word_count <= 50:
+                result.append(s)
+        return result
+
+    def _refill_buffer(self):
+        """Read documents and extract sentences until buffer is full."""
+        attempts = 0
+        while len(self._sentence_buf) < self._buf_target and attempts < 100_000:
+            attempts += 1
+            source_idx = self._sample_source()
             line = self._read_line(source_idx)
             if line is None:
-                return None
+                continue
             try:
                 doc = json.loads(line)
                 text = doc.get("text", "").strip()
-                if len(text) > 20:
-                    return text
+                if len(text) < 20:
+                    continue
+                sents = self._extract_sentences(text)
+                self._sentence_buf.extend(sents)
             except (json.JSONDecodeError, KeyError):
                 continue
-        return None
-
-    def _chunk_text(self, text):
-        """Extract a random ~max_len token chunk using character-level estimation.
-        Avoids tokenizing the full document (which can be 300K+ chars).
-        ~5 chars per BERT-uncased token on average."""
-        max_chars = self.max_len * 5  # rough estimate
-        if len(text) <= max_chars:
-            return text
-        # Random start position, try to land on a space for clean boundaries
-        start = random.randint(0, len(text) - max_chars)
-        # Snap to next space to avoid cutting mid-word
-        space_pos = text.find(" ", start)
-        if space_pos != -1 and space_pos < start + 50:
-            start = space_pos + 1
-        chunk = text[start:start + max_chars]
-        # Trim to last space for clean end
-        last_space = chunk.rfind(" ")
-        if last_space > max_chars // 2:
-            chunk = chunk[:last_space]
-        return chunk.strip()
+        random.shuffle(self._sentence_buf)
 
     def get_batch(self, batch_size):
-        """Get a batch of tokenized text chunks."""
+        """Get a batch of tokenized individual sentences."""
+        # Refill if running low
+        if len(self._sentence_buf) < batch_size * 2:
+            self._refill_buffer()
+
+        # Grab sentences
         texts = []
-        while len(texts) < batch_size:
-            source_idx = self._sample_source()
-            text = self._get_text(source_idx)
-            if text is None:
-                continue
-            chunk = self._chunk_text(text)
-            if len(chunk) > 10:
-                texts.append(chunk)
+        while len(texts) < batch_size and self._sentence_buf:
+            texts.append(self._sentence_buf.pop())
 
         enc = self.tok(texts, max_length=self.max_len,
-                       padding=True, truncation=True, return_tensors="pt")
+                       padding='longest', truncation=True, return_tensors="pt")
         return enc
 
     def close(self):
@@ -603,7 +621,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
     model.train()
 
     log("Loading data...")
-    dataset = StreamingPretrainDataset(tokenizer, max_len=config.max_seq_len)
+    dataset = SentenceDataset(tokenizer, max_len=config.max_seq_len)
 
     total, _ = _unwrap(model).count_parameters()
     log(f"\nTraining plan (V24 — Tiny Sentence Compressor):")

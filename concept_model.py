@@ -2442,20 +2442,21 @@ class ConceptWhitening(nn.Module):
             self.num_batches_tracked += 1
 
     def _whiten_matrix(self):
-        """Compute ZCA whitening matrix from running covariance."""
-        # Force fp32 for numerical stability in eigendecomposition
-        cov = self.running_cov.float() + self.eps * torch.eye(self.dim, device=self.running_cov.device)
-        # Eigendecompose: cov = U @ diag(S) @ U.T
+        """Compute whitening matrix via Cholesky decomposition (more stable than eigh).
+
+        Cholesky gives us L where cov = L @ L.T, so W = L^{-1} whitens the data.
+        This avoids eigendecomposition which is fragile with ill-conditioned matrices.
+        """
+        # Force fp32 + stronger regularization for stability
+        cov = self.running_cov.float() + 1e-3 * torch.eye(self.dim, device=self.running_cov.device)
         try:
-            S, U = torch.linalg.eigh(cov)
+            L = torch.linalg.cholesky(cov)
+            W = torch.linalg.inv(L)  # W @ x decorrelates: cov(Wx) = W @ cov @ W.T = I
         except torch._C._LinAlgError:
-            # Ill-conditioned covariance — reset stats and skip whitening this step
+            # Still failed — reset stats, skip this step
             self.num_batches_tracked.zero_()
             self.running_cov.copy_(torch.eye(self.dim, device=cov.device))
             return None
-        S = S.clamp(min=self.eps)
-        # ZCA whitening: W = U @ diag(1/sqrt(S)) @ U.T
-        W = U @ torch.diag(S.pow(-0.5)) @ U.T
         return W
 
     def forward(self, x):

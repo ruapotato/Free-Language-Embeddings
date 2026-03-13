@@ -27,12 +27,24 @@ Traditional LLMs predict one token at a time. This project takes a different app
 
 **Model 2 — Concept-Space LM** (Phase 2, planned): An autoregressive language model that operates **entirely in concept space**. It predicts the next *sentence* (as a concept vector), not the next *token*. Model 1 is strapped onto the front and back as frozen bookends — encoding input text to concepts on the way in, decoding predicted concepts back to text on the way out.
 
+### How Inference Works
+
+A prompt like *"The sky is blue. Birds fly south in winter."* becomes:
+
+1. Split into sentences: `["The sky is blue.", "Birds fly south in winter."]`
+2. Each sentence → frozen encoder → one concept vector each
+3. LM receives 2 concept vectors, predicts concept vector #3
+4. Concept vector #3 → frozen decoder → output sentence
+
+**The LM never sees tokens.** It operates entirely on concept vectors, one per sentence.
+
 ### Why This Matters
 
 - **The LM never sees tokens.** It thinks in sentence-level meaning representations. Each prediction step covers an entire sentence worth of semantics.
 - **Parallel token decoding.** Model 1's non-autoregressive decoder renders concept vectors to text in a single pass — no sequential token-by-token generation.
 - **Forced semantic compression.** The tight bottleneck can't encode surface-level token patterns. The concept space must capture actual meaning to achieve perfect reconstruction.
 - **Hierarchical generation.** The LM plans at the sentence/concept level for long-range coherence, then Model 1 handles the low-level rendering.
+- **Training data = individual sentences.** Model 1 trains on one sentence per sample (not random document chunks) because that's exactly how it will be used at inference time.
 
 Related work (SONAR-LLM, Latent Reasoning via Sentence Embedding Prediction) validates this general direction but uses autoregressive decoders. Our parallel decoder should be faster.
 
@@ -60,13 +72,20 @@ The decoder is **not autoregressive**. Every output token is predicted in parall
 | Decoder | 4 layers, 256 hidden, 4 heads, 1024 FFN |
 | Bottleneck | 64 concepts x 16 dims = 1024-dim |
 | Tokenizer | bert-base-uncased (30,522 vocab, English) |
-| Max sequence | 128 tokens |
+| Max sequence | 64 tokens |
 | Batch size | 256 |
-| Throughput | ~110K tok/s |
+| Throughput | ~134K tok/s |
+| Training data | Individual sentences (not document chunks) |
 
-### Key Breakthrough
+### Current Results
 
-V21 and V22 plateaued at loss ~6.0-6.5 despite scaling to 210M+ params. The root cause was a **padding mask bug** — the concept bottleneck's cross-attention was attending to padding tokens, corrupting the concept vectors for variable-length inputs. After fixing this, V24 blew through the plateau to loss 0.16 and still dropping with just 25.9M params.
+96% token accuracy, 62% exact match at 79K steps — loss 0.03 and dropping. The model reconstructs most sentences perfectly from concept vectors alone.
+
+### Key Breakthroughs
+
+1. **Padding mask fix**: V21/V22 plateaued at loss ~6.0 because the concept bottleneck's cross-attention attended to padding tokens. Fixing this unlocked real learning.
+2. **Sentence-level training**: Each sample is one sentence — because at inference time, a prompt gets split into sentences and each becomes one concept vector for the LM. Training on random document chunks was meaningless for this use case.
+3. **Cholesky whitening**: ZCA whitening via eigendecomposition (`eigh`) kept crashing on ill-conditioned covariance matrices. Replaced with Cholesky-based whitening which is numerically stable.
 
 ### Training Progress
 
@@ -86,10 +105,11 @@ Model 2 is autoregressive at the **sentence level** — it predicts sequences of
 
 ## Version History
 
-### V24 (current) — Tiny Sentence Compressor
-- 25.9M params, 4L encoder/decoder, 1024-dim bottleneck
-- Fixed critical padding mask bug in cross-attention bottleneck
-- Loss 0.16 and dropping (previous versions plateaued at 6.0+)
+### V24 (current) — Sentence Compressor
+- 25.9M params, 4L encoder/decoder, 1024-dim bottleneck, max 64 tokens
+- Trains on individual sentences (not document chunks)
+- Fixed padding mask bug, switched to Cholesky whitening for stability
+- 96% token accuracy, 62% exact match at 79K steps
 
 ### V22 (archived) — Scaled English-Only
 - 248M params, 12L encoder, 8L decoder, bert-base-uncased
