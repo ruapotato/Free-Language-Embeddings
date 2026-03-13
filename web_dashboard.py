@@ -31,7 +31,7 @@ def parse_step_data(log_path):
     with open(log_path) as f:
         for line in f:
             # V14/V15/V16/V17/V18/V19 format: step N [HYDRA+GEO] or [V17+GEO] or [V19] | en=X para=X parse=X | ...
-            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line):
+            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line):
                 try:
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
@@ -41,8 +41,9 @@ def parse_step_data(log_path):
                     step = int(re.search(r"(\d+)", step_str).group(1))
                     row = {
                         "step": step,
-                        "recon": grab(r"en=([\d.]+)", line),
+                        "recon": grab(r"en=([\d.]+)", line) or grab(r"recon=([\d.]+)", line),
                         "em_ema": grab(r"em_ema=([\d.]+)", line),
+                        "pred_loss": grab(r"pred=([\d.]+)", line),
                         "lr": grab(r"lr ([\d.eE+-]+)", line),
                         "progress": grab(r"([\d.]+)%", line),
                         "fr_loss": grab(r"fr=([\d.]+)", line),
@@ -80,7 +81,7 @@ def parse_step_data(log_path):
                     geo_val = grab(r"geo=([\d.]+)", line, default=None)
                     if geo_val is not None:
                         row["geo_gate"] = geo_val
-                    row["total_loss"] = row["recon"] + row.get("fr_loss", 0)
+                    row["total_loss"] = row["recon"] + row.get("fr_loss", 0) + row.get("pred_loss", 0)
                     rows.append(row)
                 except (ValueError, IndexError, AttributeError):
                     pass
@@ -331,7 +332,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -341,7 +342,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -862,6 +863,10 @@ function updateDashboard(response) {
 
     // 1. Reconstruction Loss (comparison clipped to current max step)
     const reconDs = [ds('EN Recon', ema(steps.map(d => d.recon), sw), C.recon)];
+    // V25: Prediction loss
+    const predLossVals = steps.map(d => d.pred_loss || 0);
+    if (predLossVals.some(v => v > 0))
+        reconDs.push(ds('Prediction', ema(predLossVals, sw), '#42a5f5'));
     // V13+: FR translation loss
     const frLossVals = steps.map(d => d.fr_loss || 0);
     if (frLossVals.some(v => v > 0))

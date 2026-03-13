@@ -77,6 +77,10 @@ WEIGHT_DECAY = 0.01
 BETAS = (0.9, 0.999)
 GRAD_CLIP = 1.0
 
+# Concept noise injection (smooths geometry)
+CONCEPT_NOISE_SIGMA = 0.3     # target noise std dev
+CONCEPT_NOISE_RAMP = 10000    # steps to ramp from 0 to full noise
+
 # EMA tracking
 EXACT_MATCH_EMA_DECAY = 0.99
 
@@ -630,6 +634,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
         f"{config.num_concepts * config.concept_dim} dims")
     log(f"  Decoder: {config.dec_layers}L")
     log(f"  Whitening: ON (concept whitening on bottleneck)")
+    log(f"  Concept noise: σ={CONCEPT_NOISE_SIGMA} (ramp over {CONCEPT_NOISE_RAMP} steps)")
     log(f"  Batch: {BATCH_SIZE}")
     log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | Steps: {start_step} -> {TOTAL_STEPS}")
     log(f"  Data: {len(dataset.sources)} sources, streaming")
@@ -641,6 +646,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
     loss_tracker = []
     start_time = time.time()
+    nan_count = 0
+    MAX_NAN_BEFORE_ROLLBACK = 50
 
     shutdown_requested = False
     def handle_signal(signum, frame):
@@ -669,13 +676,35 @@ def train(resume_from=None, fresh=False, eval_only=False):
             attention_mask = batch["attention_mask"].to(device, non_blocking=True)
 
             concepts = m.encode(input_ids, attention_mask)
+
+            # Noise injection: force smooth concept space geometry
+            if CONCEPT_NOISE_SIGMA > 0 and model.training:
+                noise_scale = min(1.0, step / max(1, CONCEPT_NOISE_RAMP))
+                sigma = CONCEPT_NOISE_SIGMA * noise_scale
+                concepts = concepts + torch.randn_like(concepts) * sigma
+
             logits = m.decode(concepts, input_ids.shape[1], attention_mask)
             loss = reconstruction_loss(logits, input_ids)
 
         if torch.isnan(loss):
-            log(f"NaN loss at step {step}, skipping")
+            nan_count += 1
+            if nan_count <= 3 or nan_count % 100 == 0:
+                log(f"NaN loss at step {step}, skipping ({nan_count} consecutive)")
+            if nan_count >= MAX_NAN_BEFORE_ROLLBACK:
+                log(f"Hit {nan_count} consecutive NaN losses — rolling back to last checkpoint")
+                latest_ckpt = Path(CHECKPOINT_DIR) / "latest.pt"
+                if latest_ckpt.exists():
+                    model, optimizer, scaler, config, ckpt_step, exact_match_ema = \
+                        load_checkpoint(str(latest_ckpt), device)
+                    model = torch.compile(model)
+                    log(f"Rolled back to step {ckpt_step}, resuming")
+                    nan_count = 0
+                else:
+                    log("No checkpoint to roll back to, stopping")
+                    break
             continue
 
+        nan_count = 0
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
