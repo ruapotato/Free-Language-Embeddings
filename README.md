@@ -89,7 +89,7 @@ The decoder is **not autoregressive**. Every output token is predicted in parall
 
 ### Training Progress
 
-**[Training Dashboard](https://ruapotato.github.io/chat_hamner_v2/dashboard.html)** — interactive charts, updated every push.
+**[Training Dashboard](https://ruapotato.github.io/chat_hamner/dashboard.html)** — interactive charts, updated every push.
 
 **Local live monitor:** `python web_dashboard.py` then open http://localhost:8501
 
