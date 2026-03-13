@@ -93,15 +93,51 @@ The decoder is **not autoregressive**. Every output token is predicted in parall
 
 **Local live monitor:** `python web_dashboard.py` then open http://localhost:8501
 
-## Phase 2: Concept-Space LM (Planned)
+## Phase 2: Concept-Space LM (In Development)
 
 Once Model 1 achieves near-perfect reconstruction (loss near 0, high exact-match accuracy):
 
 1. **Freeze** Model 1's encoder, bottleneck, and decoder weights
-2. **Build Model 2**: an autoregressive LM that takes concept vectors as input and predicts the next concept vector
-3. **Wire it up**: `text → [frozen encoder+bottleneck] → concepts → [Model 2 LM] → predicted concepts → [frozen bottleneck+decoder] → text`
+2. **Build Model 2**: a block-causal transformer LM that operates directly on concept slots
+3. **Wire it up**: `text → [frozen encoder+bottleneck] → concept slots → [Model 2 LM] → predicted slots → [frozen bottleneck+decoder] → text`
 
-Model 2 is autoregressive at the **sentence level** — it predicts sequences of concept vectors, each representing a full sentence. But token-level decoding within each sentence is parallel via Model 1's frozen non-autoregressive decoder.
+### Block-Causal Architecture
+
+The key insight: don't flatten the 64 concept slots into a single vector. Keep them as individual positions so they can **attend to each other** — like words in a sentence.
+
+```
+Sentence 1:  [slot_1 slot_2 ... slot_64]  ←→ bidirectional within block
+Sentence 2:  [slot_1 slot_2 ... slot_64]  ←→ bidirectional, causal from sent 1
+Sentence 3:  [slot_1 slot_2 ... slot_64]  ←→ bidirectional, causal from sent 1-2
+```
+
+- **Within a sentence**: concept slots attend bidirectionally (slots refine each other)
+- **Across sentences**: causal attention (autoregressive at the sentence level)
+- **Position encoding**: slot-level RoPE (repeating per sentence) + learned sentence embeddings
+
+### Why Block-Causal
+
+The LM outputs 64 concept slots for the next sentence and feeds them **directly back in** as input. No decode-to-text, no re-encode. V24's encoder/decoder only touch the edges:
+
+```
+[prompt text] → V24 encode → concept slots → LM → LM → LM → concept slots → V24 decode → [output text]
+                                                ↑___________|
+                                             (slots feed back directly,
+                                              no V24 roundtrip needed)
+```
+
+### Concept LM Config
+
+| Parameter | Value |
+|-----------|-------|
+| Parameters | 63M |
+| Layers | 16 |
+| Hidden | 512 |
+| Heads | 8 (4 KV) |
+| FFN | 2048 (SwiGLU) |
+| Slots per sentence | 64 x 16d |
+| Max sentences | 32 |
+| Loss | MSE on predicted vs actual concept slots |
 
 ## Version History
 
@@ -141,7 +177,9 @@ Model 2 is autoregressive at the **sentence level** — it predicts sequences of
 ```
 flm/
 ├── concept_model.py          # Model definitions (encoder, bottleneck, decoder, whitening)
-├── train_v24.py              # Current training script (Phase 1 sentence compressor)
+├── train_v24.py              # Phase 1: sentence compressor training
+├── train_concept_lm.py       # Phase 2: block-causal concept-space LM training
+├── model.py                  # Transformer backbone (HamnerBlock, GQA, RoPE, SwiGLU)
 ├── web_dashboard.py          # Live training dashboard
 ├── docs/
 │   └── dashboard.html        # Static dashboard snapshot (GitHub Pages)
@@ -152,8 +190,11 @@ flm/
 ## Quick Start
 
 ```bash
-# Train V24 sentence compressor
+# Phase 1: Train V24 sentence compressor
 python train_v24.py --fresh
+
+# Phase 2: Train concept-space LM (requires trained V24 checkpoint)
+python train_concept_lm.py --fresh
 
 # Monitor training
 python web_dashboard.py        # http://localhost:8501

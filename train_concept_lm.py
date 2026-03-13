@@ -1,26 +1,33 @@
 """
-FLM Concept-Space LM — Phase 2
+FLM Concept-Space LM — Phase 2 (Block-Causal)
 ================================================================================
-Autoregressive LM that operates entirely in concept space. Never sees tokens.
+Autoregressive LM that operates on concept SLOTS, not flattened vectors.
 
-Architecture:
-  - Same transformer as V4 (HamnerModel-style: GQA, RoPE, SwiGLU)
-  - Input: concept vectors from frozen V24 encoder (1024-dim per sentence)
-  - Output: predict next concept vector (1024-dim)
-  - Loss: MSE on predicted vs actual concept vectors
+Each sentence = 64 concept slots x 16 dims (from frozen V24 encoder).
+The LM sees slots as individual positions with block-causal attention:
+  - Within a sentence: slots attend to each other bidirectionally
+  - Across sentences: causal (can only see previous sentences)
+
+This means concept slots interact and refine each other (like words in a
+sentence), while sentence-level prediction remains autoregressive.
+
+Key efficiency: at inference, the LM outputs 64 slots for the next sentence
+and feeds them DIRECTLY back in as input. No decode→re-encode roundtrip.
+V24 encoder/decoder only touch the edges (encoding prompt, decoding output).
 
 Pipeline at training time:
   1. Load a document, split into sentences
-  2. Encode each sentence through frozen V24 → sequence of concept vectors
-  3. Feed concept vector sequence to LM, predict next concept vector autoregressively
-  4. Loss = MSE(predicted_concept[i], actual_concept[i+1])
+  2. Encode each sentence through frozen V24 → (num_sentences, 64, 16)
+  3. Input = sentence blocks 0..N-2, Target = sentence blocks 1..N-1
+  4. Block-causal transformer predicts next sentence's slots
+  5. Loss = MSE on valid (non-padding) positions only
 
 Pipeline at inference time:
   1. Split prompt into sentences
-  2. Encode each through frozen V24 encoder → concept vectors
-  3. LM predicts next concept vector
-  4. Frozen V24 decoder renders concept vector → text
-  5. Repeat
+  2. Encode each through frozen V24 → concept slot blocks
+  3. LM predicts next 64 slots (one sentence)
+  4. Feed predicted slots directly back into LM (no V24 roundtrip)
+  5. When done generating, decode final output through frozen V24 decoder
 
 Usage:
     python train_concept_lm.py --fresh            # start from scratch
@@ -47,28 +54,26 @@ from pathlib import Path
 from dataclasses import dataclass
 from model import HamnerConfig, HamnerBlock, RMSNorm, precompute_rope
 
-# We'll load the frozen encoder from concept_model
 from concept_model import ConceptConfig, ConceptAutoencoderV24
 
 # ---------------------------------------------------------------------------
-# Concept-Space LM Model
+# Concept-Space LM Model (Block-Causal)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ConceptLMConfig:
-    """Config for the concept-space language model."""
-    # Concept space dimensions (from V24 encoder)
-    concept_dim: int = 1024         # 64 concepts x 16 dims = 1024 flat
-    num_concepts: int = 64
-    concept_slot_dim: int = 16
+    """Config for the block-causal concept-space language model."""
+    # Concept space (from V24 encoder)
+    num_concepts: int = 64          # K — slots per sentence
+    concept_slot_dim: int = 16      # dim per slot
 
-    # Transformer config (same scale as V4)
-    hidden_size: int = 768
-    num_layers: int = 20
-    num_attention_heads: int = 12
+    # Transformer
+    hidden_size: int = 512
+    num_layers: int = 16
+    num_attention_heads: int = 8
     num_kv_heads: int = 4
     expert_intermediate_size: int = 2048
-    max_seq_len: int = 128          # max sentences in a document
+    max_sentences: int = 32         # max sentences in a sequence
     rope_theta: float = 10000.0
     rms_norm_eps: float = 1e-5
     dropout: float = 0.0
@@ -77,30 +82,49 @@ class ConceptLMConfig:
 
 class ConceptLM(nn.Module):
     """
-    Autoregressive LM that operates on concept vectors instead of tokens.
+    Block-causal transformer operating on concept slots.
 
-    Input: (batch, seq_len, concept_dim) — sequence of concept vectors
-    Output: (batch, seq_len, concept_dim) — predicted next concept vectors
+    Input: (batch, num_sentences * K, slot_dim) — interleaved concept slots
+    Output: (batch, num_sentences * K, slot_dim) — predicted next sentence slots
 
-    Each position is one sentence's concept vector (1024-dim).
-    The model predicts the concept vector for the NEXT sentence.
+    Each sentence is a block of K=64 concept slots (16-dim each).
+    Slots within a sentence attend bidirectionally.
+    Across sentences, attention is causal.
+
+    Position encoding:
+      - Slot-level RoPE (0..63, repeating per sentence) for intra-sentence structure
+      - Learned sentence embeddings for inter-sentence ordering
     """
 
     def __init__(self, config: ConceptLMConfig):
         super().__init__()
         self.config = config
+        K = config.num_concepts
 
-        # Project concept vectors into transformer hidden space
-        self.concept_in = nn.Linear(config.concept_dim, config.hidden_size, bias=False)
+        # Project concept slots to hidden space
+        self.concept_in = nn.Linear(config.concept_slot_dim, config.hidden_size, bias=False)
 
-        # Transformer backbone (reuses HamnerBlock from model.py)
+        # Learned sentence position embeddings
+        self.sentence_embed = nn.Embedding(config.max_sentences, config.hidden_size)
+
+        # Slot-level RoPE (repeats every K positions)
+        head_dim = config.hidden_size // config.num_attention_heads
+        slot_cos, slot_sin = precompute_rope(head_dim, K, config.rope_theta)
+        # Tile for max total sequence length
+        max_total = config.max_sentences * K
+        self.register_buffer("rope_cos", slot_cos.repeat(config.max_sentences, 1)[:max_total],
+                             persistent=False)
+        self.register_buffer("rope_sin", slot_sin.repeat(config.max_sentences, 1)[:max_total],
+                             persistent=False)
+
+        # Transformer backbone (reuses HamnerBlock)
         hamner_cfg = HamnerConfig(
             hidden_size=config.hidden_size,
             num_layers=config.num_layers,
             num_attention_heads=config.num_attention_heads,
             num_kv_heads=config.num_kv_heads,
             expert_intermediate_size=config.expert_intermediate_size,
-            max_seq_len=config.max_seq_len,
+            max_seq_len=max_total,
             rope_theta=config.rope_theta,
             rms_norm_eps=config.rms_norm_eps,
             dropout=config.dropout,
@@ -110,18 +134,13 @@ class ConceptLM(nn.Module):
             use_differential_attention=False,
         )
 
-        head_dim = config.hidden_size // config.num_attention_heads
-        rope_cos, rope_sin = precompute_rope(head_dim, config.max_seq_len, config.rope_theta)
-        self.register_buffer("rope_cos", rope_cos, persistent=False)
-        self.register_buffer("rope_sin", rope_sin, persistent=False)
-
         self.layers = nn.ModuleList([
             HamnerBlock(hamner_cfg, i) for i in range(config.num_layers)
         ])
         self.final_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-        # Project back to concept space
-        self.concept_out = nn.Linear(config.hidden_size, config.concept_dim, bias=False)
+        # Project back to concept slot space
+        self.concept_out = nn.Linear(config.hidden_size, config.concept_slot_dim, bias=False)
 
         self.apply(self._init_weights)
         self._gradient_checkpointing = config.gradient_checkpointing
@@ -131,45 +150,83 @@ class ConceptLM(nn.Module):
             module.weight.data.normal_(mean=0.0, std=0.02)
             if module.bias is not None:
                 module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=0.02)
 
-    def forward(self, concept_vectors, targets=None):
+    def _build_mask(self, sentence_counts, max_sents, device, dtype):
+        """Build block-causal attention mask with padding.
+
+        Within a sentence block: bidirectional (all slots see each other)
+        Across sentence blocks: causal (only see previous sentences)
+        Padding sentences: masked out entirely
         """
-        concept_vectors: (batch, seq_len, concept_dim) — input concept sequence
-        targets: (batch, seq_len, concept_dim) — target concept vectors (shifted by 1)
+        K = self.config.num_concepts
+        bsz = len(sentence_counts)
+        total = max_sents * K
+
+        # Sentence index for each position (0, 0, ..., 1, 1, ..., 2, 2, ...)
+        sent_idx = torch.arange(max_sents, device=device).repeat_interleave(K)  # (total,)
+
+        # Block-causal: position i can attend to j if sent_idx[j] <= sent_idx[i]
+        causal = sent_idx.unsqueeze(0) <= sent_idx.unsqueeze(1)  # (total, total)
+        causal = causal.unsqueeze(0).expand(bsz, total, total).clone()  # (bsz, total, total)
+
+        # Padding mask: prevent attending TO padding positions
+        # (Don't mask padding FROM attending — softmax needs valid targets
+        #  to avoid NaN. Padding outputs are ignored via valid_mask on loss.)
+        for b in range(bsz):
+            valid = sent_idx < sentence_counts[b]  # (total,) bool
+            causal[b, :, ~valid] = False  # can't attend TO padding
+
+        # Convert to additive mask
+        mask = torch.where(causal, 0.0, float("-inf"))
+        return mask.unsqueeze(1).to(dtype)  # (bsz, 1, total, total)
+
+    def forward(self, concept_slots, sentence_counts, targets=None, valid_mask=None):
+        """
+        concept_slots: (batch, max_sents * K, slot_dim)
+        sentence_counts: list[int] — actual sentence count per batch item
+        targets: (batch, max_sents * K, slot_dim) — target slots (shifted by 1 sentence)
+        valid_mask: (batch, max_sents * K) bool — True for non-padding positions
 
         Returns dict with 'loss' and 'predicted_concepts'.
         """
-        bsz, seq_len, _ = concept_vectors.shape
-        device = concept_vectors.device
+        bsz, total_len, _ = concept_slots.shape
+        K = self.config.num_concepts
+        max_sents = total_len // K
+        device = concept_slots.device
 
-        # Project to hidden space
-        x = self.concept_in(concept_vectors)
+        # Project slots to hidden space
+        x = self.concept_in(concept_slots)  # (bsz, total, hidden)
 
-        # Causal mask (autoregressive: each position can only see previous)
-        causal_mask = torch.triu(
-            torch.full((seq_len, seq_len), float("-inf"), device=device),
-            diagonal=1
-        ).unsqueeze(0).unsqueeze(0)
+        # Add sentence position embeddings (same embedding for all slots in a sentence)
+        sent_ids = torch.arange(max_sents, device=device).repeat_interleave(K)[:total_len]
+        x = x + self.sentence_embed(sent_ids)  # broadcast over batch
 
-        # Run through transformer
+        # Block-causal + padding mask
+        mask = self._build_mask(sentence_counts, max_sents, device, x.dtype)
+
+        # Transformer layers
         for layer in self.layers:
             if self._gradient_checkpointing and self.training:
                 x, _ = torch.utils.checkpoint.checkpoint(
-                    layer, x, self.rope_cos, self.rope_sin, causal_mask,
+                    layer, x, self.rope_cos, self.rope_sin, mask,
                     use_reentrant=False,
                 )
             else:
-                x, _ = layer(x, self.rope_cos, self.rope_sin, causal_mask)
+                x, _ = layer(x, self.rope_cos, self.rope_sin, mask)
 
         x = self.final_norm(x)
-
-        # Project back to concept space
-        predicted = self.concept_out(x)
+        predicted = self.concept_out(x)  # (bsz, total, slot_dim)
 
         loss = None
         if targets is not None:
-            # MSE loss: predicted[i] should match targets[i] (= actual concept[i+1])
-            loss = F.mse_loss(predicted, targets)
+            diff = (predicted - targets) ** 2  # (bsz, total, slot_dim)
+            if valid_mask is not None:
+                diff = diff * valid_mask.unsqueeze(-1)
+                loss = diff.sum() / (valid_mask.sum() * self.config.concept_slot_dim + 1e-8)
+            else:
+                loss = diff.mean()
 
         return {"loss": loss, "predicted_concepts": predicted}
 
@@ -179,55 +236,66 @@ class ConceptLM(nn.Module):
         return total, trainable
 
     @torch.no_grad()
-    def generate(self, concept_vectors, num_steps=10):
+    def generate(self, concept_slots, num_sentences_in, num_steps=3):
         """
-        Autoregressively generate concept vectors.
+        Autoregressively generate sentence blocks.
 
-        concept_vectors: (1, seq_len, concept_dim) — prompt concepts
-        num_steps: how many new concept vectors to generate
+        concept_slots: (1, num_sentences_in * K, slot_dim) — prompt concept slots
+        num_sentences_in: int — number of input sentences
+        num_steps: how many new sentences to generate
 
-        Returns: (1, seq_len + num_steps, concept_dim)
+        Returns: (1, (num_sentences_in + num_steps) * K, slot_dim)
         """
         self.eval()
+        K = self.config.num_concepts
+        current_sents = num_sentences_in
+
         for _ in range(num_steps):
-            # Only use last max_seq_len positions
-            ctx = concept_vectors[:, -self.config.max_seq_len:]
-            out = self(ctx)
-            next_concept = out["predicted_concepts"][:, -1:, :]  # last position's prediction
-            concept_vectors = torch.cat([concept_vectors, next_concept], dim=1)
-        return concept_vectors
+            # Cap context to max_sentences
+            if current_sents > self.config.max_sentences:
+                # Keep last max_sentences worth of slots
+                start = (current_sents - self.config.max_sentences) * K
+                ctx = concept_slots[:, start:, :]
+                ctx_sents = self.config.max_sentences
+            else:
+                ctx = concept_slots
+                ctx_sents = current_sents
+
+            out = self(ctx, [ctx_sents])
+            # Last sentence block's predictions = next sentence
+            next_block = out["predicted_concepts"][:, -K:, :]  # (1, K, slot_dim)
+            concept_slots = torch.cat([concept_slots, next_block], dim=1)
+            current_sents += 1
+
+        return concept_slots
 
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-# V24 encoder checkpoint (frozen)
 V24_CHECKPOINT = "checkpoints/concept_v24/latest.pt"
 
-V24_CONFIG = None  # loaded from checkpoint
-
 LM_CONFIG = ConceptLMConfig(
-    concept_dim=1024,           # 64 * 16 from V24
     num_concepts=64,
     concept_slot_dim=16,
-    hidden_size=768,
-    num_layers=20,
-    num_attention_heads=12,
+    hidden_size=512,
+    num_layers=16,
+    num_attention_heads=8,
     num_kv_heads=4,
     expert_intermediate_size=2048,
-    max_seq_len=128,            # up to 128 sentences per document
+    max_sentences=32,
     gradient_checkpointing=True,
 )
 
 # Training hyperparameters
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 PEAK_LR = 2e-4
 MIN_LR = 1e-5
 WARMUP_STEPS = 2000
 TOTAL_STEPS = 400_000
 GRAD_CLIP = 1.0
-MIN_SENTENCES = 3              # minimum sentences per document
+MIN_SENTENCES = 3
 
 # Logging
 LOG_EVERY = 50
@@ -321,15 +389,11 @@ def split_sentences(text):
 
 
 class DocumentSentenceDataset:
-    """
-    Streams documents, splits into sentences, and returns sequences of
-    sentences (as raw text) for encoding through the frozen V24.
+    """Streams documents, splits into sentences, returns lists of sentences."""
 
-    Each batch item is a list of sentences from one document.
-    """
-
-    def __init__(self, min_sentences=3):
+    def __init__(self, min_sentences=3, max_sentences=32):
         self.min_sentences = min_sentences
+        self.max_sentences = max_sentences
         self.sources = []
         self.weights = []
         self.cum_weights = []
@@ -388,8 +452,7 @@ class DocumentSentenceDataset:
                     continue
                 sentences = split_sentences(text)
                 if len(sentences) >= self.min_sentences:
-                    # Cap at max_seq_len sentences
-                    return sentences[:LM_CONFIG.max_seq_len]
+                    return sentences[:self.max_sentences]
             except (json.JSONDecodeError, KeyError):
                 continue
         return None
@@ -412,7 +475,7 @@ class DocumentSentenceDataset:
 class PrefetchBuffer:
     """Pre-generates batches in background thread."""
 
-    def __init__(self, dataset, batch_size=32, buf_size=4):
+    def __init__(self, dataset, batch_size=16, buf_size=4):
         self.dataset = dataset
         self.batch_size = batch_size
         self.q = queue.Queue(maxsize=buf_size)
@@ -446,47 +509,66 @@ class PrefetchBuffer:
 @torch.no_grad()
 def encode_sentences(sentences, encoder, tokenizer, device):
     """
-    Encode a list of sentences through frozen V24 encoder.
+    Encode sentences through frozen V24 encoder.
 
-    Returns: (num_sentences, concept_dim) tensor of concept vectors
+    Returns: (num_sentences, K, slot_dim) — concept slot tensor (NOT flattened)
     """
     enc = tokenizer(sentences, max_length=64, padding='longest',
                     truncation=True, return_tensors="pt").to(device)
     concepts = encoder.encode(enc["input_ids"], enc["attention_mask"])
-    # Flatten: (batch, num_concepts, concept_slot_dim) → (batch, concept_dim)
-    flat = concepts.view(concepts.shape[0], -1)
-    return flat
+    # concepts: (num_sentences, K, slot_dim) — already in the right shape
+    return concepts
 
 
 @torch.no_grad()
-def encode_batch(doc_batch, encoder, tokenizer, device, max_seq_len):
+def encode_batch(doc_batch, encoder, tokenizer, device, max_sentences, K):
     """
-    Encode a batch of documents (each = list of sentences) into padded
-    concept vector sequences.
+    Encode a batch of documents into padded concept slot sequences.
+
+    Each document = list of sentences → (num_sents, K, slot_dim)
+    Padded to (batch, max_sents_in_batch, K, slot_dim)
+
+    For training with shifted targets:
+      Input  = sentences 0..N-2  (predict from these)
+      Target = sentences 1..N-1  (predict these)
 
     Returns:
-        concept_seqs: (batch, max_len, concept_dim) — padded concept sequences
-        lengths: list of actual sequence lengths
+        inputs: (batch, max_input_sents * K, slot_dim) — flattened input blocks
+        targets: (batch, max_input_sents * K, slot_dim) — flattened target blocks
+        input_counts: list[int] — actual input sentence count per item
+        valid_mask: (batch, max_input_sents * K) bool — True for non-padding
     """
     all_concepts = []
-    lengths = []
+    raw_counts = []
 
     for sentences in doc_batch:
-        # Encode all sentences in this document at once
-        flat = encode_sentences(sentences, encoder, tokenizer, device)
-        all_concepts.append(flat)
-        lengths.append(flat.shape[0])
+        concepts = encode_sentences(sentences, encoder, tokenizer, device)
+        all_concepts.append(concepts)  # (num_sents, K, slot_dim)
+        raw_counts.append(concepts.shape[0])
 
-    # Pad to max length in batch
-    max_len = min(max(lengths), max_seq_len)
-    concept_dim = all_concepts[0].shape[1]
-    padded = torch.zeros(len(doc_batch), max_len, concept_dim, device=device)
+    # After shifting: input has N-1 sentences, target has N-1 sentences
+    input_counts = [max(c - 1, 1) for c in raw_counts]
+    max_input_sents = min(max(input_counts), max_sentences - 1)
+    slot_dim = all_concepts[0].shape[2]
+    bsz = len(doc_batch)
 
-    for i, (concepts, length) in enumerate(zip(all_concepts, lengths)):
-        actual = min(length, max_len)
-        padded[i, :actual] = concepts[:actual]
+    inputs = torch.zeros(bsz, max_input_sents * K, slot_dim, device=device)
+    targets = torch.zeros(bsz, max_input_sents * K, slot_dim, device=device)
+    valid_mask = torch.zeros(bsz, max_input_sents * K, device=device, dtype=torch.bool)
 
-    return padded, lengths
+    for b, (concepts, n_input) in enumerate(zip(all_concepts, input_counts)):
+        actual = min(n_input, max_input_sents)
+        # Input: sentences 0..actual-1
+        inp_slots = concepts[:actual].reshape(actual * K, slot_dim)
+        inputs[b, :actual * K] = inp_slots
+        # Target: sentences 1..actual (shifted by 1)
+        tgt_slots = concepts[1:actual + 1].reshape(actual * K, slot_dim)
+        targets[b, :actual * K] = tgt_slots
+        # Valid positions
+        valid_mask[b, :actual * K] = True
+        input_counts[b] = actual
+
+    return inputs, targets, input_counts, valid_mask
 
 
 # ---------------------------------------------------------------------------
@@ -494,38 +576,38 @@ def encode_batch(doc_batch, encoder, tokenizer, device, max_seq_len):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def evaluate(model, encoder, decoder, tokenizer, device):
-    """Evaluate: generate sentences from prompts and measure prediction quality."""
+def evaluate(model, v24_model, tokenizer, device, config):
+    """Generate sentences from prompts and decode back to text."""
     model.eval()
-    m = encoder
+    K = config.num_concepts
 
     results = []
     for prompt in SAMPLE_PROMPTS:
-        # Encode prompt sentence
+        # Encode prompt sentence through V24
         enc = tokenizer([prompt], max_length=64, padding='longest',
                         truncation=True, return_tensors="pt").to(device)
-        concepts = m.encode(enc["input_ids"], enc["attention_mask"])
-        flat = concepts.view(1, 1, -1)  # (1, 1, concept_dim)
+        concepts = v24_model.encode(enc["input_ids"], enc["attention_mask"])
+        # concepts: (1, K, slot_dim) — one sentence block
+        prompt_slots = concepts.reshape(1, K, -1)  # (1, K, slot_dim)
 
-        # Generate next concept vectors
-        generated = model.generate(flat, num_steps=3)
+        # Generate 3 more sentences
+        all_slots = prompt_slots.reshape(1, K, -1)  # (1, 1*K, slot_dim)
+        generated = model.generate(all_slots, num_sentences_in=1, num_steps=3)
+        # generated: (1, (1+3)*K, slot_dim)
 
-        # Decode all generated concepts back to text
-        decoded_sentences = []
-        for i in range(generated.shape[1]):
-            concept_vec = generated[0, i:i+1]  # (1, concept_dim)
-            # Reshape to (1, num_concepts, concept_slot_dim)
-            concept_3d = concept_vec.view(1, LM_CONFIG.num_concepts,
-                                          LM_CONFIG.concept_slot_dim)
-            # Decode — need to figure out seq_len; use 64 as max
-            logits = decoder.decode(concept_3d, seq_len=64)
+        # Decode each sentence block back to text
+        num_total_sents = generated.shape[1] // K
+        decoded = []
+        for i in range(num_total_sents):
+            block = generated[0, i * K:(i + 1) * K].unsqueeze(0)  # (1, K, slot_dim)
+            logits = v24_model.decode(block, seq_len=64)
             tokens = logits.argmax(dim=-1)
             text = tokenizer.decode(tokens[0], skip_special_tokens=True)
-            decoded_sentences.append(text)
+            decoded.append(text)
 
         results.append({
             "prompt": prompt,
-            "generated": decoded_sentences,
+            "generated": decoded,
         })
 
     model.train()
@@ -545,8 +627,7 @@ def _handle_signal(signum, frame):
     log("Shutdown signal received, saving checkpoint...")
 
 
-def save_checkpoint(model, optimizer, scaler, config, step, loss,
-                    checkpoint_dir):
+def save_checkpoint(model, optimizer, scaler, config, step, loss, checkpoint_dir):
     os.makedirs(checkpoint_dir, exist_ok=True)
     state = {
         "model": model.state_dict(),
@@ -555,7 +636,7 @@ def save_checkpoint(model, optimizer, scaler, config, step, loss,
         "config": config.__dict__,
         "step": step,
         "loss": loss,
-        "version": "concept_lm_v1",
+        "version": "concept_lm_block_causal_v1",
     }
     path = os.path.join(checkpoint_dir, f"step_{step:06d}.pt")
     torch.save(state, path)
@@ -581,19 +662,19 @@ def train(resume_from=None, fresh=False, eval_only=False):
     v24_config = ConceptConfig(**v24_ckpt["config"])
     v24_model = ConceptAutoencoderV24(v24_config).to(device)
     v24_model.load_state_dict(v24_ckpt["model_state_dict"])
-    log(f"  V24 loaded from {ckpt_path} (step {v24_ckpt.get('step', '?')})")
+    v24_step = v24_ckpt.get("step", "?")
+    log(f"  V24 loaded from {ckpt_path} (step {v24_step})")
     del v24_ckpt
-
-    if resume_from is None and not fresh:
-        # Try auto-resume concept LM
-        latest = os.path.join(CHECKPOINT_DIR, "latest.pt")
-        if os.path.exists(latest):
-            resume_from = latest
 
     v24_model.eval()
     for p in v24_model.parameters():
         p.requires_grad = False
     log("  V24 frozen (encoder + decoder)")
+
+    if resume_from is None and not fresh:
+        latest = os.path.join(CHECKPOINT_DIR, "latest.pt")
+        if os.path.exists(latest):
+            resume_from = latest
 
     # --- Load tokenizer ---
     from transformers import AutoTokenizer
@@ -602,6 +683,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
     # --- Build concept LM ---
     config = LM_CONFIG
+    K = config.num_concepts
     model = ConceptLM(config).to(device)
     total_params, trainable_params = model.count_parameters()
     log(f"  Concept LM: {total_params:,} params ({total_params/1e6:.1f}M)")
@@ -630,61 +712,63 @@ def train(resume_from=None, fresh=False, eval_only=False):
             optimizer.load_state_dict(lm_ckpt["optimizer"])
         if "scaler" in lm_ckpt:
             scaler.load_state_dict(lm_ckpt["scaler"])
-        del lm_ckpt  # free memory
+        del lm_ckpt
 
     # --- Data ---
     log("Loading data...")
-    dataset = DocumentSentenceDataset(min_sentences=MIN_SENTENCES)
+    dataset = DocumentSentenceDataset(
+        min_sentences=MIN_SENTENCES,
+        max_sentences=config.max_sentences,
+    )
     prefetch = PrefetchBuffer(dataset, batch_size=BATCH_SIZE, buf_size=4)
 
     # --- Training info ---
     log("")
-    log(f"Training plan (Concept-Space LM):")
+    log("Training plan (Block-Causal Concept LM):")
     log(f"  Model: {total_params:,} params ({total_params/1e6:.1f}M)")
-    log(f"  Concept dim: {config.concept_dim} ({config.num_concepts}x{config.concept_slot_dim})")
-    log(f"  Transformer: {config.num_layers}L, {config.hidden_size}d, {config.num_attention_heads} heads")
+    log(f"  Slots per sentence: {K} x {config.concept_slot_dim}d")
+    log(f"  Transformer: {config.num_layers}L, {config.hidden_size}d, "
+        f"{config.num_attention_heads}h")
+    log(f"  Max sentences: {config.max_sentences}")
+    log(f"  Attention: block-causal (bidirectional within sentence, "
+        f"causal across)")
     log(f"  Batch: {BATCH_SIZE}")
-    log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | Steps: {start_step} -> {TOTAL_STEPS}")
-    log(f"  Frozen encoder: V24 ({V24_CHECKPOINT})")
+    log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | "
+        f"Steps: {start_step} -> {TOTAL_STEPS}")
+    log(f"  Frozen V24: step {v24_step}")
     log("-" * 70)
-    log("Prefetch buffer started")
 
     loss_tracker = []
     cosine_tracker = []
     start_time = time.time()
 
     for step in range(start_step, TOTAL_STEPS):
-        # LR schedule: warmup then cosine decay
+        # LR schedule
         if step < WARMUP_STEPS:
             current_lr = PEAK_LR * (step + 1) / WARMUP_STEPS
         else:
             progress = (step - WARMUP_STEPS) / max(TOTAL_STEPS - WARMUP_STEPS, 1)
-            current_lr = MIN_LR + 0.5 * (PEAK_LR - MIN_LR) * (1 + math.cos(math.pi * progress))
+            current_lr = MIN_LR + 0.5 * (PEAK_LR - MIN_LR) * (
+                1 + math.cos(math.pi * progress))
 
         for pg in optimizer.param_groups:
             pg["lr"] = current_lr
 
         optimizer.zero_grad(set_to_none=True)
 
-        # Get batch of documents (lists of sentences)
         doc_batch = prefetch.get()
 
-        # Encode through frozen V24
         with torch.amp.autocast("cuda", dtype=torch.float16):
-            concept_seqs, lengths = encode_batch(
-                doc_batch, v24_model, tokenizer, device, config.max_seq_len
+            inputs, targets, input_counts, valid_mask = encode_batch(
+                doc_batch, v24_model, tokenizer, device,
+                config.max_sentences, K,
             )
 
-            # Build input/target pairs (shifted by 1)
-            # Input: concepts[:-1], Target: concepts[1:]
-            inputs = concept_seqs[:, :-1, :]
-            targets = concept_seqs[:, 1:, :]
-
-            if inputs.shape[1] < 1:
+            if inputs.shape[1] < K:
                 continue
 
-            # Forward through concept LM
-            out = model(inputs, targets=targets)
+            out = model(inputs, input_counts, targets=targets,
+                        valid_mask=valid_mask)
             loss = out["loss"]
 
         if loss is None or torch.isnan(loss):
@@ -699,13 +783,23 @@ def train(resume_from=None, fresh=False, eval_only=False):
 
         loss_tracker.append(loss.item())
 
-        # Cosine similarity between predicted and target (quality metric)
+        # Cosine similarity (per-sentence, flattened slots)
         with torch.no_grad():
             pred = out["predicted_concepts"].float()
             tgt = targets.float()
-            cos_sim = F.cosine_similarity(pred.reshape(-1, config.concept_dim),
-                                          tgt.reshape(-1, config.concept_dim),
-                                          dim=-1).mean().item()
+            flat_dim = K * config.concept_slot_dim
+            # Reshape to per-sentence vectors for cosine sim
+            max_sents = pred.shape[1] // K
+            pred_flat = pred.reshape(-1, max_sents, flat_dim).reshape(-1, flat_dim)
+            tgt_flat = tgt.reshape(-1, max_sents, flat_dim).reshape(-1, flat_dim)
+            # Only compute on valid sentences
+            valid_sents = valid_mask.reshape(-1, max_sents, K).any(dim=-1).reshape(-1)
+            if valid_sents.any():
+                cos_sim = F.cosine_similarity(
+                    pred_flat[valid_sents], tgt_flat[valid_sents], dim=-1
+                ).mean().item()
+            else:
+                cos_sim = 0.0
             cosine_tracker.append(cos_sim)
 
         # --- Logging ---
@@ -715,9 +809,8 @@ def train(resume_from=None, fresh=False, eval_only=False):
             pct = (step + 1) / TOTAL_STEPS * 100
             elapsed = time.time() - start_time
             steps_per_sec = (step + 1 - start_step) / max(elapsed, 1)
-            sents_per_sec = steps_per_sec * BATCH_SIZE * np.mean([
-                min(l, config.max_seq_len) for l in lengths
-            ])
+            avg_sents = np.mean(input_counts) if input_counts else 1
+            sents_per_sec = steps_per_sec * BATCH_SIZE * avg_sents
             log(f"step {step+1:>7d} [CLM] | mse={avg_loss:.4f} | "
                 f"cos={avg_cos:.3f} | lr {current_lr:.2e} | "
                 f"{pct:.1f}% | {sents_per_sec:.0f} sent/s")
@@ -727,8 +820,7 @@ def train(resume_from=None, fresh=False, eval_only=False):
             avg_loss = np.mean(loss_tracker[-100:]) if loss_tracker else 0
             avg_cos = np.mean(cosine_tracker[-100:]) if cosine_tracker else 0
 
-            # Generate samples
-            results = evaluate(model, v24_model, v24_model, tokenizer, device)
+            results = evaluate(model, v24_model, tokenizer, device, config)
             for r in results:
                 log(f"  PROMPT: {r['prompt']}")
                 for i, sent in enumerate(r['generated']):
@@ -736,14 +828,13 @@ def train(resume_from=None, fresh=False, eval_only=False):
                     log(f"    [{label}] {sent}")
 
             elapsed = time.time() - start_time
-            metrics_dict = {
+            log_metrics(step + 1, {
                 "mse_loss": avg_loss,
                 "cosine_sim": avg_cos,
                 "lr": current_lr,
                 "elapsed_hours": elapsed / 3600,
                 "sentences_per_sec": 0,
-            }
-            log_metrics(step + 1, metrics_dict)
+            })
 
         # --- Checkpoint ---
         if (step + 1) % CHECKPOINT_EVERY == 0:
@@ -780,10 +871,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     log("=" * 70)
-    log("FLM CONCEPT-SPACE LM — Phase 2")
-    log("  Autoregressive LM operating in concept space")
-    log("  Input: concept vectors from frozen V24 encoder")
-    log("  Output: predicted next concept vectors → decoded by frozen V24")
+    log("FLM CONCEPT-SPACE LM — Phase 2 (Block-Causal)")
+    log("  Concept slots attend within sentences (bidirectional)")
+    log("  Sentences attend causally (autoregressive)")
+    log("  No encode/decode roundtrip between generation steps")
     log("=" * 70)
 
     train(resume_from=args.resume, fresh=args.fresh, eval_only=args.eval_only)
