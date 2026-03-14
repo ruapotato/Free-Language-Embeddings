@@ -31,7 +31,7 @@ def parse_step_data(log_path):
     with open(log_path) as f:
         for line in f:
             # V14/V15/V16/V17/V18/V19 format: step N [HYDRA+GEO] or [V17+GEO] or [V19] | en=X para=X parse=X | ...
-            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line):
+            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line or "[V26]" in line or "[V27]" in line):
                 try:
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
@@ -44,6 +44,8 @@ def parse_step_data(log_path):
                         "recon": grab(r"en=([\d.]+)", line) or grab(r"recon=([\d.]+)", line),
                         "em_ema": grab(r"em_ema=([\d.]+)", line),
                         "pred_loss": grab(r"pred=([\d.]+)", line),
+                        "masked_loss": grab(r"masked=([\d.]+)", line),
+                        "unmasked_loss": grab(r"unmasked=([\d.]+)", line),
                         "lr": grab(r"lr ([\d.eE+-]+)", line),
                         "progress": grab(r"([\d.]+)%", line),
                         "fr_loss": grab(r"fr=([\d.]+)", line),
@@ -77,6 +79,16 @@ def parse_step_data(log_path):
                     wn_tropo_val = grab(r"wn_tropo=([\d.]+)", line, default=None)
                     if wn_tropo_val is not None:
                         row["wn_tropo_loss"] = wn_tropo_val
+                    # V27: VICReg variance/covariance + contrastive weight
+                    var_val = grab(r"var=([\d.]+)", line, default=None)
+                    if var_val is not None:
+                        row["var_loss"] = var_val
+                    cov_val = grab(r"cov=([\d.]+)", line, default=None)
+                    if cov_val is not None:
+                        row["cov_loss"] = cov_val
+                    ctr_w_val = grab(r"ctr_w=([\d.]+)", line, default=None)
+                    if ctr_w_val is not None:
+                        row["ctr_weight"] = ctr_w_val
                     # V15: geo scale and geo losses
                     geo_val = grab(r"geo=([\d.]+)", line, default=None)
                     if geo_val is not None:
@@ -332,7 +344,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v27", "v26", "v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -342,7 +354,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -867,6 +879,27 @@ function updateDashboard(response) {
     const predLossVals = steps.map(d => d.pred_loss || 0);
     if (predLossVals.some(v => v > 0))
         reconDs.push(ds('Prediction', ema(predLossVals, sw), '#42a5f5'));
+    // V26: Masked / Unmasked loss
+    const maskedLossVals = steps.map(d => d.masked_loss || 0);
+    const unmaskedLossVals = steps.map(d => d.unmasked_loss || 0);
+    if (maskedLossVals.some(v => v > 0))
+        reconDs.push(ds('Masked', ema(maskedLossVals, sw), '#ef5350'));
+    if (unmaskedLossVals.some(v => v > 0))
+        reconDs.push(ds('Unmasked', ema(unmaskedLossVals, sw), '#66bb6a'));
+    // V27: Contrastive / VICReg losses
+    const ctrLossVals = steps.map(d => d.contrastive_loss || 0);
+    if (ctrLossVals.some(v => v > 0))
+        reconDs.push(ds('Contrastive', ema(ctrLossVals, sw), '#42a5f5'));
+    const varLossVals = steps.map(d => d.var_loss || 0);
+    if (varLossVals.some(v => v > 0))
+        reconDs.push(ds('Variance', ema(varLossVals, sw), '#ffa726'));
+    const covLossVals = steps.map(d => d.cov_loss || 0);
+    if (covLossVals.some(v => v > 0))
+        reconDs.push(ds('Covariance', ema(covLossVals, sw), '#ab47bc'));
+    // V27: Contrastive weight ramp on right axis
+    const ctrWeightVals = steps.map(d => d.ctr_weight || 0);
+    if (ctrWeightVals.some(v => v > 0))
+        reconDs.push(ds('Ctr Weight', ctrWeightVals, '#78909c', {yAxisID: 'y2', borderDash: [5, 3]}));
     // V13+: FR translation loss
     const frLossVals = steps.map(d => d.fr_loss || 0);
     if (frLossVals.some(v => v > 0))
@@ -954,7 +987,9 @@ function updateDashboard(response) {
     // V10/V11: Update chart headings
     if (isV10) {
         const hasPred = steps.some(d => d.pred_loss > 0);
-        document.getElementById('h-recon').textContent = hasPred ? 'Reconstruction + Prediction Loss' : 'Reconstruction Loss';
+        const hasMasked = steps.some(d => d.masked_loss > 0);
+        const hasCtr = steps.some(d => d.contrastive_loss > 0);
+        document.getElementById('h-recon').textContent = hasCtr ? 'Contrastive Autoencoder Loss' : hasMasked ? 'Masked Sentence Modeling Loss' : hasPred ? 'Reconstruction + Prediction Loss' : 'Reconstruction Loss';
         document.getElementById('h-geo-losses').textContent = 'EM EMA (Training)';
         document.getElementById('h-batch-sim').textContent = 'Token & Bucket Accuracy';
         document.getElementById('h-diag-sim').textContent = 'Per-Bucket Exact Match';
@@ -1536,6 +1571,10 @@ function updateDashboard(response) {
         html += `\n<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
         if (latest.pred_loss > 0)
             html += `<span class="label"> Predict:</span>   <span class="value">${fmt(latest.pred_loss)}</span>\n`;
+        if (latest.masked_loss > 0)
+            html += `<span class="label"> Masked:</span>    <span class="value">${fmt(latest.masked_loss)}</span>\n`;
+        if (latest.unmasked_loss > 0)
+            html += `<span class="label"> Unmasked:</span>  <span class="value">${fmt(latest.unmasked_loss)}</span>\n`;
         html += `<span class="label"> EM EMA:</span>    <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
         if (le.token_acc != null)
             html += `<span class="label"> Token Acc:</span> <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>\n`;
@@ -1614,6 +1653,14 @@ function updateDashboard(response) {
                 phaseText = 'Dual Decoder (EN + FR)';
                 phaseColor = '#ab47bc';
                 detailText = `EN recon: ${fmt(latest.recon, 3)} | FR trans: ${fmt(latest.fr_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
+            } else if (latest.contrastive_loss > 0) {
+                phaseText = 'Contrastive Autoencoder (SimCSE + VICReg)';
+                phaseColor = '#42a5f5';
+                detailText = `Recon: ${fmt(latest.recon, 3)} | Ctr: ${fmt(latest.contrastive_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
+            } else if (latest.masked_loss > 0) {
+                phaseText = 'Masked Sentence Modeling';
+                phaseColor = '#ef5350';
+                detailText = `Masked: ${fmt(latest.masked_loss, 3)} | Unmasked: ${fmt(latest.unmasked_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
             } else if (latest.pred_loss > 0) {
                 phaseText = 'Sentence2vec (Recon + Prediction)';
                 phaseColor = '#66bb6a';
