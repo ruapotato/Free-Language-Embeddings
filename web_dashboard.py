@@ -887,19 +887,19 @@ function updateDashboard(response) {
     if (unmaskedLossVals.some(v => v > 0))
         reconDs.push(ds('Unmasked', ema(unmaskedLossVals, sw), '#66bb6a'));
     // V27: Contrastive / VICReg losses
-    const ctrLossVals = steps.map(d => d.contrastive_loss || 0);
-    if (ctrLossVals.some(v => v > 0))
-        reconDs.push(ds('Contrastive', ema(ctrLossVals, sw), '#42a5f5'));
-    const varLossVals = steps.map(d => d.var_loss || 0);
-    if (varLossVals.some(v => v > 0))
-        reconDs.push(ds('Variance', ema(varLossVals, sw), '#ffa726'));
-    const covLossVals = steps.map(d => d.cov_loss || 0);
-    if (covLossVals.some(v => v > 0))
-        reconDs.push(ds('Covariance', ema(covLossVals, sw), '#ab47bc'));
+    const v27CtrVals = steps.map(d => d.contrastive_loss || 0);
+    if (v27CtrVals.some(v => v > 0))
+        reconDs.push(ds('Contrastive', ema(v27CtrVals, sw), '#42a5f5'));
+    const v27VarVals = steps.map(d => d.var_loss || 0);
+    if (v27VarVals.some(v => v > 0))
+        reconDs.push(ds('Variance', ema(v27VarVals, sw), '#ffa726'));
+    const v27CovVals = steps.map(d => d.cov_loss || 0);
+    if (v27CovVals.some(v => v > 0))
+        reconDs.push(ds('Covariance', ema(v27CovVals, sw), '#ab47bc'));
     // V27: Contrastive weight ramp on right axis
-    const ctrWeightVals = steps.map(d => d.ctr_weight || 0);
-    if (ctrWeightVals.some(v => v > 0))
-        reconDs.push(ds('Ctr Weight', ctrWeightVals, '#78909c', {yAxisID: 'y2', borderDash: [5, 3]}));
+    const v27CtrWVals = steps.map(d => d.ctr_weight || 0);
+    if (v27CtrWVals.some(v => v > 0))
+        reconDs.push(ds('Ctr Weight', v27CtrWVals, '#78909c', {yAxisID: 'y2', borderDash: [5, 3]}));
     // V13+: FR translation loss
     const frLossVals = steps.map(d => d.fr_loss || 0);
     if (frLossVals.some(v => v > 0))
