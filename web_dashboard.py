@@ -953,7 +953,8 @@ function updateDashboard(response) {
 
     // V10/V11: Update chart headings
     if (isV10) {
-        document.getElementById('h-recon').textContent = 'Reconstruction Loss';
+        const hasPred = steps.some(d => d.pred_loss > 0);
+        document.getElementById('h-recon').textContent = hasPred ? 'Reconstruction + Prediction Loss' : 'Reconstruction Loss';
         document.getElementById('h-geo-losses').textContent = 'EM EMA (Training)';
         document.getElementById('h-batch-sim').textContent = 'Token & Bucket Accuracy';
         document.getElementById('h-diag-sim').textContent = 'Per-Bucket Exact Match';
@@ -1533,6 +1534,8 @@ function updateDashboard(response) {
         html += `<span class="label"> EM EMA:</span>  <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
     } else if (isV10) {
         html += `\n<span class="label"> Recon:</span>     <span class="value">${fmt(latest.recon)}</span>\n`;
+        if (latest.pred_loss > 0)
+            html += `<span class="label"> Predict:</span>   <span class="value">${fmt(latest.pred_loss)}</span>\n`;
         html += `<span class="label"> EM EMA:</span>    <span class="${rating(latest.em_ema, 0.9, 0.5)}">${pct(latest.em_ema)}</span>\n`;
         if (le.token_acc != null)
             html += `<span class="label"> Token Acc:</span> <span class="${rating(le.token_acc, 0.95, 0.8)}">${pct(le.token_acc)}</span>\n`;
@@ -1611,6 +1614,10 @@ function updateDashboard(response) {
                 phaseText = 'Dual Decoder (EN + FR)';
                 phaseColor = '#ab47bc';
                 detailText = `EN recon: ${fmt(latest.recon, 3)} | FR trans: ${fmt(latest.fr_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
+            } else if (latest.pred_loss > 0) {
+                phaseText = 'Sentence2vec (Recon + Prediction)';
+                phaseColor = '#66bb6a';
+                detailText = `Recon: ${fmt(latest.recon, 3)} | Pred: ${fmt(latest.pred_loss, 3)} | Step ${latest.step.toLocaleString()}`;
             } else {
                 phaseText = 'Pure Reconstruction';
                 phaseColor = '#4fc3f7';

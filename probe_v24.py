@@ -16,15 +16,27 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def load_model(ckpt_path):
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    config = ConceptConfig(**ckpt["config"])
-    model = ConceptAutoencoderV24(config).to(DEVICE).eval()
-    state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["model_state_dict"].items()}
-    model.load_state_dict(state, strict=True)
+    # V25 checkpoints store v24_state_dict + v24_config separately
+    if "v24_state_dict" in ckpt:
+        config = ConceptConfig(**ckpt["v24_config"])
+        model = ConceptAutoencoderV24(config).to(DEVICE).eval()
+        state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["v24_state_dict"].items()}
+        model.load_state_dict(state, strict=True)
+        step = ckpt["step"]
+        metrics = ckpt.get("metrics", {})
+        loss = metrics.get("recon_loss", 0)
+        em = metrics.get("exact_match_ema", 0)
+        print(f"Loaded V25 checkpoint step {step:,} | recon={loss:.4f} | em_ema={em:.3f}")
+    else:
+        config = ConceptConfig(**ckpt["config"])
+        model = ConceptAutoencoderV24(config).to(DEVICE).eval()
+        state = {k.replace("_orig_mod.", ""): v for k, v in ckpt["model_state_dict"].items()}
+        model.load_state_dict(state, strict=True)
+        step = ckpt["step"]
+        loss = ckpt.get("loss", 0)
+        em = ckpt.get("exact_match_ema", 0)
+        print(f"Loaded step {step:,} | loss={loss:.4f} | em_ema={em:.3f}")
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    step = ckpt["step"]
-    loss = ckpt.get("loss", 0)
-    em = ckpt.get("exact_match_ema", 0)
-    print(f"Loaded step {step:,} | loss={loss:.4f} | em_ema={em:.3f}")
     print(f"  {config.enc_layers}L enc, {config.dec_layers}L dec, "
           f"{config.num_concepts}x{config.concept_dim}={config.num_concepts*config.concept_dim}d bottleneck")
     return model, tokenizer, config

@@ -103,6 +103,18 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 **Local live monitor:** `python web_dashboard.py` then open http://localhost:8501
 
+**Current status (298K / 600K steps, ~50%):**
+- Reconstruction loss: 0.14 (nearly reconstructing full sentences)
+- Prediction loss: 2.59 (steadily dropping)
+- Next-sentence predictions show thematic coherence (e.g., water/temperature prompts → water/heat predictions)
+
+**Concept space geometry at 298K steps:**
+- Paraphrases cluster well (avg 0.90 cosine similarity)
+- Semantic topic grouping emerging (within-group vs between-group gap: +0.35)
+- Negation sensitivity developing ("he loves her" vs "he does not love her" = 0.04 cosine sim)
+- Currently organizing primarily by surface features (length, punctuation, structure); semantic organization expected to strengthen as prediction loss drops
+- Effective rank: 19 dims explain 90% of variance (space is well-spread, not collapsed)
+
 ## Version History
 
 ### V25 (current) — Unified Sentence LM
@@ -110,6 +122,7 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 - Sentence2vec approach: prediction task shapes concept space geometry
 - Decoder-backprop loss (token-level CE, not MSE on vectors)
 - Trains on consecutive sentences from documents
+- At 50% training: surface features dominate geometry, semantic structure emerging
 
 ### V24 (archived) — Sentence Compressor
 - 25.9M params, 4L encoder/decoder, 1024-dim bottleneck, max 64 tokens
