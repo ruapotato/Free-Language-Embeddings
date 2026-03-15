@@ -30,7 +30,6 @@ import random
 import signal
 import datetime
 import argparse
-import queue
 import threading
 from collections import Counter
 
@@ -465,11 +464,17 @@ class MixedDataset:
         return neg.view(batch_size, num_neg)
 
     def start_reader(self):
-        """Start background thread that continuously reads docs into ring buffer."""
+        """Start background thread that continuously reads docs into ring buffer.
+
+        Sleeps between batches to yield the GIL — Python threading means
+        CPU-bound reader work blocks the main training thread otherwise.
+        """
         self._reader_stop = threading.Event()
         def _read_loop():
             while not self._reader_stop.is_set():
-                self._add_docs(20)
+                self._add_docs(10)
+                # Yield GIL so training thread can run at full GPU speed
+                time.sleep(0.05)
         self._reader_thread = threading.Thread(target=_read_loop, daemon=True)
         self._reader_thread.start()
 
@@ -497,34 +502,6 @@ class MixedDataset:
         negatives = self.sample_negatives(batch_size, NEG_SAMPLES)
         return centers, context_ids, context_mask, negatives
 
-
-class PrefetchBuffer:
-    """Prefetches paired (SG, CBOW) batches in a single background thread."""
-
-    def __init__(self, dataset, batch_size=BATCH_SIZE, buf_size=8):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.q = queue.Queue(maxsize=buf_size)
-        self._stop = threading.Event()
-
-    def start(self):
-        self._thread = threading.Thread(target=self._fill, daemon=True)
-        self._thread.start()
-
-    def _fill(self):
-        while not self._stop.is_set():
-            try:
-                sg = self.dataset.get_sg_batch(self.batch_size)
-                cbow = self.dataset.get_cbow_batch(self.batch_size)
-                self.q.put((sg, cbow), timeout=1.0)
-            except Exception:
-                continue
-
-    def get(self):
-        return self.q.get()
-
-    def stop(self):
-        self._stop.set()
 
 
 # ---------------------------------------------------------------------------
@@ -832,29 +809,10 @@ def train(args):
 
     log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | Steps: {start_step} -> {TOTAL_STEPS}")
 
-    # Data — reader thread fills ring buffer, prefetch thread samples batches
+    # Data — reader thread fills ring buffer, batches sampled directly (instant)
     dataset = MixedDataset(PRETRAIN_SOURCES, vocab)
     dataset.start_reader()  # Background thread continuously reads docs into ring buffer
-
-    batch_q = queue.Queue(maxsize=8)
-    _stop = threading.Event()
-
-    def _fill():
-        """Single thread produces alternating SG/CBOW batches (instant — no I/O)."""
-        step_i = 0
-        while not _stop.is_set():
-            try:
-                if step_i % 2 == 0:
-                    batch = ("sg", dataset.get_sg_batch(BATCH_SIZE))
-                else:
-                    batch = ("cbow", dataset.get_cbow_batch(BATCH_SIZE))
-                batch_q.put(batch, timeout=1.0)
-                step_i += 1
-            except Exception:
-                continue
-
-    threading.Thread(target=_fill, daemon=True).start()
-    log("Prefetch started (alternating SG/CBOW, reader thread active)")
+    log("Reader thread active, batches sampled directly (no prefetch queue)")
     log("-" * 70)
 
     # Training
@@ -882,16 +840,14 @@ def train(args):
         for pg in optimizer.param_groups:
             pg["lr"] = current_lr
 
-        mode, batch_data = batch_q.get()
-
-        if mode == "sg":
-            sg_targets, sg_contexts, sg_negatives = batch_data
+        if step % 2 == 0:
+            sg_targets, sg_contexts, sg_negatives = dataset.get_sg_batch(BATCH_SIZE)
             loss = model.forward_skipgram(
                 sg_targets.to(DEVICE), sg_contexts.to(DEVICE), sg_negatives.to(DEVICE))
             running_sg_loss += loss.item()
             sg_count += 1
         else:
-            cbow_centers, cbow_ctx_ids, cbow_ctx_mask, cbow_negatives = batch_data
+            cbow_centers, cbow_ctx_ids, cbow_ctx_mask, cbow_negatives = dataset.get_cbow_batch(BATCH_SIZE)
             loss = model.forward_cbow(
                 cbow_centers.to(DEVICE), cbow_ctx_ids.to(DEVICE),
                 cbow_ctx_mask.to(DEVICE), cbow_negatives.to(DEVICE))
@@ -942,7 +898,6 @@ def train(args):
     with torch.no_grad():
         run_google_analogies(model, vocab)
 
-    _stop.set()
     dataset.stop_reader()
     log("Training complete.")
 
