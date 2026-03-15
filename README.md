@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: V28/V29 — Word2vec experiments.** Exploring embedding geometry with classic skip-gram word2vec. V28 (300d) scores 43.9% on the Google analogy benchmark. V29 (3d) produces a directly-visualizable word globe — 0% on analogies but striking categorical structure.
+> **Status: V32 — Path2vec.** Skip-gram embeddings for Unix filesystem paths. Trained on 199K paths from a full Debian chroot (1,752 packages). V28 (300d word2vec) scores 43.9% on Google analogies. V29 (3d) produces a directly-visualizable word globe.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -117,7 +117,33 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 ## Version History
 
-### V29 (current) — 3D Word2vec
+### V32 (current) — Path2vec: Filesystem Embeddings
+- Skip-gram word2vec applied to Unix filesystem paths — each path is a "sentence" of components
+- Data: full Debian trixie chroot with 1,752 packages installed, including `/proc`, `/sys`, `/dev`
+- 199K paths, 14,241 unique path components, avg 6.1 components per path
+- 8.5M params, 300d embeddings, 1M steps, trained in ~5 hours on RTX 3090
+- `build_debian_dataset.sh` — reproducible: builds the chroot, installs packages, collects paths
+- **Similarity gap: +0.101** (similar pairs avg 0.253 vs different 0.153)
+- **Effective rank: 48.1** (50% variance in 7 dims, 90% in 99 dims)
+- Strong structural clustering:
+  - `apache2` ↔ `nginx` = 0.60, `systemd` ↔ `udev` = 0.67, `i386-linux-gnu` ↔ `x86_64-linux-gnu` = 0.70
+  - `man1` ↔ `man8` = 0.83, `fd` ↔ `fdinfo` = 0.92, `proc` ↔ `sys` = 0.46 but `proc` ↔ `usr` = 0.08
+  - `__pycache__` → `__init__.py` (0.90), `python3` → `dist-packages` (0.63)
+  - `sys` → slab allocator params (0.76+), `kernel` → module metadata (0.78)
+- Vector arithmetic is noisy — paths have strict hierarchy, not the free co-occurrence that makes word2vec analogies work
+- Key finding: skip-gram captures "what lives near what" in the filesystem tree, but the hierarchical structure doesn't map cleanly to vector arithmetic
+
+### V30 (archived) — Word2vec LM
+- Autoregressive LM using frozen V28 word2vec embeddings as input/output space
+- 55.6M params (25.6M trainable), 8-layer causal transformer
+- Stopped early — standard word-level LM doesn't leverage embedding geometry interestingly
+
+### V31 (archived) — Phrase-level BPE Word2vec
+- Attempted aggressive word-level BPE to compress sentences to ~3 phrase tokens, then train skip-gram
+- First merges: "of the", "in the", "to the" — correct BPE behavior
+- Killed: Python merge loop too slow (~2s per merge, needs thousands)
+
+### V29 — 3D Word2vec
 - Pure 3D word2vec skip-gram: every word is a real (x, y, z) coordinate on a unit sphere
 - 0.6M params, 100K whole-word vocabulary, 500K steps
 - **[Interactive 3D Visualization](https://ruapotato.github.io/chat_hamner/probe_v29_3d.html)** — drag to orbit, hover for words, search by name
@@ -190,6 +216,10 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 ```
 flm/
+├── train_v32.py              # V32: path2vec skip-gram on filesystem paths
+├── build_debian_dataset.sh   # Reproducible chroot builder for V32 training data
+├── train_v31.py              # V31: phrase-level BPE word2vec (archived)
+├── train_v30.py              # V30: autoregressive LM with frozen word2vec (archived)
 ├── train_v29.py              # V29: 3D word2vec skip-gram
 ├── train_v28.py              # V28: 300d word2vec skip-gram
 ├── probe_w2v.py              # V28 embedding probe + benchmark visualization
