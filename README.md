@@ -103,26 +103,22 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 **Local live monitor:** `python web_dashboard.py` then open http://localhost:8501
 
-**Current status (298K / 600K steps, ~50%):**
-- Reconstruction loss: 0.14 (nearly reconstructing full sentences)
-- Prediction loss: 2.59 (steadily dropping)
-- Next-sentence predictions show thematic coherence (e.g., water/temperature prompts → water/heat predictions)
-
-**Concept space geometry at 298K steps:**
-- Paraphrases cluster well (avg 0.90 cosine similarity)
-- Semantic topic grouping emerging (within-group vs between-group gap: +0.35)
-- Negation sensitivity developing ("he loves her" vs "he does not love her" = 0.04 cosine sim)
-- Currently organizing primarily by surface features (length, punctuation, structure); semantic organization expected to strengthen as prediction loss drops
-- Effective rank: 19 dims explain 90% of variance (space is well-spread, not collapsed)
+**Current status: V33 training (~86K / 1M steps, 8.6%):**
+- SG loss: 5.2, CBOW loss: 3.2 — both dropping steadily
+- 17.7 step/s on RTX 3090, ~14 hours remaining
+- No analogy geometry yet at 80K — same as V28 at this stage (V28 also scored 0% until ~100K+)
+- CBOW loss tracks close to V28's SG-only loss at same step count (3.3 vs 3.5)
 
 ## Version History
 
 ### V33 (current, training) — Mixed Skip-Gram + CBOW Word2vec
-- Combines both word2vec objectives on the same embedding matrix — alternating SG and CBOW steps
-- Skip-gram: given center word, predict context words. CBOW: given context words, predict center word
+- Combines both word2vec objectives on shared embedding matrices — alternating SG and CBOW steps
+- Skip-gram: given center word, predict context words. CBOW: given context words (averaged), predict center word
 - Two different views of the same co-occurrence data, both shaping shared 300d embeddings
-- Same 100K vocab as V28 for fair A/B comparison on the Google analogy benchmark (V28: 43.9%)
-- 60M params, 1M steps, ~17 step/s on RTX 3090
+- Reuses V28's 100K vocab for fair A/B comparison on the Google analogy benchmark (V28: 43.9%)
+- 60M params, 1M steps (2x V28), 17.7 step/s on RTX 3090
+- Data pipeline: numpy ring buffers (500K entries) with background reader thread; 50ms GIL-yield sleep was key to getting full GPU utilization
+- At 80K steps: no analogy geometry yet — matches V28's trajectory (V28 also 0% at 80K, didn't score until ~100K+)
 - Hypothesis: dual training signals create richer geometry, similar to V25's joint reconstruction + prediction
 
 ### V32 — Path2vec: Filesystem Embeddings
