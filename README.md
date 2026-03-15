@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: Active training (V25 — Unified Sentence LM).** A jointly trained sentence compressor + next-sentence predictor. Like word2vec learns word geometry from context prediction, V25 learns sentence geometry from next-sentence prediction.
+> **Status: V28/V29 — Word2vec experiments.** Exploring embedding geometry with classic skip-gram word2vec. V28 (300d) scores 43.9% on the Google analogy benchmark. V29 (3d) produces a directly-visualizable word globe — 0% on analogies but striking categorical structure.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -117,7 +117,35 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 ## Version History
 
-### V25 (current) — Unified Sentence LM
+### V29 (current) — 3D Word2vec
+- Pure 3D word2vec skip-gram: every word is a real (x, y, z) coordinate on a unit sphere
+- 0.6M params, 100K whole-word vocabulary, 500K steps
+- **[Interactive 3D Visualization](https://ruapotato.github.io/chat_hamner/probe_v29_3d.html)** — drag to orbit, hover for words, search by name
+- Google Analogy Benchmark: **0.0%** — too many words packed onto a sphere for vector arithmetic to resolve
+- Similarity gap: **+1.074** (excellent broad category separation: king/banana = -0.65, cat/computer = -0.86)
+- Tense direction consistency: **0.932** (nearly perfect — go→went aligns with run→ran, see→saw, etc.)
+- The model self-organized into a ~2D belt on the sphere (X-axis variance collapsed to 0.18 vs 0.55 for Y/Z)
+- Key finding: 3 dimensions capture semantic *regions* (tech, nature, emotions occupy distinct areas) but cannot resolve individual words within a region
+
+### V28 — Word2vec Skip-Gram (300d)
+- Classic word2vec skip-gram with negative sampling, 300d, 100K whole-word vocabulary
+- 60M params, 500K steps on OpenWebText subset (~2B tokens)
+- **[Embedding Probe](https://ruapotato.github.io/chat_hamner/probe_w2v.html)** — analogies, vector arithmetic, t-SNE, benchmark comparison
+- Google Analogy Benchmark: **43.9%** (semantic 27.3%, syntactic 52.7%, 80% coverage)
+- Published comparison: word2vec (Google News) 61%, GloVe 75%, FastText 78% — gap explained by smaller training corpus
+- king - man + woman = queen works (0.737 cosine), paris - france + germany = berlin (0.679)
+- Custom analogies: 23/26 (88%)
+- Key finding: whole-word vocabulary is critical — WordPiece subword tokenization completely breaks word2vec geometry
+
+### V27 (archived) — Contrastive Autoencoder (SimCSE + VICReg)
+- Added SimCSE contrastive loss with VICReg variance/covariance regularization to V24 autoencoder
+- Fixed anisotropy (0.97→0.42) but failed to create real semantic structure
+- Key finding: SimCSE with dropout augmentation only teaches noise invariance, not semantic similarity
+
+### V26 (archived) — Masked Sentence Modeling
+- Sentence-level masked prediction experiment
+
+### V25 (archived) — Unified Sentence LM
 - 58.4M params total, joint encoder/decoder + sentence predictor
 - Sentence2vec approach: prediction task shapes concept space geometry
 - Decoder-backprop loss (token-level CE, not MSE on vectors)
@@ -162,15 +190,21 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 ```
 flm/
+├── train_v29.py              # V29: 3D word2vec skip-gram
+├── train_v28.py              # V28: 300d word2vec skip-gram
+├── probe_w2v.py              # V28 embedding probe + benchmark visualization
+├── eval_analogy.py           # Google analogy benchmark runner
 ├── concept_model.py          # Model definitions (encoder, bottleneck, decoder, whitening)
-├── train_v25.py              # V25: unified sentence compressor + LM training
+├── train_v25.py              # V25: unified sentence compressor + LM training (archived)
 ├── train_v24.py              # V24: sentence compressor only (archived)
-├── train_concept_lm.py       # Block-causal concept LM (archived, superseded by V25)
 ├── model.py                  # Transformer backbone (HamnerBlock, GQA, RoPE, SwiGLU)
-├── probe_v24.py              # Concept space probing (reconstruction, arithmetic, interpolation)
 ├── web_dashboard.py          # Live training dashboard
 ├── docs/
-│   └── dashboard.html        # Static dashboard snapshot (GitHub Pages)
+│   ├── dashboard.html        # Static dashboard snapshot (GitHub Pages)
+│   ├── probe_w2v.html        # V28 embedding geometry report
+│   └── probe_v29_3d.html     # V29 interactive 3D word globe
+├── data/
+│   └── questions-words.txt   # Google analogy benchmark (19.5K questions)
 ├── checkpoints/              # Model checkpoints (gitignored)
 └── logs/                     # Training metrics CSVs
 ```
