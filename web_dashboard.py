@@ -198,14 +198,17 @@ def parse_eval_data(log_path):
     with open(log_path) as f:
         for line in f:
             if ("step" in line and "loss" in line and "recon=" in line) or \
-               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line)):
+               ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line)) or \
+               ("step" in line and ("[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line or "[V33]" in line)):
                 try:
-                    step_str = line.split("|")[0].split("step")[1].strip()
-                    # Strip [HYDRA] tag if present
-                    step_str = step_str.split("[")[0].strip()
+                    step_str = line.split("step")[1].split("[")[0].strip()
                     last_step = int(re.search(r"(\d+)", step_str).group(1))
                 except (ValueError, IndexError, AttributeError):
                     pass
+                # Flush previous eval block on new step line
+                if current_eval and current_eval.get("step", 0) != last_step and len(current_eval) > 1:
+                    rows.append(current_eval)
+                    current_eval = None
             # V10 eval format: "EN EVAL: token_acc=X exact_match=X em_ema=X" (or just "EVAL: ...")
             # Only match EN EVAL or bare EVAL, not FR/ES/DE/PT/ZH/JA EVAL
             if "EVAL:" in line and "token_acc=" in line and not any(f"{lang} EVAL:" in line for lang in ["FR", "ES", "DE", "PT", "ZH", "JA", "PARSE"]):
@@ -329,13 +332,29 @@ def parse_eval_data(log_path):
                     wm = re.search(rf"{bucket}=([\d.]+)", line)
                     if wm:
                         current_eval[f"dw_{bucket}"] = float(wm.group(1))
-            # Flush eval when we hit the next step line
-            if current_eval and (
-                (("step" in line and "loss" in line and "recon=" in line) or
-                 ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line)))
-                and current_eval["step"] != last_step):
-                rows.append(current_eval)
-                current_eval = None
+            # V28/V33 word2vec eval: analogy accuracy, similarity gap, direction consistency
+            if "Analogy accuracy:" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"Analogy accuracy: (\d+)/(\d+) \(([\d.]+)%\)", line)
+                if m:
+                    current_eval["analogy_correct"] = int(m.group(1))
+                    current_eval["analogy_total"] = int(m.group(2))
+                    current_eval["analogy_avg"] = float(m.group(3)) / 100.0
+            if "Similar avg:" in line and "Gap:" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"Similar avg: ([-\d.]+).*Different avg: ([-\d.]+).*Gap: ([+-]?[\d.]+)", line)
+                if m:
+                    current_eval["avg_similar"] = float(m.group(1))
+                    current_eval["avg_different"] = float(m.group(2))
+                    current_eval["clustering_gap"] = float(m.group(3))
+            if "avg direction consistency" in line:
+                current_eval = current_eval or {"step": last_step}
+                m = re.search(r"(gender|size|tense).*avg direction consistency = ([-\d.]+)", line)
+                if m:
+                    current_eval[f"dir_{m.group(1)}"] = float(m.group(2))
+                    # Also set overall dir_consistency as average of what we have so far
+                    dir_vals = [current_eval[k] for k in current_eval if k.startswith("dir_")]
+                    current_eval["dir_consistency"] = sum(dir_vals) / len(dir_vals)
     if current_eval:
         rows.append(current_eval)
     return rows

@@ -882,8 +882,17 @@ def train(args):
         if (step + 1) % EVAL_EVERY == 0:
             model.eval()
             with torch.no_grad():
-                evaluate_embeddings(model, vocab, step + 1)
+                eval_results = evaluate_embeddings(model, vocab, step + 1)
             model.train()
+            log_metrics(step + 1, {
+                "sg_loss": avg_sg,
+                "cbow_loss": avg_cbow,
+                "lr": current_lr,
+                "analogy_acc": eval_results["analogy_acc"],
+                "sim_gap": eval_results["sim_gap"],
+                "avg_similar": eval_results["avg_similar"],
+                "avg_different": eval_results["avg_different"],
+            })
 
         if (step + 1) % SAVE_EVERY == 0:
             save_checkpoint(model, optimizer, step + 1)
