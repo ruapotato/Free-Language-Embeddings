@@ -1,6 +1,6 @@
 # flm — The Free Language Model
 
-> **Status: V32 — Path2vec.** Skip-gram embeddings for Unix filesystem paths. Trained on 199K paths from a full Debian chroot (1,752 packages). V28 (300d word2vec) scores 43.9% on Google analogies. V29 (3d) produces a directly-visualizable word globe.
+> **Status: V33 — Mixed SG+CBOW word2vec (training).** Combines skip-gram and CBOW objectives on shared embeddings for A/B comparison with V28's 43.9% on Google analogies. V32 applies path2vec to the Debian filesystem.
 
 A fully free AI project trained from scratch on a single RTX 3090. Every dataset DFSG-compliant, every weight reproducible. Built to be the first AI model you can `apt install` from Debian main.
 
@@ -117,11 +117,20 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 ## Version History
 
-### V32 (current) — Path2vec: Filesystem Embeddings
+### V33 (current, training) — Mixed Skip-Gram + CBOW Word2vec
+- Combines both word2vec objectives on the same embedding matrix — alternating SG and CBOW steps
+- Skip-gram: given center word, predict context words. CBOW: given context words, predict center word
+- Two different views of the same co-occurrence data, both shaping shared 300d embeddings
+- Same 100K vocab as V28 for fair A/B comparison on the Google analogy benchmark (V28: 43.9%)
+- 60M params, 1M steps, ~17 step/s on RTX 3090
+- Hypothesis: dual training signals create richer geometry, similar to V25's joint reconstruction + prediction
+
+### V32 — Path2vec: Filesystem Embeddings
 - Skip-gram word2vec applied to Unix filesystem paths — each path is a "sentence" of components
 - Data: full Debian trixie chroot with 1,752 packages installed, including `/proc`, `/sys`, `/dev`
 - 199K paths, 14,241 unique path components, avg 6.1 components per path
 - 8.5M params, 300d embeddings, 1M steps, trained in ~5 hours on RTX 3090
+- **[Interactive 3D Visualization](https://ruapotato.github.io/chat_hamner/probe_v32_paths_3d.html)** — PCA projection with 17 color-coded categories, search, orbit controls
 - `build_debian_dataset.sh` — reproducible: builds the chroot, installs packages, collects paths
 - **Similarity gap: +0.101** (similar pairs avg 0.253 vs different 0.153)
 - **Effective rank: 48.1** (50% variance in 7 dims, 90% in 99 dims)
@@ -216,6 +225,7 @@ concept vectors [sent 1, sent 2, ..., sent N] → [8L Causal Transformer] → pr
 
 ```
 flm/
+├── train_v33.py              # V33: mixed skip-gram + CBOW word2vec
 ├── train_v32.py              # V32: path2vec skip-gram on filesystem paths
 ├── build_debian_dataset.sh   # Reproducible chroot builder for V32 training data
 ├── train_v31.py              # V31: phrase-level BPE word2vec (archived)
@@ -232,6 +242,7 @@ flm/
 ├── docs/
 │   ├── dashboard.html        # Static dashboard snapshot (GitHub Pages)
 │   ├── probe_w2v.html        # V28 embedding geometry report
+│   ├── probe_v32_paths_3d.html # V32 interactive 3D filesystem embedding globe
 │   └── probe_v29_3d.html     # V29 interactive 3D word globe
 ├── data/
 │   └── questions-words.txt   # Google analogy benchmark (19.5K questions)
