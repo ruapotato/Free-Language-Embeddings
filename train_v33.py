@@ -306,7 +306,13 @@ class MixedWord2vec(nn.Module):
 # ---------------------------------------------------------------------------
 
 class MixedDataset:
-    """Streams both skip-gram pairs AND CBOW windows."""
+    """Streams both skip-gram pairs AND CBOW windows.
+
+    Uses numpy ring buffers with random index sampling (no shuffle).
+    Single-threaded — call from one prefetch thread only.
+    """
+
+    BUF_SIZE = 500_000  # Fixed ring buffer size
 
     def __init__(self, sources, vocab, window_size=WINDOW_SIZE,
                  subsample_threshold=SUBSAMPLE_THRESHOLD):
@@ -315,6 +321,7 @@ class MixedDataset:
             raise FileNotFoundError("No data sources found")
         self.vocab = vocab
         self.window_size = window_size
+        self.max_ctx = 2 * window_size
 
         # Source sampling weights
         total_w = sum(w for _, w in self.sources)
@@ -344,13 +351,25 @@ class MixedDataset:
         ).long()
         self._neg_idx = 0
 
-        # Buffers: skip-gram pairs and CBOW windows
-        self._sg_buf = []    # [(target, context), ...]
-        self._cbow_buf = []  # [(center, [ctx1, ctx2, ...]), ...]
-        self._MIN_BUF = 100000
+        # Numpy ring buffers — fixed size, overwrite oldest
+        # SG: two arrays (targets, contexts)
+        self._sg_targets = np.zeros(self.BUF_SIZE, dtype=np.int32)
+        self._sg_contexts = np.zeros(self.BUF_SIZE, dtype=np.int32)
+        self._sg_count = 0  # total items written (wraps via modulo)
+        self._sg_valid = 0  # min(count, BUF_SIZE)
+
+        # CBOW: center, context_ids (padded), context_lens
+        self._cbow_centers = np.zeros(self.BUF_SIZE, dtype=np.int32)
+        self._cbow_ctx = np.zeros((self.BUF_SIZE, self.max_ctx), dtype=np.int32)
+        self._cbow_lens = np.zeros(self.BUF_SIZE, dtype=np.int32)
+        self._cbow_count = 0
+        self._cbow_valid = 0
+
+        # Fill initial buffer
+        self._fill_initial()
 
         log(f"MixedDataset: {len(self.sources)} sources, "
-            f"vocab={len(vocab):,}, window={window_size}")
+            f"vocab={len(vocab):,}, window={window_size}, buf={self.BUF_SIZE:,}")
 
     def _sample_source(self):
         r = random.random()
@@ -379,35 +398,38 @@ class MixedDataset:
         ids = self.vocab.encode(words)
         return [i for i in ids if random.random() < self._subsample_probs[i]]
 
-    def _extract_windows(self, token_ids):
-        """Extract both skip-gram pairs and CBOW windows from a token sequence.
-
-        CBOW windows are pre-padded to fixed size (2*window_size) for fast batching.
-        """
-        sg_pairs = []
-        cbow_windows = []
-        max_ctx = 2 * self.window_size
+    def _process_doc(self, token_ids):
+        """Extract windows and write directly into ring buffers."""
         n = len(token_ids)
-
         for i in range(n):
             w = random.randint(1, self.window_size)
             ctx_ids = []
             for j in range(max(0, i - w), min(n, i + w + 1)):
                 if j != i:
-                    sg_pairs.append((token_ids[i], token_ids[j]))
+                    # Write SG pair
+                    idx = self._sg_count % self.BUF_SIZE
+                    self._sg_targets[idx] = token_ids[i]
+                    self._sg_contexts[idx] = token_ids[j]
+                    self._sg_count += 1
                     ctx_ids.append(token_ids[j])
+
             if ctx_ids:
-                # Pre-pad to fixed size
-                ctx_len = len(ctx_ids)
-                padded = ctx_ids + [0] * (max_ctx - ctx_len)
-                cbow_windows.append((token_ids[i], padded, ctx_len))
+                # Write CBOW window
+                idx = self._cbow_count % self.BUF_SIZE
+                self._cbow_centers[idx] = token_ids[i]
+                self._cbow_ctx[idx, :] = 0
+                self._cbow_ctx[idx, :len(ctx_ids)] = ctx_ids
+                self._cbow_lens[idx] = len(ctx_ids)
+                self._cbow_count += 1
 
-        return sg_pairs, cbow_windows
+        self._sg_valid = min(self._sg_count, self.BUF_SIZE)
+        self._cbow_valid = min(self._cbow_count, self.BUF_SIZE)
 
-    def _refill_buffers(self):
+    def _fill_initial(self):
+        """Fill buffers to at least half capacity."""
+        target = self.BUF_SIZE // 2
         attempts = 0
-        while (len(self._sg_buf) < self._MIN_BUF or
-               len(self._cbow_buf) < self._MIN_BUF) and attempts < 20000:
+        while self._sg_valid < target and attempts < 50000:
             attempts += 1
             src = self._sample_source()
             text = self._read_doc(src)
@@ -416,11 +438,23 @@ class MixedDataset:
             ids = self._tokenize_and_subsample(text)
             if len(ids) < 3:
                 continue
-            sg, cbow = self._extract_windows(ids)
-            self._sg_buf.extend(sg)
-            self._cbow_buf.extend(cbow)
-        random.shuffle(self._sg_buf)
-        random.shuffle(self._cbow_buf)
+            self._process_doc(ids)
+
+    def _add_docs(self, n_docs=50):
+        """Read a few more documents into the ring buffer."""
+        added = 0
+        attempts = 0
+        while added < n_docs and attempts < n_docs * 3:
+            attempts += 1
+            src = self._sample_source()
+            text = self._read_doc(src)
+            if not text or len(text) < 30:
+                continue
+            ids = self._tokenize_and_subsample(text)
+            if len(ids) < 3:
+                continue
+            self._process_doc(ids)
+            added += 1
 
     def sample_negatives(self, batch_size, num_neg):
         total_needed = batch_size * num_neg
@@ -431,30 +465,25 @@ class MixedDataset:
         return neg.view(batch_size, num_neg)
 
     def get_sg_batch(self, batch_size):
-        """Get a skip-gram batch."""
-        while len(self._sg_buf) < batch_size:
-            self._refill_buffers()
-        pairs = [self._sg_buf.pop() for _ in range(batch_size)]
-        targets = torch.tensor([p[0] for p in pairs], dtype=torch.long)
-        contexts = torch.tensor([p[1] for p in pairs], dtype=torch.long)
+        """Get a skip-gram batch via random index sampling."""
+        # Continuously add fresh data
+        self._add_docs(10)
+        indices = np.random.randint(0, self._sg_valid, size=batch_size)
+        targets = torch.from_numpy(self._sg_targets[indices].astype(np.int64))
+        contexts = torch.from_numpy(self._sg_contexts[indices].astype(np.int64))
         negatives = self.sample_negatives(batch_size, NEG_SAMPLES)
         return targets, contexts, negatives
 
     def get_cbow_batch(self, batch_size):
-        """Get a CBOW batch. Context is pre-padded to fixed size for speed."""
-        while len(self._cbow_buf) < batch_size:
-            self._refill_buffers()
-        windows = [self._cbow_buf.pop() for _ in range(batch_size)]
-
-        max_ctx = 2 * self.window_size
-        centers = torch.tensor([w[0] for w in windows], dtype=torch.long)
-        # Pre-padded: just stack directly
-        context_ids = torch.tensor([w[1] for w in windows], dtype=torch.long)
-        # Build mask from stored lengths
-        context_mask = torch.zeros(batch_size, max_ctx, dtype=torch.long)
-        for i, (_, _, ctx_len) in enumerate(windows):
-            context_mask[i, :ctx_len] = 1
-
+        """Get a CBOW batch via random index sampling."""
+        self._add_docs(10)
+        indices = np.random.randint(0, self._cbow_valid, size=batch_size)
+        centers = torch.from_numpy(self._cbow_centers[indices].astype(np.int64))
+        context_ids = torch.from_numpy(self._cbow_ctx[indices].astype(np.int64))
+        context_mask = torch.zeros(batch_size, self.max_ctx, dtype=torch.long)
+        lens = self._cbow_lens[indices]
+        for i, cl in enumerate(lens):
+            context_mask[i, :cl] = 1
         negatives = self.sample_negatives(batch_size, NEG_SAMPLES)
         return centers, context_ids, context_mask, negatives
 
@@ -793,37 +822,31 @@ def train(args):
 
     log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | Steps: {start_step} -> {TOTAL_STEPS}")
 
-    # Data — use separate SG and CBOW prefetch threads
+    # Data — single prefetch thread, numpy ring buffers
     dataset = MixedDataset(PRETRAIN_SOURCES, vocab)
 
-    # SG prefetch (fast — just pairs)
-    sg_q = queue.Queue(maxsize=8)
-    # CBOW prefetch (slower — padded windows)
-    cbow_q = queue.Queue(maxsize=8)
+    batch_q = queue.Queue(maxsize=8)
     _stop = threading.Event()
 
-    def _fill_sg():
+    def _fill():
+        """Single thread produces alternating SG/CBOW batches."""
+        step_i = 0
         while not _stop.is_set():
             try:
-                batch = dataset.get_sg_batch(BATCH_SIZE)
-                sg_q.put(batch, timeout=1.0)
+                if step_i % 2 == 0:
+                    batch = ("sg", dataset.get_sg_batch(BATCH_SIZE))
+                else:
+                    batch = ("cbow", dataset.get_cbow_batch(BATCH_SIZE))
+                batch_q.put(batch, timeout=1.0)
+                step_i += 1
             except Exception:
                 continue
 
-    def _fill_cbow():
-        while not _stop.is_set():
-            try:
-                batch = dataset.get_cbow_batch(BATCH_SIZE)
-                cbow_q.put(batch, timeout=1.0)
-            except Exception:
-                continue
-
-    threading.Thread(target=_fill_sg, daemon=True).start()
-    threading.Thread(target=_fill_cbow, daemon=True).start()
+    threading.Thread(target=_fill, daemon=True).start()
     log("Prefetch started (alternating SG/CBOW)")
     log("-" * 70)
 
-    # Training — alternate: even steps = skip-gram, odd steps = CBOW
+    # Training
     model.train()
     running_sg_loss = 0.0
     running_cbow_loss = 0.0
@@ -848,25 +871,19 @@ def train(args):
         for pg in optimizer.param_groups:
             pg["lr"] = current_lr
 
-        if step % 2 == 0:
-            # Skip-gram step
-            sg_targets, sg_contexts, sg_negatives = sg_q.get()
-            sg_targets = sg_targets.to(DEVICE)
-            sg_contexts = sg_contexts.to(DEVICE)
-            sg_negatives = sg_negatives.to(DEVICE)
+        mode, batch_data = batch_q.get()
 
-            loss = model.forward_skipgram(sg_targets, sg_contexts, sg_negatives)
+        if mode == "sg":
+            sg_targets, sg_contexts, sg_negatives = batch_data
+            loss = model.forward_skipgram(
+                sg_targets.to(DEVICE), sg_contexts.to(DEVICE), sg_negatives.to(DEVICE))
             running_sg_loss += loss.item()
             sg_count += 1
         else:
-            # CBOW step
-            cbow_centers, cbow_ctx_ids, cbow_ctx_mask, cbow_negatives = cbow_q.get()
-            cbow_centers = cbow_centers.to(DEVICE)
-            cbow_ctx_ids = cbow_ctx_ids.to(DEVICE)
-            cbow_ctx_mask = cbow_ctx_mask.to(DEVICE)
-            cbow_negatives = cbow_negatives.to(DEVICE)
-
-            loss = model.forward_cbow(cbow_centers, cbow_ctx_ids, cbow_ctx_mask, cbow_negatives)
+            cbow_centers, cbow_ctx_ids, cbow_ctx_mask, cbow_negatives = batch_data
+            loss = model.forward_cbow(
+                cbow_centers.to(DEVICE), cbow_ctx_ids.to(DEVICE),
+                cbow_ctx_mask.to(DEVICE), cbow_negatives.to(DEVICE))
             running_cbow_loss += loss.item()
             cbow_count += 1
 

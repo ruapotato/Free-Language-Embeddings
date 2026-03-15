@@ -89,6 +89,15 @@ def parse_step_data(log_path):
                     ctr_w_val = grab(r"ctr_w=([\d.]+)", line, default=None)
                     if ctr_w_val is not None:
                         row["ctr_weight"] = ctr_w_val
+                    # V33: mixed skip-gram + CBOW
+                    sg_val = grab(r"\bsg=([\d.]+)", line, default=None)
+                    if sg_val is not None:
+                        row["sg_loss"] = sg_val
+                        row["recon"] = sg_val  # primary loss for chart
+                    cbow_val = grab(r"\bcbow=([\d.]+)", line, default=None)
+                    if cbow_val is not None:
+                        row["cbow_loss"] = cbow_val
+                        row["pred_loss"] = cbow_val  # secondary loss for chart
                     # V15: geo scale and geo losses
                     geo_val = grab(r"geo=([\d.]+)", line, default=None)
                     if geo_val is not None:
@@ -873,12 +882,15 @@ function updateDashboard(response) {
     const ccs = clippedCmpSteps.map(d => d.step);
     const ccw = clippedCmpSteps.length > 10 ? Math.min(30, Math.max(5, Math.floor(clippedCmpSteps.length / 10))) : csw;
 
-    // 1. Reconstruction Loss (comparison clipped to current max step)
-    const reconDs = [ds('EN Recon', ema(steps.map(d => d.recon), sw), C.recon)];
-    // V25: Prediction loss
+    // 1. Primary Loss (comparison clipped to current max step)
+    const isV33 = run && run.startsWith('v33');
+    const reconLabel = isV33 ? 'Skip-Gram' : (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32')) ? 'Loss' : 'EN Recon');
+    const reconDs = [ds(reconLabel, ema(steps.map(d => d.recon), sw), C.recon)];
+    // V25: Prediction loss / V33: CBOW loss
     const predLossVals = steps.map(d => d.pred_loss || 0);
+    const predLabel = isV33 ? 'CBOW' : 'Prediction';
     if (predLossVals.some(v => v > 0))
-        reconDs.push(ds('Prediction', ema(predLossVals, sw), '#42a5f5'));
+        reconDs.push(ds(predLabel, ema(predLossVals, sw), '#42a5f5'));
     // V26: Masked / Unmasked loss
     const maskedLossVals = steps.map(d => d.masked_loss || 0);
     const unmaskedLossVals = steps.map(d => d.unmasked_loss || 0);
@@ -1653,7 +1665,13 @@ function updateDashboard(response) {
                 phaseText = 'Dual Decoder (EN + FR)';
                 phaseColor = '#ab47bc';
                 detailText = `EN recon: ${fmt(latest.recon, 3)} | FR trans: ${fmt(latest.fr_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
-            } else if (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32') || run.startsWith('v33'))) {
+            } else if (run && run.startsWith('v33')) {
+                phaseText = 'Mixed Skip-Gram + CBOW';
+                phaseColor = '#ffa726';
+                const sg = latest.sg_loss || latest.recon || 0;
+                const cbow = latest.cbow_loss || latest.pred_loss || 0;
+                detailText = `SG: ${fmt(sg, 3)} | CBOW: ${fmt(cbow, 3)} | Step ${latest.step.toLocaleString()}`;
+            } else if (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32'))) {
                 phaseText = 'Word2vec Skip-Gram';
                 phaseColor = '#ffa726';
                 detailText = `Loss: ${fmt(latest.recon, 3)} | Step ${latest.step.toLocaleString()}`;
