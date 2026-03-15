@@ -464,10 +464,21 @@ class MixedDataset:
         self._neg_idx += total_needed
         return neg.view(batch_size, num_neg)
 
+    def start_reader(self):
+        """Start background thread that continuously reads docs into ring buffer."""
+        self._reader_stop = threading.Event()
+        def _read_loop():
+            while not self._reader_stop.is_set():
+                self._add_docs(20)
+        self._reader_thread = threading.Thread(target=_read_loop, daemon=True)
+        self._reader_thread.start()
+
+    def stop_reader(self):
+        if hasattr(self, '_reader_stop'):
+            self._reader_stop.set()
+
     def get_sg_batch(self, batch_size):
-        """Get a skip-gram batch via random index sampling."""
-        # Continuously add fresh data
-        self._add_docs(10)
+        """Get a skip-gram batch via random index sampling. Instant — no I/O."""
         indices = np.random.randint(0, self._sg_valid, size=batch_size)
         targets = torch.from_numpy(self._sg_targets[indices].astype(np.int64))
         contexts = torch.from_numpy(self._sg_contexts[indices].astype(np.int64))
@@ -475,15 +486,14 @@ class MixedDataset:
         return targets, contexts, negatives
 
     def get_cbow_batch(self, batch_size):
-        """Get a CBOW batch via random index sampling."""
-        self._add_docs(10)
+        """Get a CBOW batch via random index sampling. Instant — no I/O."""
         indices = np.random.randint(0, self._cbow_valid, size=batch_size)
         centers = torch.from_numpy(self._cbow_centers[indices].astype(np.int64))
         context_ids = torch.from_numpy(self._cbow_ctx[indices].astype(np.int64))
-        context_mask = torch.zeros(batch_size, self.max_ctx, dtype=torch.long)
+        # Vectorized mask creation
         lens = self._cbow_lens[indices]
-        for i, cl in enumerate(lens):
-            context_mask[i, :cl] = 1
+        arange = np.arange(self.max_ctx)
+        context_mask = torch.from_numpy((arange[None, :] < lens[:, None]).astype(np.int64))
         negatives = self.sample_negatives(batch_size, NEG_SAMPLES)
         return centers, context_ids, context_mask, negatives
 
@@ -822,14 +832,15 @@ def train(args):
 
     log(f"  LR: {PEAK_LR} -> {MIN_LR} (cosine) | Steps: {start_step} -> {TOTAL_STEPS}")
 
-    # Data — single prefetch thread, numpy ring buffers
+    # Data — reader thread fills ring buffer, prefetch thread samples batches
     dataset = MixedDataset(PRETRAIN_SOURCES, vocab)
+    dataset.start_reader()  # Background thread continuously reads docs into ring buffer
 
     batch_q = queue.Queue(maxsize=8)
     _stop = threading.Event()
 
     def _fill():
-        """Single thread produces alternating SG/CBOW batches."""
+        """Single thread produces alternating SG/CBOW batches (instant — no I/O)."""
         step_i = 0
         while not _stop.is_set():
             try:
@@ -843,7 +854,7 @@ def train(args):
                 continue
 
     threading.Thread(target=_fill, daemon=True).start()
-    log("Prefetch started (alternating SG/CBOW)")
+    log("Prefetch started (alternating SG/CBOW, reader thread active)")
     log("-" * 70)
 
     # Training
@@ -932,6 +943,7 @@ def train(args):
         run_google_analogies(model, vocab)
 
     _stop.set()
+    dataset.stop_reader()
     log("Training complete.")
 
 
