@@ -31,7 +31,7 @@ def parse_step_data(log_path):
     with open(log_path) as f:
         for line in f:
             # V14/V15/V16/V17/V18/V19 format: step N [HYDRA+GEO] or [V17+GEO] or [V19] | en=X para=X parse=X | ...
-            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line):
+            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line or "[V33]" in line):
                 try:
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
@@ -344,7 +344,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v32", "v30", "v29", "v28", "v27", "v26", "v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v33", "v32", "v30", "v29", "v28", "v27", "v26", "v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -354,7 +354,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v32"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v32", "v33"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -1653,7 +1653,7 @@ function updateDashboard(response) {
                 phaseText = 'Dual Decoder (EN + FR)';
                 phaseColor = '#ab47bc';
                 detailText = `EN recon: ${fmt(latest.recon, 3)} | FR trans: ${fmt(latest.fr_loss, 3)} | EM: ${(emEma*100).toFixed(1)}%`;
-            } else if (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32'))) {
+            } else if (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32') || run.startsWith('v33'))) {
                 phaseText = 'Word2vec Skip-Gram';
                 phaseColor = '#ffa726';
                 detailText = `Loss: ${fmt(latest.recon, 3)} | Step ${latest.step.toLocaleString()}`;
