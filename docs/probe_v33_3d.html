@@ -100,7 +100,7 @@ DATA.forEach((d, i) => {
     positions[i*3] = d.x; positions[i*3+1] = d.y; positions[i*3+2] = d.z;
     const col = new THREE.Color(d.color);
     colors[i*3] = col.r; colors[i*3+1] = col.g; colors[i*3+2] = col.b;
-    sizes[i] = d.c === 'other' ? 3.0 : 5.0;
+    sizes[i] = d.c === 'other' ? 1.5 : 2.5;
 });
 
 const geom = new THREE.BufferGeometry();
@@ -115,7 +115,7 @@ const pointsMat = new THREE.ShaderMaterial({
         void main() {
             vColor = color;
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
-            gl_PointSize = size * (300.0 / -mv.z);
+            gl_PointSize = size * (150.0 / -mv.z);
             gl_Position = projectionMatrix * mv;
         }
     `,
@@ -153,15 +153,15 @@ document.addEventListener('mousemove', e => {
         tooltip.style.top = (e.clientY - 10) + 'px';
         tooltip.innerHTML = `<b style="color:${d.color}">${d.w}</b> <span style="color:#888">(${d.c})</span>`;
         if (highlightIdx !== idx) {
-            if (highlightIdx >= 0) sizes[highlightIdx] = DATA[highlightIdx].c === 'other' ? 3.0 : 5.0;
-            sizes[idx] = 12.0;
+            if (highlightIdx >= 0) sizes[highlightIdx] = DATA[highlightIdx].c === 'other' ? 1.5 : 2.5;
+            sizes[idx] = 6.0;
             highlightIdx = idx;
             geom.attributes.size.needsUpdate = true;
         }
     } else {
         tooltip.style.display = 'none';
         if (highlightIdx >= 0) {
-            sizes[highlightIdx] = DATA[highlightIdx].c === 'other' ? 3.0 : 5.0;
+            sizes[highlightIdx] = DATA[highlightIdx].c === 'other' ? 1.5 : 2.5;
             highlightIdx = -1;
             geom.attributes.size.needsUpdate = true;
         }
@@ -173,7 +173,7 @@ document.getElementById('search-box').addEventListener('input', function() {
     const q = this.value.toLowerCase();
     DATA.forEach((d, i) => {
         const match = q && d.w.includes(q);
-        sizes[i] = match ? 15.0 : (d.c === 'other' ? 3.0 : 5.0);
+        sizes[i] = match ? 8.0 : (d.c === 'other' ? 1.5 : 2.5);
         if (match) {
             const col = new THREE.Color('#ffffff');
             colors[i*3] = col.r; colors[i*3+1] = col.g; colors[i*3+2] = col.b;
@@ -201,7 +201,7 @@ document.querySelectorAll('.cat-toggle').forEach(cb => {
 function updateVisibility() {
     DATA.forEach((d, i) => {
         const vis = !hiddenCats.has(d.c);
-        sizes[i] = vis ? (d.c === 'other' ? 3.0 : 5.0) : 0.0;
+        sizes[i] = vis ? (d.c === 'other' ? 1.5 : 2.5) : 0.0;
     });
     geom.attributes.size.needsUpdate = true;
 }
