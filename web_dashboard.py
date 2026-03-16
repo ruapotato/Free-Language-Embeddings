@@ -1715,7 +1715,9 @@ function updateDashboard(response) {
             geoPctEl.textContent = progress.toFixed(1) + '%';
             geoBarEl.style.width = Math.min(progress, 100) + '%';
             geoBarEl.style.background = progress >= 75 ? '#66bb6a' : progress >= 25 ? '#ffa726' : '#4fc3f7';
-            reconEmaEl.textContent = `LR: ${(latest.lr || 0).toExponential(2)} | Step ${latest.step.toLocaleString()} / 600K`;
+            const totalSteps = (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v32'))) ? '500K'
+                             : (run && run.startsWith('v33')) ? '1M' : '600K';
+            reconEmaEl.textContent = `LR: ${(latest.lr || 0).toExponential(2)} | Step ${latest.step.toLocaleString()} / ${totalSteps}`;
         } else if (phase.startsWith('P1') && geo != null && geo === 0) {
             phaseText = 'Phase 0: Pure Recon';
             phaseColor = '#ef5350';

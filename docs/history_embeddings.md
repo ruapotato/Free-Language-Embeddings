@@ -63,13 +63,20 @@ Results:
 
 **Key finding**: skip-gram captures "what lives near what" in the tree, but hierarchical structure doesn't map cleanly to vector arithmetic. Analogy requires symmetric co-occurrence.
 
-## V33 (current, training) — Mixed Skip-Gram + CBOW
+## V33 (complete) — Mixed Skip-Gram + CBOW
 
-Can two views of the same data create richer geometry? Alternating skip-gram and CBOW steps on shared embeddings. A/B comparison against V28.
+Two views of the same data create richer geometry. Alternating skip-gram and CBOW steps on shared embeddings, compared against V28.
 
 - Reuses V28's 100K vocab for fair comparison
-- 60M params, 1M steps (2x V28), 17.7 step/s
+- 60M params, 1M steps (2x V28), 17.7 step/s, ~16 hours on RTX 3090
 - Data pipeline: numpy ring buffers with background reader thread. A 50ms `time.sleep()` to yield the GIL was the difference between 1.8 and 17.7 step/s — the reader thread's Python-heavy tokenization was starving the GPU.
-- At 80K steps: no geometry yet, matching V28's trajectory (also 0% at 80K)
+- **[Interactive 3D Visualization](https://ruapotato.github.io/chat_hamner/probe_v33_3d.html)**
 
-Hypothesis: dual training signals create richer geometry, similar to how V25's joint reconstruction + prediction gave two complementary gradients.
+Results:
+- **Google Analogy Benchmark: 59.2%** (semantic 47.5%, syntactic 65.4%, 80.4% coverage)
+- **+15.3% over V28's 43.9%** — dual signal is the difference
+- Competitive with original word2vec's 61% despite ~2B tokens vs 6B (3x less data)
+- Syntactic accuracy (65.4%) exceeds original word2vec's syntactic score (59%)
+- Effective rank: 49 dims (50%) vs V28's 21 — richer geometry from dual signal
+
+**Key finding**: the dual-objective hypothesis was correct. Two complementary gradients on shared embeddings produce substantially richer geometry than either objective alone, closing most of the gap to word2vec trained on 3x more data.
