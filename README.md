@@ -20,7 +20,7 @@ Next up: **V34 — Dynamic masking** to push past 60%.
 
 - **[Word Embedding Probe](https://ruapotato.github.io/chat_hamner/probe_w2v.html)** — V28: analogies, vector arithmetic, t-SNE, benchmark comparison
 - **[3D Filesystem Embeddings](https://ruapotato.github.io/chat_hamner/probe_v32_paths_3d.html)** — V32: the entire Debian filesystem as a point cloud, 17 color-coded categories
-- **[3D Word Embeddings (V33)](https://ruapotato.github.io/chat_hamner/probe_v33_3d.html)** — V33: mixed SG+CBOW embeddings visualized on a 3D globe
+- **[V33 Embedding Probe](https://ruapotato.github.io/chat_hamner/probe_v33_3d.html)** — V33: t-SNE, analogies (59.2% Google), cluster analysis, benchmark comparison
 - **[3D Word Globe](https://ruapotato.github.io/chat_hamner/probe_v29_3d.html)** — V29: 100K words compressed to 3 dimensions on a sphere
 
 ## The Experiment So Far

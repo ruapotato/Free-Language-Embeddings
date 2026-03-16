@@ -507,8 +507,10 @@ def compute_tsne(emb_norm, word2id, id2word, counts, n_words=500):
 def generate_html(step, analogies, analogy_correct, analogy_total,
                   directions, clusters, between_sims, arithmetic,
                   tsne_words, tsne_coords, tsne_cats, emb_norm, word2id, id2word,
-                  google_benchmark=None):
+                  google_benchmark=None, version_title=None):
     """Generate interactive HTML visualization."""
+    vtitle = version_title or "V28"
+    vshort = vtitle.split()[0] if vtitle else "V28"  # e.g. "V33" from "V33 Mixed SG+CBOW"
 
     # Build t-SNE data for chart
     cat_colors = {
@@ -610,7 +612,7 @@ Format: A:B :: C:? — find D such that the A-to-B relationship mirrors C-to-D.<
 </div>
 <table style="max-width: 800px; margin-top: 10px; font-size: 0.85em;">
 <tr><th>Model</th><th>Corpus</th><th>Vocab</th><th>Dim</th><th>Overall</th><th>Semantic</th><th>Syntactic</th></tr>
-<tr><td><b>V28 (ours)</b></td><td>OpenWebText subset</td><td>100K</td><td>300</td>
+<tr><td><b>{vshort} (ours)</b></td><td>OpenWebText subset</td><td>100K</td><td>300</td>
     <td><b>{gb['accuracy']:.1f}%</b></td><td>{gb['sem_accuracy']:.1f}%</td><td>{gb['syn_accuracy']:.1f}%</td></tr>
 <tr><td>word2vec (Mikolov 2013)</td><td>Google News 100B</td><td>3M</td><td>300</td>
     <td>61.0%</td><td>~65%</td><td>~57%</td></tr>
@@ -622,7 +624,7 @@ Format: A:B :: C:? — find D such that the A-to-B relationship mirrors C-to-D.<
     <td>77.8%</td><td>~77%</td><td>~78%</td></tr>
 </table>
 <p style="font-size: 0.8em; color: #888; margin-top: 5px;">
-Note: Published models use 10-100x more training data. V28 uses a small OpenWebText subset (~2B tokens).
+Note: Published models use 10-100x more training data. {vshort} uses a small OpenWebText subset (~2B tokens).
 Vocab coverage also matters — our 100K vocab covers {gb['coverage']:.0f}% of test questions vs near-100% for larger vocabs.</p>
 
 <h3>Per-Category Breakdown</h3>
@@ -647,7 +649,7 @@ const benchCtx = document.getElementById('benchmark-chart').getContext('2d');
 new Chart(benchCtx, {{
     type: 'bar',
     data: {{
-        labels: ['V28 (ours)', 'word2vec\\n(Google News)', 'GloVe\\n(Common Crawl)', 'GloVe\\n(Wiki 6B)', 'FastText\\n(Wiki 16B)'],
+        labels: ['{vshort} (ours)', 'word2vec\\n(Google News)', 'GloVe\\n(Common Crawl)', 'GloVe\\n(Wiki 6B)', 'FastText\\n(Wiki 16B)'],
         datasets: [
             {{
                 label: 'Overall',
@@ -718,7 +720,7 @@ new Chart(catCtx, {{
     html = f"""<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Word2vec V28 — Embedding Probe ({step:,} steps)</title>
+<title>Word2vec {vtitle} — Embedding Probe ({step:,} steps)</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 body {{ font-family: -apple-system, sans-serif; margin: 20px; background: #1a1a2e; color: #e0e0e0; }}
@@ -744,8 +746,8 @@ canvas {{ max-height: 600px; }}
 .legend-dot {{ width: 12px; height: 12px; border-radius: 50%; }}
 </style>
 </head><body>
-<h1>Word2vec V28 — Embedding Geometry Probe</h1>
-<p>Skip-gram with negative sampling, 300d, 100K whole-word vocabulary, trained {step:,} steps on OpenWebText subset (~2B tokens).</p>
+<h1>Word2vec {vtitle} — Embedding Geometry Probe</h1>
+<p>300d, 100K whole-word vocabulary, trained {step:,} steps on OpenWebText subset (~2B tokens).</p>
 
 <div class="stats">
   <div class="stat"><div class="value">{analogy_correct}/{analogy_total}</div><div class="label">Custom Analogies</div></div>
@@ -872,6 +874,7 @@ if __name__ == "__main__":
     parser.add_argument("--vocab", default=None)
     parser.add_argument("--output", default="docs/probe_w2v.html")
     parser.add_argument("--n-tsne", type=int, default=500)
+    parser.add_argument("--title", default=None, help="Version title, e.g. 'V33 Mixed SG+CBOW'")
     args = parser.parse_args()
 
     emb, emb_norm, word2id, id2word, counts, step = load_w2v(args.checkpoint, args.vocab)
@@ -914,7 +917,8 @@ if __name__ == "__main__":
                          directions, clusters, between_sims, arithmetic,
                          tsne_words, tsne_coords, tsne_cats,
                          emb_norm, word2id, id2word,
-                         google_benchmark=google_benchmark)
+                         google_benchmark=google_benchmark,
+                         version_title=args.title)
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "w") as f:

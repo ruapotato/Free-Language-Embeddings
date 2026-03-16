@@ -31,7 +31,7 @@ def parse_step_data(log_path):
     with open(log_path) as f:
         for line in f:
             # V14/V15/V16/V17/V18/V19 format: step N [HYDRA+GEO] or [V17+GEO] or [V19] | en=X para=X parse=X | ...
-            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line or "[V33]" in line):
+            if "step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line or "[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line or "[V33]" in line or "[V34]" in line):
                 try:
                     def grab(pattern, text, default=0.0):
                         m = re.search(pattern, text)
@@ -199,7 +199,7 @@ def parse_eval_data(log_path):
         for line in f:
             if ("step" in line and "loss" in line and "recon=" in line) or \
                ("step" in line and ("[HYDRA" in line or "[V17" in line or "[V16" in line or "[V18" in line or "[V19]" in line or "[V20]" in line or "[V21]" in line or "[V22]" in line or "[V23]" in line or "[V24]" in line)) or \
-               ("step" in line and ("[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line or "[V33]" in line)):
+               ("step" in line and ("[V25]" in line or "[V26]" in line or "[V27]" in line or "[V28]" in line or "[V29]" in line or "[V30]" in line or "[V32]" in line or "[V33]" in line or "[V34]" in line)):
                 try:
                     step_str = line.split("step")[1].split("[")[0].strip()
                     last_step = int(re.search(r"(\d+)", step_str).group(1))
@@ -1716,7 +1716,8 @@ function updateDashboard(response) {
             geoBarEl.style.width = Math.min(progress, 100) + '%';
             geoBarEl.style.background = progress >= 75 ? '#66bb6a' : progress >= 25 ? '#ffa726' : '#4fc3f7';
             const totalSteps = (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v32'))) ? '500K'
-                             : (run && run.startsWith('v33')) ? '1M' : '600K';
+                             : (run && run.startsWith('v33')) ? '1M'
+                             : (run && run.startsWith('v34')) ? '2M' : '600K';
             reconEmaEl.textContent = `LR: ${(latest.lr || 0).toExponential(2)} | Step ${latest.step.toLocaleString()} / ${totalSteps}`;
         } else if (phase.startsWith('P1') && geo != null && geo === 0) {
             phaseText = 'Phase 0: Pure Recon';
