@@ -28,7 +28,7 @@ canvas { max-height: 600px; }
 </style>
 </head><body>
 <h1>Word2vec V33 Mixed SG+CBOW — Embedding Geometry Probe</h1>
-<p>300d, 100K whole-word vocabulary, trained 1,000,000 steps on OpenWebText subset (~2B tokens).</p>
+<p>300d, 100K whole-word vocabulary, trained 1,000,000 steps on DFSG-compliant mix (~2B tokens).</p>
 
 <div class="stats">
   <div class="stat"><div class="value">24/26</div><div class="label">Custom Analogies</div></div>
@@ -59,7 +59,7 @@ Format: A:B :: C:? — find D such that the A-to-B relationship mirrors C-to-D.<
 </div>
 <table style="max-width: 800px; margin-top: 10px; font-size: 0.85em;">
 <tr><th>Model</th><th>Corpus</th><th>Vocab</th><th>Dim</th><th>Overall</th><th>Semantic</th><th>Syntactic</th></tr>
-<tr><td><b>V33 (ours)</b></td><td>OpenWebText subset</td><td>100K</td><td>300</td>
+<tr><td><b>V33 (ours)</b></td><td>DFSG-compliant mix</td><td>100K</td><td>300</td>
     <td><b>59.2%</b></td><td>47.5%</td><td>65.4%</td></tr>
 <tr><td>word2vec (Mikolov 2013)</td><td>Google News 100B</td><td>3M</td><td>300</td>
     <td>61.0%</td><td>~65%</td><td>~57%</td></tr>
@@ -71,7 +71,7 @@ Format: A:B :: C:? — find D such that the A-to-B relationship mirrors C-to-D.<
     <td>77.8%</td><td>~77%</td><td>~78%</td></tr>
 </table>
 <p style="font-size: 0.8em; color: #888; margin-top: 5px;">
-Note: Published models use 10-100x more training data. V33 uses a small OpenWebText subset (~2B tokens).
+Note: Published models use 10-100x more training data. V33 trains on DFSG-compliant sources (Wikipedia, Gutenberg, Stack Exchange, arXiv, etc., ~2B tokens).
 Vocab coverage also matters — our 100K vocab covers 80% of test questions vs near-100% for larger vocabs.</p>
 
 <h3>Per-Category Breakdown</h3>

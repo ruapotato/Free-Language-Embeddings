@@ -372,7 +372,7 @@ def downsample(step_data, max_points=3000):
 
 def detect_run():
     """Find latest run with data."""
-    for v in ["v33", "v32", "v30", "v29", "v28", "v27", "v26", "v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
+    for v in ["v34", "v33", "v32", "v30", "v29", "v28", "v27", "v26", "v25", "v24", "v23", "v22", "v21", "v20", "v19", "v18", "v17", "v16", "v15", "v14", "v13", "v12", "v11", "v10", "v9", "v8", "v7", "v6", "v5", "v4", "v3", "v2", "v1"]:
         if os.path.exists(os.path.join(LOG_DIR, f"concept_{v}.log")):
             return v
     return "v16"
@@ -382,7 +382,7 @@ def list_available_runs():
     """List all available log files for comparison."""
     runs = {}
     # Main version logs
-    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v32", "v33"]:
+    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v32", "v33", "v34"]:
         path = os.path.join(LOG_DIR, f"concept_{v}.log")
         if os.path.exists(path):
             runs[v] = path
@@ -902,14 +902,19 @@ function updateDashboard(response) {
     const ccw = clippedCmpSteps.length > 10 ? Math.min(30, Math.max(5, Math.floor(clippedCmpSteps.length / 10))) : csw;
 
     // 1. Primary Loss (comparison clipped to current max step)
-    const isV33 = run && run.startsWith('v33');
-    const reconLabel = isV33 ? 'Skip-Gram' : (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32')) ? 'Loss' : 'EN Recon');
+    const isW2V = run && (run.startsWith('v33') || run.startsWith('v34'));
+    const isV34 = run && run.startsWith('v34');
+    const reconLabel = isW2V ? 'Skip-Gram' : (run && (run.startsWith('v28') || run.startsWith('v29') || run.startsWith('v30') || run.startsWith('v32')) ? 'Loss' : 'EN Recon');
     const reconDs = [ds(reconLabel, ema(steps.map(d => d.recon), sw), C.recon)];
-    // V25: Prediction loss / V33: CBOW loss
+    // V25: Prediction loss / V33+V34: CBOW loss
     const predLossVals = steps.map(d => d.pred_loss || 0);
-    const predLabel = isV33 ? 'CBOW' : 'Prediction';
+    const predLabel = isW2V ? 'CBOW' : 'Prediction';
     if (predLossVals.some(v => v > 0))
         reconDs.push(ds(predLabel, ema(predLossVals, sw), '#42a5f5'));
+    // V34: Variable masking loss
+    const v34VarVals = steps.map(d => d.var_loss || 0);
+    if (isV34 && v34VarVals.some(v => v > 0))
+        reconDs.push(ds('Variable Mask', ema(v34VarVals, sw), '#ffa726'));
     // V26: Masked / Unmasked loss
     const maskedLossVals = steps.map(d => d.masked_loss || 0);
     const unmaskedLossVals = steps.map(d => d.unmasked_loss || 0);
@@ -917,13 +922,12 @@ function updateDashboard(response) {
         reconDs.push(ds('Masked', ema(maskedLossVals, sw), '#ef5350'));
     if (unmaskedLossVals.some(v => v > 0))
         reconDs.push(ds('Unmasked', ema(unmaskedLossVals, sw), '#66bb6a'));
-    // V27: Contrastive / VICReg losses
+    // V27: Contrastive / VICReg losses (not V34 — var_loss means different thing)
     const v27CtrVals = steps.map(d => d.contrastive_loss || 0);
     if (v27CtrVals.some(v => v > 0))
         reconDs.push(ds('Contrastive', ema(v27CtrVals, sw), '#42a5f5'));
-    const v27VarVals = steps.map(d => d.var_loss || 0);
-    if (v27VarVals.some(v => v > 0))
-        reconDs.push(ds('Variance', ema(v27VarVals, sw), '#ffa726'));
+    if (!isV34 && v34VarVals.some(v => v > 0))
+        reconDs.push(ds('Variance', ema(v34VarVals, sw), '#ffa726'));
     const v27CovVals = steps.map(d => d.cov_loss || 0);
     if (v27CovVals.some(v => v > 0))
         reconDs.push(ds('Covariance', ema(v27CovVals, sw), '#ab47bc'));
@@ -1020,7 +1024,7 @@ function updateDashboard(response) {
         const hasPred = steps.some(d => d.pred_loss > 0);
         const hasMasked = steps.some(d => d.masked_loss > 0);
         const hasCtr = steps.some(d => d.contrastive_loss > 0);
-        document.getElementById('h-recon').textContent = hasCtr ? 'Contrastive Autoencoder Loss' : hasMasked ? 'Masked Sentence Modeling Loss' : hasPred ? 'Reconstruction + Prediction Loss' : 'Reconstruction Loss';
+        document.getElementById('h-recon').textContent = isV34 ? 'Training Loss (Skip-Gram / CBOW / Variable Mask)' : isW2V ? 'Training Loss (Skip-Gram / CBOW)' : hasCtr ? 'Contrastive Autoencoder Loss' : hasMasked ? 'Masked Sentence Modeling Loss' : hasPred ? 'Reconstruction + Prediction Loss' : 'Reconstruction Loss';
         document.getElementById('h-geo-losses').textContent = 'EM EMA (Training)';
         document.getElementById('h-batch-sim').textContent = 'Token & Bucket Accuracy';
         document.getElementById('h-diag-sim').textContent = 'Per-Bucket Exact Match';
