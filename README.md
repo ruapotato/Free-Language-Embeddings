@@ -22,6 +22,7 @@ Next up: **V34 — Dynamic masking** to push past 60%.
 - **[3D Filesystem Embeddings](https://ruapotato.github.io/chat_hamner/probe_v32_paths_3d.html)** — V32: the entire Debian filesystem as a point cloud, 17 color-coded categories
 - **[V33 Embedding Probe](https://ruapotato.github.io/chat_hamner/probe_v33_3d.html)** — V33: t-SNE, analogies (59.2% Google), cluster analysis, benchmark comparison
 - **[3D Word Globe](https://ruapotato.github.io/chat_hamner/probe_v29_3d.html)** — V29: 100K words compressed to 3 dimensions on a sphere
+- **[Embedding Spectrogram](https://ruapotato.github.io/chat_hamner/spectrogram.html)** — PCA waves, sine fits, cosine surfaces, and structural comparison across V28/V33/V34/Google
 
 ## The Experiment So Far
 
@@ -45,14 +46,17 @@ This project has gone through 33 versions across several research directions. Ea
 ## Quick Start
 
 ```bash
-# Train V33 (mixed word2vec) from scratch
-python train_v33.py --fresh
+# Train V34 (dynamic masking word2vec) from scratch
+python train_v34.py --fresh
 
 # Monitor training
 python web_dashboard.py        # http://localhost:8501
 
 # Run Google analogy benchmark
-python eval_analogy.py checkpoints/word2vec_v33/latest.pt
+python eval_analogy.py checkpoints/word2vec_v34/latest.pt
+
+# Regenerate embedding spectrogram (PCA waves, sine fits, structural comparison)
+python generate_spectrogram.py  # → docs/spectrogram.html
 ```
 
 ## License

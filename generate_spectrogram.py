@@ -5,7 +5,16 @@ Produces a self-contained HTML file at docs/spectrogram.html with:
 1. Semantic Sweep Heatmaps (dimension activations sorted by correlation)
 2. Cosine Similarity Matrices
 3. PCA Loop Plots
-4. Dimension Activation Fingerprints
+4. PCA Component Waves (sine-wave curves along semantic axes)
+5. PCA Activation Surfaces (interpolated heatmap of all components)
+6. Dimension Activation Fingerprints
+7. Numerical Analysis Summary (sine fits, monotonicity, cosine gradients)
+
+Usage:
+    python generate_spectrogram.py
+
+Loads V28, V33, V34 checkpoints and Google word2vec, then generates
+a self-contained HTML page comparing their geometric structure.
 """
 
 import json
@@ -389,9 +398,153 @@ def compute_fingerprints(models):
     return {"categories": cat_names, "models": result}
 
 
+def compute_analysis_summary(models):
+    """Compute numerical analysis: sine fits, monotonicity, cosine gradients."""
+    print("\nComputing analysis summary...")
+    results = {"periodic": [], "linear": [], "cosine": []}
+
+    # Periodic sequences: sine wave fit quality and circle coverage
+    periodic_seqs = {
+        "months": SEMANTIC_AXES["months"],
+        "numbers 1-10": SEMANTIC_AXES["numbers 1-10"],
+        "days": SEMANTIC_AXES["days"],
+    }
+
+    for seq_name, words in periodic_seqs.items():
+        valid_words = filter_words(models, words)
+        if len(valid_words) < 4:
+            continue
+
+        seq_row = {"name": seq_name, "models": {}}
+        for mn in MODELS:
+            vecs = np.array([get_vec(models, mn, w) for w in valid_words])
+            centered = vecs - vecs.mean(axis=0)
+            U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+            total_var = (S ** 2).sum()
+            var_exp = S ** 2 / total_var * 100
+
+            n_comp = min(6, len(valid_words) - 1)
+            proj = centered @ Vt[:n_comp].T
+
+            pc1 = proj[:, 0] / (np.abs(proj[:, 0]).max() + 1e-10)
+            pc2 = proj[:, 1] / (np.abs(proj[:, 1]).max() + 1e-10)
+
+            # Sine fit
+            n = len(pc1)
+            t = np.arange(n) / n * 2 * np.pi
+
+            def best_sine_fit(signal):
+                best_r2, best_freq = 0, 0
+                for freq in [0.5, 1.0, 1.5, 2.0]:
+                    for phase in np.linspace(0, 2 * np.pi, 20):
+                        fit = np.sin(freq * t + phase)
+                        ss_res = np.sum((signal - fit) ** 2)
+                        ss_tot = np.sum((signal - signal.mean()) ** 2)
+                        r2 = 1 - ss_res / (ss_tot + 1e-10)
+                        if r2 > best_r2:
+                            best_r2, best_freq = r2, freq
+                return best_r2, best_freq
+
+            r2_1, freq_1 = best_sine_fit(pc1)
+            r2_2, freq_2 = best_sine_fit(pc2)
+
+            # Circle coverage
+            angles = np.arctan2(pc2, pc1)
+            sorted_angles = np.sort(angles)
+            gaps = np.diff(sorted_angles)
+            max_gap = gaps.max() if len(gaps) > 0 else 999
+            coverage = (1 - max_gap / (2 * np.pi)) * 100
+
+            seq_row["models"][mn] = {
+                "var_top2": round(float(var_exp[0] + var_exp[1]), 1),
+                "pc1_sine_r2": round(float(r2_1), 3),
+                "pc2_sine_r2": round(float(r2_2), 3),
+                "circle_coverage": round(float(coverage), 0),
+            }
+        results["periodic"].append(seq_row)
+
+    # Linear axes: monotonicity and linearity of PC1
+    linear_axes = {
+        "small → big": SEMANTIC_AXES["small → big"],
+        "cold → hot": SEMANTIC_AXES["cold → hot"],
+        "weak → strong": SEMANTIC_AXES["weak → strong"],
+        "slow → fast": SEMANTIC_AXES["slow → fast"],
+    }
+
+    for axis_name, words in linear_axes.items():
+        valid_words = filter_words(models, words)
+        if len(valid_words) < 4:
+            continue
+
+        axis_row = {"name": axis_name, "models": {}}
+        for mn in MODELS:
+            vecs = np.array([get_vec(models, mn, w) for w in valid_words])
+            centered = vecs - vecs.mean(axis=0)
+            U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+            total_var = (S ** 2).sum()
+            var_exp = S ** 2 / total_var * 100
+
+            proj = centered @ Vt[:1].T
+            pc1 = proj[:, 0] / (np.abs(proj[:, 0]).max() + 1e-10)
+
+            # Monotonicity
+            diffs = np.diff(pc1)
+            mono = max(np.sum(diffs > 0), np.sum(diffs < 0)) / len(diffs) * 100
+
+            # Linearity
+            t = np.arange(len(pc1))
+            p = np.polyfit(t, pc1, 1)
+            fit = np.polyval(p, t)
+            ss_res = np.sum((pc1 - fit) ** 2)
+            ss_tot = np.sum((pc1 - pc1.mean()) ** 2)
+            r2 = 1 - ss_res / (ss_tot + 1e-10)
+
+            axis_row["models"][mn] = {
+                "var_pc1": round(float(var_exp[0]), 1),
+                "monotonicity": round(float(mono), 0),
+                "linearity_r2": round(float(r2), 3),
+            }
+        results["linear"].append(axis_row)
+
+    # Cosine similarity gradients
+    cosine_seqs = {
+        "months": SEMANTIC_AXES["months"],
+        "numbers 1-10": SEMANTIC_AXES["numbers 1-10"],
+        "days": SEMANTIC_AXES["days"],
+    }
+
+    for seq_name, words in cosine_seqs.items():
+        valid_words = filter_words(models, words)
+        if len(valid_words) < 4:
+            continue
+
+        cos_row = {"name": seq_name, "models": {}}
+        for mn in MODELS:
+            vecs = np.array([get_vec(models, mn, w) for w in valid_words])
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            vecs_n = vecs / (norms + 1e-10)
+            sim = vecs_n @ vecs_n.T
+
+            adj_sim = np.mean([sim[i, i + 1] for i in range(len(vecs) - 1)])
+            dist_sims = []
+            for i in range(len(vecs)):
+                for j in range(i + 3, len(vecs)):
+                    dist_sims.append(sim[i, j])
+            dist_sim = np.mean(dist_sims) if dist_sims else 0
+
+            cos_row["models"][mn] = {
+                "adjacent": round(float(adj_sim), 3),
+                "distant": round(float(dist_sim), 3),
+                "gradient": round(float(adj_sim - dist_sim), 3),
+            }
+        results["cosine"].append(cos_row)
+
+    return results
+
+
 # ── Generate HTML ──────────────────────────────────────────────────────────
 
-def generate_html(sweep_data, cosine_data, pca_data, pca_wave_data, pca_surface_data, fingerprint_data):
+def generate_html(sweep_data, cosine_data, pca_data, pca_wave_data, pca_surface_data, fingerprint_data, analysis_data):
     """Generate self-contained HTML with embedded data and canvas renderers."""
     # Serialize data
     data_json = json.dumps({
@@ -401,6 +554,7 @@ def generate_html(sweep_data, cosine_data, pca_data, pca_wave_data, pca_surface_
         "pcaWaves": pca_wave_data,
         "pcaSurfaces": pca_surface_data,
         "fingerprints": fingerprint_data,
+        "analysis": analysis_data,
         "modelNames": list(MODELS.keys()),
         "modelColors": {k: v["color"] for k, v in MODELS.items()},
         "modelDescs": {k: v["desc"] for k, v in MODELS.items()},
@@ -600,7 +754,7 @@ select:hover {{ border-color: #555; }}
 
 <!-- Section 6: Fingerprints -->
 <div class="section" id="fp-section">
-    <h2>4. Dimension Activation Fingerprints</h2>
+    <h2>6. Dimension Activation Fingerprints</h2>
     <p class="axis-label">Mean |activation| per dimension, per word category. Normalized per row.</p>
     <div class="row" id="fp-row"></div>
     <div class="colorbar">
@@ -608,6 +762,13 @@ select:hover {{ border-color: #555; }}
         <canvas id="fp-colorbar" width="200" height="12"></canvas>
         <span>max</span>
     </div>
+</div>
+
+<!-- Section 7: Numerical Analysis -->
+<div class="section" id="analysis-section">
+    <h2>7. Numerical Analysis Summary</h2>
+    <p class="axis-label">Quantitative comparison of geometric structure across models.</p>
+    <div id="analysis-tables"></div>
 </div>
 
 <script>
@@ -1249,6 +1410,129 @@ function renderFingerprints() {
     }
 }
 
+// ── Section 7: Analysis Tables ──
+function renderAnalysis() {
+    const container = document.getElementById('analysis-tables');
+    if (!container || !DATA.analysis) return;
+
+    const models = DATA.modelNames;
+    const mc = DATA.modelColors;
+
+    function makeTable(title, headers, rows) {
+        let html = '<h3 style="color:#888;margin:20px 0 8px;text-align:left">' + title + '</h3>';
+        html += '<table style="border-collapse:collapse;width:100%;margin-bottom:20px;font-size:13px">';
+        html += '<tr style="border-bottom:1px solid #333">';
+        for (const h of headers) {
+            html += '<th style="padding:6px 10px;text-align:' + (h === headers[0] ? 'left' : 'right') + ';color:#888">' + h + '</th>';
+        }
+        html += '</tr>';
+        for (const row of rows) {
+            html += '<tr style="border-bottom:1px solid #1a1a2e">';
+            for (let i = 0; i < row.length; i++) {
+                const align = i === 0 ? 'left' : 'right';
+                const color = i === 0 ? '#ccc' : (row[i].color || '#e0e0e0');
+                const bold = row[i].best ? 'font-weight:bold' : '';
+                const val = typeof row[i] === 'object' ? row[i].v : row[i];
+                html += '<td style="padding:5px 10px;text-align:' + align + ';color:' + color + ';' + bold + '">' + val + '</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</table>';
+        return html;
+    }
+
+    let allHtml = '';
+
+    // Periodic sequences table
+    if (DATA.analysis.periodic && DATA.analysis.periodic.length > 0) {
+        const headers = ['Sequence'];
+        for (const mn of models) headers.push(mn + ' Top-2 Var%', mn + ' PC1 sin R\u00B2', mn + ' PC2 sin R\u00B2', mn + ' Circle%');
+
+        // One row per sequence, but that's too wide. Let's do one table per metric.
+        // Better: one table per sequence
+        for (const seq of DATA.analysis.periodic) {
+            const headers2 = ['Model', 'Top-2 Variance', 'PC1 Sine R\u00B2', 'PC2 Sine R\u00B2', 'Circle Coverage'];
+            const rows = [];
+            // Find bests
+            let bestVar = -1, bestSin1 = -1, bestSin2 = -1, bestCirc = -1;
+            for (const mn of models) {
+                const d = seq.models[mn];
+                if (!d) continue;
+                if (d.var_top2 > bestVar) bestVar = d.var_top2;
+                if (d.pc1_sine_r2 > bestSin1) bestSin1 = d.pc1_sine_r2;
+                if (d.pc2_sine_r2 > bestSin2) bestSin2 = d.pc2_sine_r2;
+                if (d.circle_coverage > bestCirc) bestCirc = d.circle_coverage;
+            }
+            for (const mn of models) {
+                const d = seq.models[mn];
+                if (!d) continue;
+                rows.push([
+                    {v: mn, color: mc[mn]},
+                    {v: d.var_top2 + '%', best: d.var_top2 === bestVar, color: mc[mn]},
+                    {v: d.pc1_sine_r2.toFixed(3), best: d.pc1_sine_r2 === bestSin1, color: mc[mn]},
+                    {v: d.pc2_sine_r2.toFixed(3), best: d.pc2_sine_r2 === bestSin2, color: mc[mn]},
+                    {v: d.circle_coverage + '%', best: d.circle_coverage === bestCirc, color: mc[mn]},
+                ]);
+            }
+            allHtml += makeTable('Periodic: ' + seq.name, headers2, rows);
+        }
+    }
+
+    // Linear axes table
+    if (DATA.analysis.linear && DATA.analysis.linear.length > 0) {
+        for (const axis of DATA.analysis.linear) {
+            const headers2 = ['Model', 'PC1 Variance', 'Monotonicity', 'Linearity R\u00B2'];
+            const rows = [];
+            let bestVar = -1, bestMono = -1, bestLin = -1;
+            for (const mn of models) {
+                const d = axis.models[mn];
+                if (!d) continue;
+                if (d.var_pc1 > bestVar) bestVar = d.var_pc1;
+                if (d.monotonicity > bestMono) bestMono = d.monotonicity;
+                if (d.linearity_r2 > bestLin) bestLin = d.linearity_r2;
+            }
+            for (const mn of models) {
+                const d = axis.models[mn];
+                if (!d) continue;
+                rows.push([
+                    {v: mn, color: mc[mn]},
+                    {v: d.var_pc1 + '%', best: d.var_pc1 === bestVar, color: mc[mn]},
+                    {v: d.monotonicity + '%', best: d.monotonicity === bestMono, color: mc[mn]},
+                    {v: d.linearity_r2.toFixed(3), best: d.linearity_r2 === bestLin, color: mc[mn]},
+                ]);
+            }
+            allHtml += makeTable('Linear: ' + axis.name, headers2, rows);
+        }
+    }
+
+    // Cosine similarity table
+    if (DATA.analysis.cosine && DATA.analysis.cosine.length > 0) {
+        for (const seq of DATA.analysis.cosine) {
+            const headers2 = ['Model', 'Adjacent Sim', 'Distant Sim', 'Gradient'];
+            const rows = [];
+            let bestGrad = -999;
+            for (const mn of models) {
+                const d = seq.models[mn];
+                if (!d) continue;
+                if (d.gradient > bestGrad) bestGrad = d.gradient;
+            }
+            for (const mn of models) {
+                const d = seq.models[mn];
+                if (!d) continue;
+                rows.push([
+                    {v: mn, color: mc[mn]},
+                    {v: d.adjacent.toFixed(3), color: mc[mn]},
+                    {v: d.distant.toFixed(3), color: mc[mn]},
+                    {v: d.gradient.toFixed(3), best: d.gradient === bestGrad, color: mc[mn]},
+                ]);
+            }
+            allHtml += makeTable('Cosine Gradient: ' + seq.name, headers2, rows);
+        }
+    }
+
+    container.innerHTML = allHtml;
+}
+
 // ── Init ──
 initSweepDropdown();
 initCosineDropdown();
@@ -1261,6 +1545,7 @@ renderPCA();
 renderWaves();
 renderSurfaces();
 renderFingerprints();
+renderAnalysis();
 drawColorbar('sweep-colorbar', 'diverging');
 drawColorbar('cosine-colorbar', 'cosine');
 drawColorbar('surface-colorbar', 'diverging');
@@ -1282,9 +1567,10 @@ def main():
     pca_wave_data = compute_pca_waves(models)
     pca_surface_data = compute_pca_surfaces(models)
     fingerprint_data = compute_fingerprints(models)
+    analysis_data = compute_analysis_summary(models)
 
     print("\nGenerating HTML...")
-    html = generate_html(sweep_data, cosine_data, pca_data, pca_wave_data, pca_surface_data, fingerprint_data)
+    html = generate_html(sweep_data, cosine_data, pca_data, pca_wave_data, pca_surface_data, fingerprint_data, analysis_data)
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     with open(OUTPUT_PATH, "w") as f:
