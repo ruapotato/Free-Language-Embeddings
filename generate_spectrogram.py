@@ -51,6 +51,20 @@ MODELS = {
 
 VOCAB_PATH = "checkpoints/word2vec_v28/vocab.json"
 
+# Published benchmark scores on Google analogy test for reference
+PUBLISHED_BENCHMARKS = [
+    {"model": "word2vec SG (Mikolov 2013)", "data": "Google News, 6B tokens", "dim": "300d", "accuracy": 61.0,
+     "notes": "Skip-gram, commonly cited baseline"},
+    {"model": "word2vec SG (best)", "data": "Google News, 100B tokens", "dim": "1000d", "accuracy": 72.0,
+     "notes": "Massive data + high dimensions"},
+    {"model": "GloVe (Pennington 2014)", "data": "Common Crawl, 840B tokens", "dim": "300d", "accuracy": 75.6,
+     "notes": "Near-SOTA for static embeddings"},
+    {"model": "GloVe (small)", "data": "Wikipedia+Gigaword, 6B tokens", "dim": "300d", "accuracy": 71.0,
+     "notes": "Smaller data variant"},
+    {"model": "FastText (Bojanowski 2017)", "data": "Wikipedia, 16B tokens", "dim": "300d", "accuracy": 77.0,
+     "notes": "Subword info helps syntactic"},
+]
+
 # Semantic axes — word lists in meaningful order
 SEMANTIC_AXES = {
     "small → big": ["tiny", "small", "little", "medium", "large", "big", "huge", "enormous", "giant", "massive"],
@@ -539,7 +553,108 @@ def compute_analysis_summary(models):
             }
         results["cosine"].append(cos_row)
 
+    # Run analogy benchmark on our models and include published scores
+    print("\nRunning analogy benchmarks...")
+    results["benchmarks"] = {"ours": [], "published": PUBLISHED_BENCHMARKS}
+
+    analogy_questions = _load_analogy_questions()
+    if analogy_questions:
+        for mn in MODELS:
+            m = models[mn]
+            vecs = m["vecs"]
+            w2i = m["w2i"]
+
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            norms = np.maximum(norms, 1e-8)
+            normed = vecs / norms
+
+            correct, covered, total = 0, 0, 0
+            sem_correct, sem_covered, syn_correct, syn_covered = 0, 0, 0, 0
+
+            for cat, is_semantic, w1, w2, w3, w4 in analogy_questions:
+                total += 1
+                # Handle Google casing
+                if mn == "Google":
+                    ws = []
+                    for w in [w1, w2, w3, w4]:
+                        if w in w2i:
+                            ws.append(w)
+                        elif w.capitalize() in w2i:
+                            ws.append(w.capitalize())
+                        else:
+                            ws.append(None)
+                    if any(x is None for x in ws):
+                        continue
+                    id1, id2, id3, id4 = [w2i[x] for x in ws]
+                else:
+                    if any(w not in w2i for w in [w1, w2, w3, w4]):
+                        continue
+                    id1, id2, id3, id4 = w2i[w1], w2i[w2], w2i[w3], w2i[w4]
+
+                covered += 1
+                if is_semantic:
+                    sem_covered += 1
+                else:
+                    syn_covered += 1
+
+                vec = normed[id2] - normed[id1] + normed[id3]
+                vec = vec / (np.linalg.norm(vec) + 1e-8)
+                sims = normed @ vec
+                sims[id1] = -2.0
+                sims[id2] = -2.0
+                sims[id3] = -2.0
+                pred_id = np.argmax(sims)
+
+                if pred_id == id4:
+                    correct += 1
+                    if is_semantic:
+                        sem_correct += 1
+                    else:
+                        syn_correct += 1
+
+            accuracy = correct / covered * 100 if covered else 0
+            sem_acc = sem_correct / sem_covered * 100 if sem_covered else 0
+            syn_acc = syn_correct / syn_covered * 100 if syn_covered else 0
+            print(f"  {mn}: {accuracy:.1f}% ({correct}/{covered}) | sem={sem_acc:.1f}% syn={syn_acc:.1f}%")
+
+            data_size = "~2B tokens" if mn != "Google" else "Google News, 6B tokens"
+            results["benchmarks"]["ours"].append({
+                "model": mn,
+                "data": data_size,
+                "dim": "300d",
+                "accuracy": round(accuracy, 1),
+                "semantic": round(sem_acc, 1),
+                "syntactic": round(syn_acc, 1),
+                "coverage": round(covered / total * 100, 1) if total else 0,
+            })
+
     return results
+
+
+def _load_analogy_questions():
+    """Load Google analogy questions."""
+    path = "data/questions-words.txt"
+    try:
+        questions = []
+        cat_index = 0
+        current_cat = None
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith(":"):
+                    current_cat = line[2:]
+                    cat_index += 1
+                else:
+                    words = line.lower().split()
+                    if len(words) == 4:
+                        is_semantic = cat_index <= 5
+                        questions.append((current_cat, is_semantic, words[0], words[1], words[2], words[3]))
+        return questions
+    except FileNotFoundError:
+        print("  WARNING: data/questions-words.txt not found, skipping benchmarks")
+        return None
 
 
 # ── Generate HTML ──────────────────────────────────────────────────────────
@@ -555,6 +670,7 @@ def generate_html(sweep_data, cosine_data, pca_data, pca_wave_data, pca_surface_
         "pcaSurfaces": pca_surface_data,
         "fingerprints": fingerprint_data,
         "analysis": analysis_data,
+        "publishedBenchmarks": PUBLISHED_BENCHMARKS,
         "modelNames": list(MODELS.keys()),
         "modelColors": {k: v["color"] for k, v in MODELS.items()},
         "modelDescs": {k: v["desc"] for k, v in MODELS.items()},
@@ -1528,6 +1644,52 @@ function renderAnalysis() {
             }
             allHtml += makeTable('Cosine Gradient: ' + seq.name, headers2, rows);
         }
+    }
+
+    // Benchmark comparison table
+    if (DATA.analysis.benchmarks) {
+        const bm = DATA.analysis.benchmarks;
+        const headers2 = ['Model', 'Training Data', 'Dim', 'Accuracy', 'Semantic', 'Syntactic'];
+
+        const rows = [];
+
+        // Our models first
+        if (bm.ours) {
+            for (const entry of bm.ours) {
+                const color = mc[entry.model] || '#e0e0e0';
+                rows.push([
+                    {v: entry.model, color: color},
+                    {v: entry.data, color: '#888'},
+                    {v: entry.dim, color: '#888'},
+                    {v: entry.accuracy + '%', color: color, best: false},
+                    {v: entry.semantic + '%', color: '#888'},
+                    {v: entry.syntactic + '%', color: '#888'},
+                ]);
+            }
+        }
+
+        // Divider row
+        rows.push([
+            {v: '--- Published ---', color: '#555'},
+            {v: '', color: '#555'}, {v: '', color: '#555'},
+            {v: '', color: '#555'}, {v: '', color: '#555'}, {v: '', color: '#555'},
+        ]);
+
+        // Published benchmarks
+        if (bm.published) {
+            for (const entry of bm.published) {
+                rows.push([
+                    {v: entry.model, color: '#aaa'},
+                    {v: entry.data, color: '#666'},
+                    {v: entry.dim, color: '#666'},
+                    {v: entry.accuracy + '%', color: '#aaa'},
+                    {v: '', color: '#666'},
+                    {v: '', color: '#666'},
+                ]);
+            }
+        }
+
+        allHtml += makeTable('Google Analogy Benchmark — Our Models vs Published', headers2, rows);
     }
 
     container.innerHTML = allHtml;

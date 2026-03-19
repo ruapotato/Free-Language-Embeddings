@@ -1,17 +1,25 @@
-"""Evaluate word2vec V28 embeddings on the Google analogy test set."""
+"""Evaluate word2vec embeddings on the Google analogy test set."""
 
 import json
+import sys
 import torch
 import numpy as np
 from collections import defaultdict
 import time
 
 def main():
+    # Accept checkpoint path as CLI argument
+    if len(sys.argv) > 1:
+        ckpt_path = sys.argv[1]
+    else:
+        ckpt_path = "checkpoints/word2vec_v28/latest.pt"
+
     print("=" * 70)
-    print("Word2Vec V28 — Google Analogy Test Evaluation")
+    print(f"Word2Vec — Google Analogy Test Evaluation")
+    print(f"Checkpoint: {ckpt_path}")
     print("=" * 70)
 
-    # Load vocab
+    # Load vocab (shared across all word2vec versions)
     print("\nLoading vocab...")
     with open("checkpoints/word2vec_v28/vocab.json") as f:
         vocab_data = json.load(f)
@@ -21,7 +29,7 @@ def main():
 
     # Load checkpoint
     print("Loading checkpoint...")
-    ckpt = torch.load("checkpoints/word2vec_v28/latest.pt", map_location="cpu", weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     print(f"  Training step: {ckpt.get('step', 'unknown'):,}")
     print(f"  Embedding dim: {ckpt.get('embed_dim', 'unknown')}")
 
