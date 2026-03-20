@@ -10,7 +10,8 @@ tags:
 - free-software
 - dfsg
 datasets:
-- Skylion007/openwebtext
+- wikimedia/wikipedia
+- pg19
 metrics:
 - accuracy
 model-index:
@@ -38,7 +39,7 @@ pipeline_tag: feature-extraction
 
 # Free Language Embeddings (V34)
 
-300-dimensional word vectors trained from scratch on ~2B tokens of DFSG-compliant text using a single RTX 3090.
+300-dimensional word vectors trained from scratch on ~2B tokens of freely-licensed text using a single RTX 3090.
 
 **66.5% on Google analogies** — beating the original word2vec (61% on 6B tokens) by 5.5 points with 1/3 the data.
 
@@ -49,11 +50,25 @@ pipeline_tag: feature-extraction
 | **Architecture** | Dynamic masking word2vec skip-gram |
 | **Dimensions** | 300 |
 | **Vocabulary** | 100,000 whole words |
-| **Training data** | ~2B tokens (OpenWebText subset, DFSG-compliant) |
+| **Training data** | ~2B tokens, all [DFSG-compliant](https://wiki.debian.org/DFSGLicenses) (see below) |
 | **Training hardware** | Single NVIDIA RTX 3090 |
 | **Training time** | ~4 days (2M steps) |
 | **License** | GPL-3.0 |
 | **Parameters** | 60M (30M target + 30M context embeddings) |
+
+### Training Data
+
+All training data meets the [Debian Free Software Guidelines](https://wiki.debian.org/DFSGLicenses) for redistribution, modification, and use. No web scrapes, no proprietary datasets.
+
+| Source | Weight | License |
+|--------|--------|---------|
+| Wikipedia | 30% | CC BY-SA 3.0 |
+| Project Gutenberg | 20% | Public domain |
+| arXiv | 20% | Various open access |
+| Stack Exchange | 16% | CC BY-SA 4.0 |
+| US Government Publishing Office | 10% | Public domain (US gov) |
+| RFCs | 2.5% | IETF Trust |
+| Linux kernel docs, Arch Wiki, TLDP, GNU manuals, man pages | 1.5% | GPL/GFDL |
 
 ## Benchmark Results
 

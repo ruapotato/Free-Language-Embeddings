@@ -1,6 +1,18 @@
 # fle — Free Language Embeddings
 
-300-dimensional word vectors trained from scratch on ~2B tokens of DFSG-compliant text using a single RTX 3090. The model is a dynamic masking variant of word2vec skip-gram with 100K whole-word vocabulary, trained for 2M steps (~24 hours).
+300-dimensional word vectors trained from scratch on ~2B tokens of freely-licensed text using a single RTX 3090. The model is a dynamic masking variant of word2vec skip-gram with 100K whole-word vocabulary, trained for 2M steps (~4 days).
+
+All training data is [DFSG-compliant](https://wiki.debian.org/DFSGLicenses) — meaning it meets the Debian Free Software Guidelines for redistribution, modification, and use. No web scrapes, no proprietary datasets.
+
+| Source | Weight | License |
+|--------|--------|---------|
+| Wikipedia | 30% | CC BY-SA 3.0 |
+| Project Gutenberg | 20% | Public domain |
+| arXiv | 20% | Various open access |
+| Stack Exchange | 16% | CC BY-SA 4.0 |
+| US Government Publishing Office | 10% | Public domain (US gov) |
+| RFCs | 2.5% | IETF Trust |
+| Linux kernel docs, Arch Wiki, TLDP, GNU manuals, man pages | 1.5% | GPL/GFDL |
 
 **66.5% on Google analogies** — beating the original word2vec (61% on 6B tokens) by 5.5 points with 1/3 the data.
 
