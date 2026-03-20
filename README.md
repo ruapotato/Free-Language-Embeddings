@@ -21,6 +21,38 @@ This project started as a language model experiment, spent 24 versions discoveri
 
 V34 breakdown: semantic 61.4%, syntactic 69.2%. Comparatives 91.7%, plurals 86.8%, capitals 82.6%.
 
+## Download and Use
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/ruapotato/Free-Language-Embeddings.git
+cd Free-Language-Embeddings
+
+# 2. Download the embeddings (~107 MB)
+wget https://github.com/ruapotato/Free-Language-Embeddings/releases/download/v34/fle_v34.npz
+
+# 3. Query (no dependencies beyond numpy)
+python fle.py --similar cat
+python fle.py king - man + woman
+python fle.py paris - france + germany
+
+# 4. Interactive mode
+python fle.py
+```
+
+Use in your own code:
+
+```python
+from fle import FLE
+
+fle = FLE()                                  # loads fle_v34.npz
+vec = fle["cat"]                             # 300d numpy array
+fle.similar("cat", n=10)                     # nearest neighbors
+fle.analogy("king", "man", "woman")          # king:man :: woman:?
+fle.similarity("cat", "dog")                 # cosine similarity
+fle.query("king - man + woman")              # vector arithmetic
+```
+
 ## The Progression
 
 ### Phase 1: Trying to force geometry (V1-V12)
@@ -63,9 +95,11 @@ Dropped the LM framing entirely and focused on studying how prediction tasks cre
 
 Full history: [geometry](docs/history_geometry.md) | [sentences](docs/history_sentences.md) | [prediction](docs/history_prediction.md) | [embeddings](docs/history_embeddings.md)
 
-## Quick Start
+## Train From Scratch
 
 ```bash
+pip install torch numpy tqdm rich streamlit
+
 # Train V34 from scratch (~2M steps, ~24h on RTX 3090)
 python train_v34.py --fresh
 
@@ -75,10 +109,18 @@ python web_dashboard.py        # http://localhost:8501
 # Run Google analogy benchmark (GPU-accelerated, <1s)
 python eval_analogy.py checkpoints/word2vec_v34/latest.pt
 
-# Generate embedding spectrogram
-python generate_spectrogram.py  # → docs/spectrogram.html
+# Export embeddings for inference
+python -c "
+import torch, json, numpy as np
+cp = torch.load('checkpoints/word2vec_v34/latest.pt', map_location='cpu', weights_only=False)
+vocab = json.load(open('checkpoints/word2vec_v28/vocab.json'))
+words = [''] * len(vocab['word2id'])
+for w, i in vocab['word2id'].items(): words[i] = w
+np.savez_compressed('fle_v34.npz', embeddings=cp['model_state_dict']['target_embeddings.weight'].numpy(), words=np.array(words, dtype=object))
+"
 
-# Generate 3D semantic direction explorer
+# Generate visualizations
+python generate_spectrogram.py  # → docs/spectrogram.html
 python generate_semantic_3d.py  # → docs/semantic_3d.html
 ```
 
@@ -104,6 +146,8 @@ python experiments/exp_1_articulatory/eval.py    # Evaluate reconstruction
 ## Repository Structure
 
 ```
+fle.py                    # Load and query embeddings (no GPU needed)
+fle_v34.npz               # Pre-trained embeddings (download from releases)
 train_v34.py              # V34 dynamic masking word2vec training
 eval_analogy.py           # Google analogy benchmark (GPU)
 generate_spectrogram.py   # Embedding spectrogram visualization
