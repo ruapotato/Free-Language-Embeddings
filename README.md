@@ -123,13 +123,13 @@ The breakthrough. Joint encoder/predictor/decoder architectures where the model 
 
 Dropped the LM framing entirely and focused on studying how prediction tasks create geometric structure in embeddings.
 
-**V28 — Skip-gram baseline** (43.9% analogies). Classic word2vec, 300d, 100K whole-word vocab on ~2B tokens. Established that whole-word vocabulary is critical — subword tokenization completely breaks the geometry. king - man + woman = queen works (0.737 cosine). [Interactive probe](https://ruapotato.github.io/chat_hamner/probe_w2v.html)
+**V28 — Skip-gram baseline** (43.9% analogies). Classic word2vec, 300d, 100K whole-word vocab on ~2B tokens. Established that whole-word vocabulary is critical — subword tokenization completely breaks the geometry. king - man + woman = queen works (0.737 cosine). [Interactive probe](https://ruapotato.github.io/Free-Language-Embeddings/probe_w2v.html)
 
-**V29 — 3D word2vec** (0% analogies, but perfect broad separation). Every word is just an (x,y,z) coordinate on a unit sphere. Can't resolve individual words within a region, but tech/nature/emotions self-organize into distinct areas. Proved: you need extra dimensions for fine-grained structure, but broad semantic regions emerge even in 3D. [Interactive globe](https://ruapotato.github.io/chat_hamner/probe_v29_3d.html)
+**V29 — 3D word2vec** (0% analogies, but perfect broad separation). Every word is just an (x,y,z) coordinate on a unit sphere. Can't resolve individual words within a region, but tech/nature/emotions self-organize into distinct areas. Proved: you need extra dimensions for fine-grained structure, but broad semantic regions emerge even in 3D. [Interactive globe](https://ruapotato.github.io/Free-Language-Embeddings/probe_v29_3d.html)
 
-**V32 — Filesystem embeddings.** Applied skip-gram to Debian filesystem paths. 199K paths from a full trixie chroot, treating path components as "words." `apache2` ↔ `nginx` (0.60), `systemd` ↔ `udev` (0.67), `__pycache__` → `__init__.py` (0.90). Skip-gram captures "what lives near what" in any tree structure, but hierarchy doesn't produce clean vector arithmetic. [3D filesystem](https://ruapotato.github.io/chat_hamner/probe_v32_paths_3d.html)
+**V32 — Filesystem embeddings.** Applied skip-gram to Debian filesystem paths. 199K paths from a full trixie chroot, treating path components as "words." `apache2` ↔ `nginx` (0.60), `systemd` ↔ `udev` (0.67), `__pycache__` → `__init__.py` (0.90). Skip-gram captures "what lives near what" in any tree structure, but hierarchy doesn't produce clean vector arithmetic. [3D filesystem](https://ruapotato.github.io/Free-Language-Embeddings/probe_v32_paths_3d.html)
 
-**V33 — Mixed SG+CBOW** (59.2% analogies). Two views of the same data create richer geometry. Alternating skip-gram and CBOW on shared embeddings jumps +15.3% over V28. Syntactic accuracy (65.4%) exceeds original word2vec. Effective rank doubles from 21 to 49 dimensions — dual signal fills more of the space. [3D probe](https://ruapotato.github.io/chat_hamner/probe_v33_3d.html)
+**V33 — Mixed SG+CBOW** (59.2% analogies). Two views of the same data create richer geometry. Alternating skip-gram and CBOW on shared embeddings jumps +15.3% over V28. Syntactic accuracy (65.4%) exceeds original word2vec. Effective rank doubles from 21 to 49 dimensions — dual signal fills more of the space. [3D probe](https://ruapotato.github.io/Free-Language-Embeddings/probe_v33_3d.html)
 
 **V34 — Dynamic masking** (66.5% analogies). The current model. Randomly masks context positions during training, forcing the model to extract signal from partial views. The training curve is remarkable: nothing happens for 50% of training, then geometry crystallizes as the cosine LR decays — analogies jump from 1.2% to 66.5% in the second half. Beats published word2vec (61% on 3x more data).
 
@@ -148,7 +148,7 @@ Full history: [geometry](docs/history_geometry.md) | [sentences](docs/history_se
 ```bash
 pip install torch numpy tqdm rich streamlit
 
-# Train V34 from scratch (~2M steps, ~24h on RTX 3090)
+# Train V34 from scratch (~2M steps, ~4 days on RTX 3090)
 python train_v34.py --fresh
 
 # Monitor training
@@ -174,9 +174,9 @@ python generate_semantic_3d.py  # → docs/semantic_3d.html
 
 ## Interactive Demos
 
-- **[Embedding Spectrogram](https://ruapotato.github.io/chat_hamner/spectrogram.html)** — PCA waves, sine fits, cosine surfaces across V28/V33/V34/Google
-- **[3D Semantic Directions](https://ruapotato.github.io/chat_hamner/semantic_3d.html)** — See how semantic axes (size, temperature, time) align in the learned geometry
-- **[Training Dashboard](https://ruapotato.github.io/chat_hamner/dashboard.html)** — Live training metrics and loss curves
+- **[Embedding Spectrogram](https://ruapotato.github.io/Free-Language-Embeddings/spectrogram.html)** — PCA waves, sine fits, cosine surfaces across V28/V33/V34/Google
+- **[3D Semantic Directions](https://ruapotato.github.io/Free-Language-Embeddings/semantic_3d.html)** — See how semantic axes (size, temperature, time) align in the learned geometry
+- **[Training Dashboard](https://ruapotato.github.io/Free-Language-Embeddings/dashboard.html)** — Live training metrics and loss curves
 
 
 ## Experiments
