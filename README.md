@@ -85,7 +85,7 @@ python generate_semantic_3d.py  # → docs/semantic_3d.html
 - **[Embedding Spectrogram](https://ruapotato.github.io/chat_hamner/spectrogram.html)** — PCA waves, sine fits, cosine surfaces across V28/V33/V34/Google
 - **[3D Semantic Directions](https://ruapotato.github.io/chat_hamner/semantic_3d.html)** — See how semantic axes (size, temperature, time) align in the learned geometry
 - **[Training Dashboard](https://ruapotato.github.io/chat_hamner/dashboard.html)** — Live training metrics and loss curves
-- **[Alien Language](experiments/exp_1_articulatory/render.html)** — V34 embeddings compressed to 9 articulatory dimensions, rendered as speech
+
 
 ## Experiments
 
