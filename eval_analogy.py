@@ -7,6 +7,8 @@ import numpy as np
 from collections import defaultdict
 import time
 
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 def main():
     # Accept checkpoint path as CLI argument
     if len(sys.argv) > 1:
@@ -17,6 +19,7 @@ def main():
     print("=" * 70)
     print(f"Word2Vec — Google Analogy Test Evaluation")
     print(f"Checkpoint: {ckpt_path}")
+    print(f"Device: {DEVICE}")
     print("=" * 70)
 
     # Load vocab (shared across all word2vec versions)
@@ -33,12 +36,11 @@ def main():
     print(f"  Training step: {ckpt.get('step', 'unknown'):,}")
     print(f"  Embedding dim: {ckpt.get('embed_dim', 'unknown')}")
 
-    # Extract target embeddings and normalize
-    embeddings = ckpt["model_state_dict"]["target_embeddings.weight"].numpy()  # (V, D)
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms = np.maximum(norms, 1e-8)
-    normed = embeddings / norms  # (V, D)
-    print(f"  Embeddings shape: {embeddings.shape}")
+    # Extract target embeddings and normalize — keep on GPU
+    embeddings = ckpt["model_state_dict"]["target_embeddings.weight"]  # (V, D) tensor
+    normed = embeddings / embeddings.norm(dim=1, keepdim=True).clamp(min=1e-8)
+    normed = normed.to(DEVICE)
+    print(f"  Embeddings shape: {tuple(embeddings.shape)}")
 
     # Parse questions-words.txt
     print("\nParsing analogy questions...")
@@ -76,7 +78,7 @@ def main():
     print(f"  Semantic categories ({len(semantic_categories)}): {sorted(semantic_categories)}")
     print(f"  Syntactic categories ({len(syntactic_categories)}): {sorted(syntactic_categories)}")
 
-    # Evaluate
+    # Evaluate — batched on GPU
     print("\nEvaluating analogies...")
     t0 = time.time()
 
@@ -87,41 +89,52 @@ def main():
     total_covered = 0
     total_questions = 0
 
-    for i, (cat, w1, w2, w3, w4) in enumerate(questions):
+    # Pre-filter to covered questions and batch them
+    covered_questions = []
+    for cat, w1, w2, w3, w4 in questions:
         total_questions += 1
         cat_total[cat] += 1
+        if w1 in word2id and w2 in word2id and w3 in word2id and w4 in word2id:
+            covered_questions.append((cat, word2id[w1], word2id[w2], word2id[w3], word2id[w4]))
+            cat_covered[cat] += 1
 
-        # Check all words in vocab
-        if w1 not in word2id or w2 not in word2id or w3 not in word2id or w4 not in word2id:
-            continue
+    total_covered = len(covered_questions)
+    print(f"  Covered questions: {total_covered:,}/{total_questions:,}")
 
-        total_covered += 1
-        cat_covered[cat] += 1
+    # Process in batches on GPU
+    BATCH = 2048
+    for batch_start in range(0, len(covered_questions), BATCH):
+        batch = covered_questions[batch_start:batch_start + BATCH]
+        ids1 = torch.tensor([q[1] for q in batch], device=DEVICE)
+        ids2 = torch.tensor([q[2] for q in batch], device=DEVICE)
+        ids3 = torch.tensor([q[3] for q in batch], device=DEVICE)
+        ids4 = torch.tensor([q[4] for q in batch], device=DEVICE)
 
-        id1, id2, id3, id4 = word2id[w1], word2id[w2], word2id[w3], word2id[w4]
-
-        # Compute analogy vector: w2 - w1 + w3
-        vec = normed[id2] - normed[id1] + normed[id3]
-        # Normalize query
-        vec = vec / (np.linalg.norm(vec) + 1e-8)
+        # Analogy vectors: w2 - w1 + w3
+        vecs = normed[ids2] - normed[ids1] + normed[ids3]  # (B, D)
+        vecs = vecs / vecs.norm(dim=1, keepdim=True).clamp(min=1e-8)
 
         # Cosine similarity with all words
-        sims = normed @ vec  # (V,)
+        sims = vecs @ normed.T  # (B, V)
 
         # Exclude input words
-        sims[id1] = -2.0
-        sims[id2] = -2.0
-        sims[id3] = -2.0
+        batch_idx = torch.arange(len(batch), device=DEVICE)
+        sims[batch_idx, ids1] = -2.0
+        sims[batch_idx, ids2] = -2.0
+        sims[batch_idx, ids3] = -2.0
 
-        pred_id = np.argmax(sims)
+        preds = sims.argmax(dim=1)  # (B,)
+        correct = (preds == ids4).cpu().tolist()
 
-        if pred_id == id4:
-            total_correct += 1
-            cat_correct[cat] += 1
+        for i, (cat, _, _, _, _) in enumerate(batch):
+            if correct[i]:
+                total_correct += 1
+                cat_correct[cat] += 1
 
-        if (i + 1) % 2000 == 0:
+        if (batch_start + BATCH) % 4096 == 0 or batch_start + BATCH >= len(covered_questions):
             elapsed = time.time() - t0
-            print(f"  Processed {i+1:,}/{len(questions):,} ({elapsed:.1f}s)")
+            done = min(batch_start + BATCH, len(covered_questions))
+            print(f"  Processed {done:,}/{len(covered_questions):,} ({elapsed:.1f}s)")
 
     elapsed = time.time() - t0
     print(f"  Done in {elapsed:.1f}s")

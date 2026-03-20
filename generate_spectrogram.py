@@ -558,22 +558,21 @@ def compute_analysis_summary(models):
     results["benchmarks"] = {"ours": [], "published": PUBLISHED_BENCHMARKS}
 
     analogy_questions = _load_analogy_questions()
+    gpu = "cuda" if torch.cuda.is_available() else "cpu"
     if analogy_questions:
         for mn in MODELS:
             m = models[mn]
             vecs = m["vecs"]
             w2i = m["w2i"]
 
-            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-            norms = np.maximum(norms, 1e-8)
-            normed = vecs / norms
+            normed_t = torch.tensor(vecs, dtype=torch.float32, device=gpu)
+            normed_t = normed_t / normed_t.norm(dim=1, keepdim=True).clamp(min=1e-8)
 
-            correct, covered, total = 0, 0, 0
-            sem_correct, sem_covered, syn_correct, syn_covered = 0, 0, 0, 0
-
+            # Pre-filter covered questions
+            covered_qs = []
+            total = 0
             for cat, is_semantic, w1, w2, w3, w4 in analogy_questions:
                 total += 1
-                # Handle Google casing
                 if mn == "Google":
                     ws = []
                     for w in [w1, w2, w3, w4]:
@@ -585,32 +584,45 @@ def compute_analysis_summary(models):
                             ws.append(None)
                     if any(x is None for x in ws):
                         continue
-                    id1, id2, id3, id4 = [w2i[x] for x in ws]
+                    covered_qs.append((is_semantic, w2i[ws[0]], w2i[ws[1]], w2i[ws[2]], w2i[ws[3]]))
                 else:
                     if any(w not in w2i for w in [w1, w2, w3, w4]):
                         continue
-                    id1, id2, id3, id4 = w2i[w1], w2i[w2], w2i[w3], w2i[w4]
+                    covered_qs.append((is_semantic, w2i[w1], w2i[w2], w2i[w3], w2i[w4]))
 
-                covered += 1
-                if is_semantic:
-                    sem_covered += 1
-                else:
-                    syn_covered += 1
+            correct, covered = 0, len(covered_qs)
+            sem_correct, sem_covered, syn_correct, syn_covered = 0, 0, 0, 0
 
-                vec = normed[id2] - normed[id1] + normed[id3]
-                vec = vec / (np.linalg.norm(vec) + 1e-8)
-                sims = normed @ vec
-                sims[id1] = -2.0
-                sims[id2] = -2.0
-                sims[id3] = -2.0
-                pred_id = np.argmax(sims)
+            # Batched GPU eval
+            BATCH = 2048
+            for bs in range(0, len(covered_qs), BATCH):
+                batch = covered_qs[bs:bs + BATCH]
+                ids1 = torch.tensor([q[1] for q in batch], device=gpu)
+                ids2 = torch.tensor([q[2] for q in batch], device=gpu)
+                ids3 = torch.tensor([q[3] for q in batch], device=gpu)
+                ids4 = torch.tensor([q[4] for q in batch], device=gpu)
 
-                if pred_id == id4:
-                    correct += 1
-                    if is_semantic:
-                        sem_correct += 1
+                v = normed_t[ids2] - normed_t[ids1] + normed_t[ids3]
+                v = v / v.norm(dim=1, keepdim=True).clamp(min=1e-8)
+                sims = v @ normed_t.T
+                bidx = torch.arange(len(batch), device=gpu)
+                sims[bidx, ids1] = -2.0
+                sims[bidx, ids2] = -2.0
+                sims[bidx, ids3] = -2.0
+                preds = sims.argmax(dim=1)
+                corr_mask = (preds == ids4).cpu().tolist()
+
+                for i, (is_sem, _, _, _, _) in enumerate(batch):
+                    if is_sem:
+                        sem_covered += 1
                     else:
-                        syn_correct += 1
+                        syn_covered += 1
+                    if corr_mask[i]:
+                        correct += 1
+                        if is_sem:
+                            sem_correct += 1
+                        else:
+                            syn_correct += 1
 
             accuracy = correct / covered * 100 if covered else 0
             sem_acc = sem_correct / sem_covered * 100 if sem_covered else 0
