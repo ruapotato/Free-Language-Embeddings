@@ -1,4 +1,4 @@
-# flm — Free Learned Manifolds
+# fle — Free Language Embeddings
 
 **66.5% on Google analogies with 1/3 the data.** A single RTX 3090, ~2B tokens of DFSG-compliant text, and a dynamic masking word2vec that beats the original (61% on 6B tokens) by 5.5 points.
 
