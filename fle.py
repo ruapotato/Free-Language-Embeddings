@@ -50,11 +50,11 @@ class FLE:
         return [(self.words[i], float(sims[i])) for i in top]
 
     def analogy(self, a, b, c, n=5):
-        """a is to b as c is to ? (b - a + c)"""
+        """a is to b as c is to ? (a - b + c)"""
         for w in [a, b, c]:
             if w not in self.word2id:
                 return []
-        vec = self.normed[self.word2id[b]] - self.normed[self.word2id[a]] + self.normed[self.word2id[c]]
+        vec = self.normed[self.word2id[a]] - self.normed[self.word2id[b]] + self.normed[self.word2id[c]]
         vec = vec / (np.linalg.norm(vec) + 1e-8)
         sims = self.normed @ vec
         for w in [a, b, c]:
