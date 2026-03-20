@@ -40,6 +40,54 @@ python fle.py paris - france + germany
 python fle.py
 ```
 
+### Examples
+
+```
+$ python fle.py king - man + woman
+  king - man + woman
+  → queen                0.7387
+  → princess             0.6781
+  → monarch              0.5546
+
+$ python fle.py paris - france + germany
+  paris - france + germany
+  → berlin               0.8209
+  → vienna               0.7862
+  → munich               0.7850
+
+$ python fle.py --similar cat
+  kitten               0.7168
+  cats                  0.6849
+  tabby                 0.6572
+  dog                   0.5919
+
+$ python fle.py linux - gnu
+  asus                 0.4434
+  vmware               0.3976
+  booting              0.3964
+  usb                  0.3883
+  redhat               0.3830
+
+$ python fle.py ubuntu - debian + redhat
+  centos               0.6261
+  linux                0.6016
+  rhel                 0.5949
+  vmware               0.5784
+
+$ python fle.py frogs
+  toads                0.8035
+  frog                 0.7257
+  tadpoles             0.6941
+  newts                0.6939
+  lizards              0.6608
+
+$ python fle.py brain
+  cerebral             0.6665
+  cerebellum           0.6022
+  nerves               0.5748
+  cerebrum             0.5736
+```
+
 Use in your own code:
 
 ```python
