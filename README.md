@@ -1,10 +1,12 @@
 # fle — Free Language Embeddings
 
-**66.5% on Google analogies with 1/3 the data.** A single RTX 3090, ~2B tokens of DFSG-compliant text, and a dynamic masking word2vec that beats the original (61% on 6B tokens) by 5.5 points.
+300-dimensional word vectors trained from scratch on ~2B tokens of DFSG-compliant text using a single RTX 3090. The model is a dynamic masking variant of word2vec skip-gram with 100K whole-word vocabulary, trained for 2M steps (~24 hours).
 
-Free as in freedom — every dataset DFSG-compliant, every weight reproducible, every decision documented. The goal: the first AI model you could `apt install` from Debian main.
+**66.5% on Google analogies** — beating the original word2vec (61% on 6B tokens) by 5.5 points with 1/3 the data.
 
-This project started as a language model experiment, spent 24 versions failing to make autoencoders produce meaningful geometry, discovered that prediction tasks create it naturally, then pivoted to studying *how* structure emerges in learned vector spaces. It's now a geometric structure research project.
+Free as in freedom — every dataset DFSG-compliant, every weight reproducible, every decision documented. The goal: the first word embeddings you could `apt install` from Debian main.
+
+This project started as a language model experiment, spent 24 versions discovering that prediction tasks — not reconstruction — create geometric structure in vector spaces, then focused on pushing word embeddings as far as possible on free data.
 
 ## Results
 
