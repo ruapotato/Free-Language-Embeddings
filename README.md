@@ -1,8 +1,10 @@
-# flm — The Free Language Model
+# flm — Free Learned Manifolds
 
 **66.5% on Google analogies with 1/3 the data.** A single RTX 3090, ~2B tokens of DFSG-compliant text, and a dynamic masking word2vec that beats the original (61% on 6B tokens) by 5.5 points.
 
 Free as in freedom — every dataset DFSG-compliant, every weight reproducible, every decision documented. The goal: the first AI model you could `apt install` from Debian main.
+
+This project started as a language model experiment, spent 24 versions failing to make autoencoders produce meaningful geometry, discovered that prediction tasks create it naturally, then pivoted to studying *how* structure emerges in learned vector spaces. It's now a geometric structure research project.
 
 ## Results
 
@@ -16,6 +18,48 @@ Free as in freedom — every dataset DFSG-compliant, every weight reproducible, 
 | FastText (Bojanowski 2017) | 16B tokens | 300d | 77.0% |
 
 V34 breakdown: semantic 61.4%, syntactic 69.2%. Comparatives 91.7%, plurals 86.8%, capitals 82.6%.
+
+## The Progression
+
+### Phase 1: Trying to force geometry (V1-V12)
+
+Started with the goal of building a free language model. Tried contrastive losses, margin losses, decorrelation penalties, WordNet supervision, NLI-based objectives — anything to force meaningful geometric structure into learned representations.
+
+**Dead end.** Explicit geometry losses either destroy reconstruction quality or overfit to the specific structure you impose. You can't bolt geometry onto representations after the fact.
+
+### Phase 2: Sentence compression (V13-V24)
+
+Pivoted to autoencoders. Dual-decoder architectures, cross-lingual training, bottleneck tuning, scaling experiments from 25M to 248M parameters.
+
+**Key discovery:** Perfect reconstruction is easy. But the space *between* encodings is meaningless — "swiss cheese" manifolds where interpolation produces garbage. Reconstruction doesn't need structure, so the model doesn't learn any.
+
+### Phase 3: Prediction creates geometry (V25-V27)
+
+The breakthrough. Joint encoder/predictor/decoder architectures where the model must *predict* missing context, not just reconstruct input. This is word2vec's core insight: prediction forces the model to organize representations so that similar things are near each other, because they predict the same contexts.
+
+### Phase 4: Word embeddings (V28-V34)
+
+Dropped the LM framing entirely and focused on studying how prediction tasks create geometric structure in embeddings.
+
+**V28 — Skip-gram baseline** (43.9% analogies). Classic word2vec, 300d, 100K whole-word vocab on ~2B tokens. Established that whole-word vocabulary is critical — subword tokenization completely breaks the geometry. king - man + woman = queen works (0.737 cosine). [Interactive probe](https://ruapotato.github.io/chat_hamner/probe_w2v.html)
+
+**V29 — 3D word2vec** (0% analogies, but perfect broad separation). Every word is just an (x,y,z) coordinate on a unit sphere. Can't resolve individual words within a region, but tech/nature/emotions self-organize into distinct areas. Proved: you need extra dimensions for fine-grained structure, but broad semantic regions emerge even in 3D. [Interactive globe](https://ruapotato.github.io/chat_hamner/probe_v29_3d.html)
+
+**V32 — Filesystem embeddings.** Applied skip-gram to Debian filesystem paths. 199K paths from a full trixie chroot, treating path components as "words." `apache2` ↔ `nginx` (0.60), `systemd` ↔ `udev` (0.67), `__pycache__` → `__init__.py` (0.90). Skip-gram captures "what lives near what" in any tree structure, but hierarchy doesn't produce clean vector arithmetic. [3D filesystem](https://ruapotato.github.io/chat_hamner/probe_v32_paths_3d.html)
+
+**V33 — Mixed SG+CBOW** (59.2% analogies). Two views of the same data create richer geometry. Alternating skip-gram and CBOW on shared embeddings jumps +15.3% over V28. Syntactic accuracy (65.4%) exceeds original word2vec. Effective rank doubles from 21 to 49 dimensions — dual signal fills more of the space. [3D probe](https://ruapotato.github.io/chat_hamner/probe_v33_3d.html)
+
+**V34 — Dynamic masking** (66.5% analogies). The current model. Randomly masks context positions during training, forcing the model to extract signal from partial views. The training curve is remarkable: nothing happens for 50% of training, then geometry crystallizes as the cosine LR decays — analogies jump from 1.2% to 66.5% in the second half. Beats published word2vec (61% on 3x more data).
+
+### Key Lessons
+
+1. **Prediction creates geometry, reconstruction doesn't.** Autoencoding gives "swiss cheese" space — meaningless between encodings.
+2. **Whole-word vocabulary is critical.** Subword tokenization breaks word2vec geometry completely.
+3. **Dual objectives create richer geometry.** Two complementary gradients on shared embeddings produce substantially richer structure.
+4. **Dynamic masking unlocks crystallization.** V34 did nothing for 50% of training, then geometry exploded as LR dropped.
+5. **Small data can win.** 2B tokens beats 6B when the training signal is right.
+
+Full history: [geometry](docs/history_geometry.md) | [sentences](docs/history_sentences.md) | [prediction](docs/history_prediction.md) | [embeddings](docs/history_embeddings.md)
 
 ## Quick Start
 
@@ -54,26 +98,6 @@ python experiments/exp_1_articulatory/train.py   # Train autoencoder
 python experiments/exp_1_articulatory/eval.py    # Evaluate reconstruction
 # Open experiments/exp_1_articulatory/render.html in browser to hear it
 ```
-
-## How We Got Here
-
-This started as a language model experiment, evolved into geometric structure research, and became what it is now: a study of how prediction tasks create meaningful geometry in learned representations.
-
-34 versions across four phases:
-
-| Phase | Versions | What happened |
-|-------|----------|---------------|
-| Geometry from scratch | V1-V12 | Tried to force structure with contrastive/margin/decorrelation losses. Dead end — explicit geometry destroys reconstruction. |
-| Sentence compression | V13-V24 | Autoencoders, dual-decoder, cross-lingual. Perfect reconstruction is easy; meaningful structure *between* encodings is hard. |
-| Prediction creates geometry | V25-V27 | The breakthrough: prediction tasks force geometric structure naturally. Word2vec's core insight. |
-| Word embeddings | V28-V34 | Skip-gram → mixed SG+CBOW → dynamic masking. Each step unlocked more structure. V34 crystallizes during cosine LR decay. |
-
-Key lessons:
-1. **Prediction creates geometry, reconstruction doesn't.** Autoencoding gives "swiss cheese" space.
-2. **Dynamic masking unlocks crystallization.** V34 did nothing for 50% of training, then geometry exploded as LR dropped.
-3. **Small data can win.** 2B tokens beats 6B when the training signal is right.
-
-Full history: [geometry](docs/history_geometry.md) | [sentences](docs/history_sentences.md) | [prediction](docs/history_prediction.md) | [embeddings](docs/history_embeddings.md)
 
 ## Repository Structure
 
