@@ -223,4 +223,4 @@ legacy/                   # V1-V33 training scripts, old probes, utilities
 
 GPL-3.0 — See [LICENSE](LICENSE) for details.
 
-Built by David Hamner with help from Claude.
+Built by David Hamner.

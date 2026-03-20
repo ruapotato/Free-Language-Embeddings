@@ -176,4 +176,4 @@ Full training code and visualizations: [github.com/ruapotato/Free-Language-Embed
 
 GPL-3.0 — See [LICENSE](https://github.com/ruapotato/Free-Language-Embeddings/blob/main/LICENSE) for details.
 
-Built by David Hamner with help from Claude.
+Built by David Hamner.
